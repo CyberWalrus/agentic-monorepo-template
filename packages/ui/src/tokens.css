@@ -1,0 +1,16 @@
+:root {
+  --color-bg: #ffffff;
+  --color-surface: #f6f7f9;
+  --color-border: #d9dde3;
+  --color-text: #14181f;
+  --color-text-muted: #5b6573;
+  --color-primary: #2952cc;
+  --color-primary-hover: #1f3fa3;
+  --color-danger: #c2272d;
+  --radius: 8px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}

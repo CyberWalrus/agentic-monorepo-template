@@ -1,0 +1,29 @@
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+  font: 400 14px/1.4 var(--font-sans);
+  color: var(--color-text);
+  list-style: none;
+}
+
+.checkbox {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--color-primary);
+}
+
+.title {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.completed .title {
+  color: var(--color-text-muted);
+  text-decoration: line-through;
+}
