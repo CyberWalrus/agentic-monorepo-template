@@ -1,0 +1,19 @@
+{
+  "name": "@repo/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "e2e": "playwright test --project=functional",
+    "test:visual": "playwright test --project=visual",
+    "perf": "playwright test --project=perf",
+    "typecheck": "tsc"
+  },
+  "devDependencies": {
+    "@playwright/test": "catalog:",
+    "@repo/api": "workspace:*",
+    "@repo/web": "workspace:*",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}
