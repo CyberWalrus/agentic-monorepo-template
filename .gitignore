@@ -147,3 +147,15 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Monorepo template additions
+.vitest/
+test-results/
+playwright-report/
+blob-report/
+reports/
+.stryker-tmp/
+.tanstack/
+.claude/settings.local.json
+.playwright-mcp/
+.playwright-cli/
