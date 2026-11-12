@@ -1,0 +1,8 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 100,
+  "semi": true,
+  "singleQuote": true,
+  "trailingComma": "all",
+  "ignorePatterns": ["pnpm-lock.yaml", "**/routeTree.gen.ts", "**/openapi.json", "CHANGELOG.md"]
+}
