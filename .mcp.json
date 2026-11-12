@@ -1,0 +1,41 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "pnpm",
+      "args": [
+        "--silent",
+        "--filter",
+        "@repo/e2e",
+        "exec",
+        "playwright",
+        "mcp",
+        "--headless",
+        "--isolated"
+      ]
+    },
+    "playwright-test": {
+      "command": "pnpm",
+      "args": [
+        "--silent",
+        "--filter",
+        "@repo/e2e",
+        "exec",
+        "playwright",
+        "run-test-mcp-server",
+        "--headless"
+      ]
+    },
+    "chrome-devtools": {
+      "command": "pnpm",
+      "args": [
+        "--silent",
+        "exec",
+        "chrome-devtools-mcp",
+        "--headless",
+        "--isolated",
+        "--no-usage-statistics",
+        "--no-performance-crux"
+      ]
+    }
+  }
+}

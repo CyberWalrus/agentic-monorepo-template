@@ -1,0 +1,185 @@
+# Детерминированные гейты (L3 в PR, L4 в merge queue). Единственный обязательный check — `gate`.
+name: CI
+
+on:
+  pull_request:
+    # edited: смена base-ветки не порождает synchronize, а check привязан к head SHA.
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  merge_group:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  TURBO_TELEMETRY_DISABLED: 1
+  # В PR проверяем только затронутое; в merge queue и на main — всё (с кэшем это дёшево).
+  AFFECTED: ${{ github.event_name == 'pull_request' && '--affected' || '' }}
+  TURBO_SCM_BASE: ${{ github.event.pull_request.base.sha }}
+  # Remote cache (опционально): self-hosted или Vercel.
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+  TURBO_API: ${{ vars.TURBO_API }}
+
+jobs:
+  static:
+    name: static
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup
+      - run: pnpm format:check
+      - run: pnpm lint --format github
+      - run: pnpm turbo run typecheck $AFFECTED --output-logs=errors-only
+      - run: pnpm typecheck:tools
+      - run: pnpm boundaries
+      - run: pnpm knip
+      - run: pnpm sherif
+      - run: pnpm test:integrity
+      - run: pnpm docs:check
+      - run: pnpm --filter @repo/contracts openapi:check
+
+  protected-paths:
+    name: protected-paths
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup
+      - name: Gate files changed only with human approval
+        run: >
+          node tools/check-protected-paths.ts origin/${{ github.base_ref }}
+          ${{ contains(github.event.pull_request.labels.*.name, 'gate-change-approved') && '--approved' || '' }}
+
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup
+        with: { playwright: 'true' }
+      - run: pnpm turbo run test $AFFECTED --output-logs=errors-only
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage
+          path: '**/coverage/'
+          if-no-files-found: ignore
+
+  mutation:
+    name: mutation
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup
+      - uses: actions/cache@v6
+        with:
+          path: apps/api/reports/mutation/stryker-incremental.json
+          key: stryker-${{ github.head_ref || github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            stryker-${{ github.head_ref || github.ref_name }}-
+            stryker-main-
+      - run: pnpm turbo run mutation $AFFECTED --output-logs=errors-only
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mutation-report
+          path: apps/api/reports/mutation/
+          if-no-files-found: ignore
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup
+        with: { playwright: 'true' }
+      - run: pnpm turbo run e2e $AFFECTED --output-logs=errors-only
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: e2e-report
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+
+  visual:
+    name: visual
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Тот же образ и архитектура, что у `pnpm visual` локально: базлайны совпадают.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+      options: --ipc=host
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - run: bash tools/visual-inner.sh
+        env: { CI: 'true' }
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: visual-report
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+            packages/ui/.vitest/
+
+  perf:
+    name: perf
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup
+        with: { playwright: 'true' }
+      - run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
+      - run: pnpm bundle
+      - run: pnpm turbo run perf --output-logs=errors-only
+      - uses: grafana/setup-k6-action@v1
+      - name: API smoke (k6)
+        run: |
+          pnpm --filter @repo/api start &
+          for _ in $(seq 1 30); do curl -sf http://localhost:3001/health > /dev/null && break; sleep 1; done
+          k6 run e2e/perf/k6/api-smoke.js
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: perf-report
+          path: |
+            reports/bundle.json
+            e2e/reports/perf.json
+            e2e/playwright-report/
+          if-no-files-found: ignore
+
+  # Единственный required check в ruleset: имя стабильно, пропущенные affected-джобы не блокируют.
+  gate:
+    name: gate
+    if: always()
+    needs: [static, protected-paths, unit, mutation, e2e, visual, perf]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: All gates passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'to_entries | all(.value.result == "success" or .value.result == "skipped")' > /dev/null

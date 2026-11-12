@@ -1,0 +1,26 @@
+# Ruleset требует ревью CODEOWNERS. Замени владельцев на команды организации.
+# Гейты, их конфигурация и инструкции агентов — только мейнтейнеры (см. tools/protected-paths.json).
+
+*                               @CyberWalrus
+
+/.github/                       @CyberWalrus
+/tools/                         @CyberWalrus
+/.claude/                       @CyberWalrus
+/AGENTS.md                      @CyberWalrus
+/CLAUDE.md                      @CyberWalrus
+/perf-budgets.json              @CyberWalrus
+/.oxlintrc.json                 @CyberWalrus
+/.oxfmtrc.json                  @CyberWalrus
+/.dependency-cruiser.cjs        @CyberWalrus
+/knip.json                      @CyberWalrus
+/lefthook.yml                   @CyberWalrus
+/tsconfig.base.json             @CyberWalrus
+/turbo.json                     @CyberWalrus
+/pnpm-workspace.yaml            @CyberWalrus
+**/vitest.config.ts             @CyberWalrus
+**/stryker.config.json          @CyberWalrus
+/e2e/playwright.config.ts       @CyberWalrus
+**/__screenshots__/             @CyberWalrus
+
+# Контракт API затрагивает и фронт, и бэк.
+/packages/contracts/            @CyberWalrus

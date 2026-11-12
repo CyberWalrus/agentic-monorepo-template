@@ -1,0 +1,21 @@
+{
+  "$comment": "Защищённый файл. Пороги меняет только человек отдельным PR с одобрением CODEOWNERS. Агент при регрессии чинит код, а не порог.",
+  "web": {
+    "bundle": {
+      "maxTotalJsGzipKb": 160,
+      "maxLargestJsChunkGzipKb": 130,
+      "maxTotalCssGzipKb": 10
+    },
+    "pages": {
+      "/": { "maxTtfbMs": 400, "maxLcpMs": 1500, "maxCls": 0.05 }
+    },
+    "scenarios": {
+      "create-task": { "maxMs": 600 },
+      "toggle-task": { "maxMs": 400 }
+    }
+  },
+  "api": {
+    "maxP95Ms": 50,
+    "maxErrorRate": 0.01
+  }
+}

@@ -1,0 +1,79 @@
+# L5: медленные и исследовательские проверки. Не блокирует merge, при падении заводит issue.
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  TURBO_TELEMETRY_DISABLED: 1
+
+jobs:
+  flake-hunt:
+    name: e2e flake hunt
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+        with: { playwright: 'true' }
+      - run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
+      # Случайный порядок и повторы ловят зависимые и нестабильные тесты.
+      - run: pnpm --filter @repo/e2e exec playwright test --project=functional --shuffle --repeat-each=5
+        env: { CI: 'true' }
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with: { name: flake-report, path: e2e/playwright-report/ }
+
+  mutation-full:
+    name: mutation (full)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - run: pnpm --filter @repo/api exec stryker run --force
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with: { name: mutation-full, path: apps/api/reports/mutation/ }
+
+  perf-trend:
+    name: perf trend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+        with: { playwright: 'true' }
+      - run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
+      - run: pnpm bundle
+      - run: pnpm --filter @repo/e2e exec playwright test --project=perf --repeat-each=3
+        env: { CI: 'true' }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: perf-trend-${{ github.run_id }}
+          path: |
+            reports/bundle.json
+            e2e/reports/perf.json
+          retention-days: 90
+
+  report:
+    name: report failure
+    needs: [flake-hunt, mutation-full, perf-trend]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create --repo "${{ github.repository }}" \
+            --title "Nightly failed: $(date -u +%F)" \
+            --label nightly-failure \
+            --body "Nightly checks failed: $RUN_URL"

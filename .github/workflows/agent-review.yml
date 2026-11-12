@@ -1,0 +1,68 @@
+# Агентное ревью PR. Информационное: не входит в `gate`, merge блокируют только детерминированные проверки.
+# Требует секрет ANTHROPIC_API_KEY (или CLAUDE_CODE_OAUTH_TOKEN) и установленное Claude GitHub App.
+name: Agent review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: agent-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+
+jobs:
+  review:
+    name: agent-review
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' || secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+    steps:
+      - name: Skip without credentials
+        if: env.HAS_KEY != 'true'
+        run: echo "::notice::ANTHROPIC_API_KEY is not configured, agent review skipped."
+
+      - uses: actions/checkout@v7
+        if: env.HAS_KEY == 'true'
+        with: { fetch-depth: 0 }
+
+      - name: General code review (official plugin)
+        if: env.HAS_KEY == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: https://github.com/anthropics/claude-plugins-official.git
+          plugins: code-review@claude-plugins-official
+          prompt: /code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+          # Локальные хуки (Stop → pnpm verify) не нужны: детерминированные проверки делает CI.
+          settings: '{"disableAllHooks": true}'
+          claude_args: --max-turns 40
+
+      - name: Specialist reviewers (repo subagents)
+        if: env.HAS_KEY == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          use_sticky_comment: true
+          settings: '{"disableAllHooks": true}'
+          claude_args: --max-turns 60
+          prompt: |
+            Review PR #${{ github.event.pull_request.number }} in ${{ github.repository }}.
+            The diff is `git diff origin/${{ github.base_ref }}...HEAD`; the PR description holds the task and acceptance criteria.
+
+            Run these subagents from .claude/agents in parallel, giving each the task, the acceptance criteria and the diff:
+            architecture-reviewer, sanity-reviewer, test-quality-reviewer, security-reviewer, product-logic-reviewer.
+
+            Post ONE comment: a table "reviewer | verdict | blockers", then every blocker and major finding
+            with file:line, why and fix. Skip minor nitpicks. Do not modify files and do not approve the PR:
+            your output is advisory; merge is decided by CI `gate` and human reviewers.

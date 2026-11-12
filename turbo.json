@@ -1,0 +1,50 @@
+{
+  "$schema": "./node_modules/turbo/schema.json",
+  "ui": "stream",
+  "globalDependencies": [".nvmrc", "tsconfig.base.json", "perf-budgets.json"],
+  "tasks": {
+    "transit": {
+      "dependsOn": ["^transit"]
+    },
+    "typecheck": {
+      "dependsOn": ["transit"],
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["transit"],
+      "outputs": ["coverage/**"]
+    },
+    "test:visual": {
+      "dependsOn": ["transit"],
+      "outputs": [],
+      // ALLOW_HOST_SCREENSHOTS разрешает скриншоты вне Linux-образа (packages/ui/vitest.config.ts).
+      "env": ["ALLOW_HOST_SCREENSHOTS"]
+    },
+    "build": {
+      "dependsOn": ["transit", "^build"],
+      "outputs": ["dist/**", ".output/**"]
+    },
+    "e2e": {
+      "dependsOn": ["transit", "^build"],
+      "outputs": ["playwright-report/**", "test-results/**"],
+      // VIDEO=on — видео прогона как доказательство для PR; без env Turborepo не передаст его и не учтёт в хеше.
+      "env": ["CI", "VIDEO"]
+    },
+    "perf": {
+      "dependsOn": ["transit", "^build"],
+      "outputs": ["reports/**"],
+      "env": ["CI"]
+    },
+    "mutation": {
+      "dependsOn": ["transit"],
+      "outputs": ["reports/mutation/**"],
+      "cache": false
+    },
+    "dev": {
+      // PORT/WEB_ORIGIN/ENABLE_TEST_API читает apps/api/src/server.ts, VITE_API_URL — клиент web.
+      "env": ["PORT", "WEB_ORIGIN", "ENABLE_TEST_API", "VITE_API_URL"],
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["tools/*.ts", ".claude/hooks/*.ts"],
+      "ignoreDependencies": ["chrome-devtools-mcp"]
+    },
+    "apps/web": {
+      "entry": ["src/routes/**/*.tsx"]
+    },
+    "packages/contracts": {
+      "entry": ["scripts/*.ts"]
+    },
+    "e2e": {
+      "entry": ["**/*.spec.ts", "**/*.visual.ts", "perf/**/*.perf.ts", "agents/**/*.spec.ts"],
+      "ignore": ["perf/k6/**"],
+      "ignoreDependencies": ["@repo/api", "@repo/web"]
+    }
+  }
+}

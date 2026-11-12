@@ -1,0 +1,112 @@
+/**
+ * Локальный аналог CI-гейтов. Одна команда для человека и агента.
+ *
+ *   pnpm verify           статика + unit (быстро, кэш turbo)
+ *   pnpm verify --full    + сборка, бюджет бандла, E2E, перф-бюджеты
+ *   pnpm verify --json    машиночитаемый результат (для агентов и хуков)
+ *
+ * Визуальные тесты сюда не входят: они идут только в Docker (`pnpm visual`).
+ */
+import { spawn } from 'node:child_process';
+
+interface Step {
+  name: string;
+  command: string;
+  args: string[];
+}
+
+interface StepResult {
+  name: string;
+  ok: boolean;
+  durationMs: number;
+  command: string;
+  output: string;
+}
+
+const json = process.argv.includes('--json');
+const full = process.argv.includes('--full');
+const TAIL_LINES = 60;
+
+const turbo = (task: string): Step => ({
+  name: task,
+  command: 'pnpm',
+  args: ['turbo', 'run', task, '--output-logs=errors-only'],
+});
+
+const fast: Step[] = [
+  { name: 'format', command: 'pnpm', args: ['format:check'] },
+  { name: 'lint', command: 'pnpm', args: ['lint', '--format', 'agent'] },
+  turbo('typecheck'),
+  { name: 'typecheck:tools', command: 'pnpm', args: ['typecheck:tools'] },
+  turbo('test'),
+  { name: 'boundaries', command: 'pnpm', args: ['boundaries'] },
+  { name: 'knip', command: 'pnpm', args: ['knip'] },
+  { name: 'test-integrity', command: 'pnpm', args: ['test:integrity'] },
+  { name: 'docs', command: 'pnpm', args: ['docs:check'] },
+  { name: 'sherif', command: 'pnpm', args: ['sherif'] },
+  { name: 'openapi', command: 'pnpm', args: ['--filter', '@repo/contracts', 'openapi:check'] },
+];
+
+// E2E и перф делят порты 3000/3001, поэтому идут последовательно после быстрых шагов.
+const slow: Step[] = [
+  turbo('build'),
+  { name: 'bundle', command: 'pnpm', args: ['bundle'] },
+  turbo('e2e'),
+  turbo('perf'),
+];
+
+function run(step: Step): Promise<StepResult> {
+  const started = performance.now();
+  return new Promise((resolve) => {
+    const child = spawn(step.command, step.args, {
+      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
+    child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString()));
+    child.on('close', (code) => {
+      resolve({
+        name: step.name,
+        ok: code === 0,
+        durationMs: Math.round(performance.now() - started),
+        command: [step.command, ...step.args].join(' '),
+        output: output.split('\n').slice(-TAIL_LINES).join('\n').trim(),
+      });
+    });
+  });
+}
+
+const started = performance.now();
+const results = await Promise.all(fast.map(run));
+if (full && results.every((result) => result.ok)) {
+  for (const step of slow) {
+    const result = await run(step);
+    results.push(result);
+    if (!result.ok) {
+      break;
+    }
+  }
+}
+const ok = results.every((result) => result.ok);
+const totalMs = Math.round(performance.now() - started);
+
+if (json) {
+  console.log(
+    JSON.stringify({ ok, totalMs, mode: full ? 'full' : 'fast', steps: results }, null, 2),
+  );
+} else {
+  for (const result of results.filter((r) => !r.ok)) {
+    console.log(`\n── ${result.name} failed: ${result.command}\n${result.output}`);
+  }
+  console.log('\nverify', full ? '(full)' : '(fast)');
+  for (const result of results) {
+    console.log(
+      `  ${result.ok ? '✓' : '✗'} ${result.name.padEnd(16)} ${(result.durationMs / 1000).toFixed(1)}s`,
+    );
+  }
+  console.log(`  ${ok ? 'PASS' : 'FAIL'} in ${(totalMs / 1000).toFixed(1)}s`);
+}
+
+// exitCode, а не process.exit(): иначе большой JSON в pipe обрезается.
+process.exitCode = ok ? 0 : 1;
