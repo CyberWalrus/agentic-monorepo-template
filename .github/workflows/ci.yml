@@ -4,7 +4,8 @@ name: CI
 on:
   pull_request:
     # edited: смена base-ветки не порождает synchronize, а check привязан к head SHA.
-    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+    # Labelы обрабатывает gate-integrity.yml (ADR 0002), здесь они не нужны.
+    types: [opened, synchronize, reopened, edited]
   merge_group:
   push:
     branches: [main]
@@ -45,20 +46,6 @@ jobs:
       - run: pnpm test:integrity
       - run: pnpm docs:check
       - run: pnpm --filter @repo/contracts openapi:check
-
-  protected-paths:
-    name: protected-paths
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v7
-        with: { fetch-depth: 0 }
-      - uses: ./.github/actions/setup
-      - name: Gate files changed only with human approval
-        run: >
-          node tools/check-protected-paths.ts origin/${{ github.base_ref }}
-          ${{ contains(github.event.pull_request.labels.*.name, 'gate-change-approved') && '--approved' || '' }}
 
   unit:
     name: unit
@@ -173,7 +160,7 @@ jobs:
   gate:
     name: gate
     if: always()
-    needs: [static, protected-paths, unit, mutation, e2e, visual, perf]
+    needs: [static, unit, mutation, e2e, visual, perf]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

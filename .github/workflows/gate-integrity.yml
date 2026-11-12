@@ -37,11 +37,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          if gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/labels/gate-change-approved" >/dev/null 2>&1; then
-            gh api -X DELETE "repos/${{ github.repository }}/issues/$PR_NUMBER/labels/gate-change-approved"
+          # DELETE без предварительного GET: чтение label отдаёт кэшированный 404
+          # сразу после установки (eventual consistency) — доверять ему нельзя.
+          if gh api -X DELETE "repos/${{ github.repository }}/issues/$PR_NUMBER/labels/gate-change-approved"; then
             echo "Снят label gate-change-approved: новый push требует нового одобрения."
           else
-            echo "Label не стоит — снимать нечего."
+            echo "Label не стоял (DELETE вернул 404) — снимать нечего."
           fi
 
   integrity:
@@ -75,13 +76,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels,pushedAt > pr.json
-          gh api --paginate "repos/${{ github.repository }}/issues/$PR_NUMBER/events" > events.json
+          gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels,headRefOid > pr.json
           gh api --paginate "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" > files.json
+          HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json headRefOid --jq .headRefOid)
+          gh api "repos/${{ github.repository }}/commits/$HEAD_SHA" > head-commit.json
+          # Лента событий отстаёт от свежепоставленного label (eventual consistency):
+          # опрашиваем до минуты, иначе сценарий «поставили label — перезапустился run»
+          # ловит пустую ленту и честно отказывает в одобрении.
+          for _ in 1 2 3 4; do
+            gh api --paginate "repos/${{ github.repository }}/issues/$PR_NUMBER/events" > events.json
+            if grep -q '"event":"labeled"\|"event": "labeled"' events.json \
+              && grep -q 'gate-change-approved' events.json; then
+              break
+            fi
+            echo "События labeled ещё нет в ленте — ждём 15 с."
+            sleep 15
+          done
 
       - name: Approval is valid only from a maintainer after the last push
         id: approval
-        run: node tools/check-gate-approval.ts pr.json events.json .github/CODEOWNERS
+        run: node tools/check-gate-approval.ts pr.json events.json .github/CODEOWNERS head-commit.json
 
       - name: Changed files against protected paths
         env:
