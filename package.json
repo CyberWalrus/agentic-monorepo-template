@@ -24,6 +24,7 @@
     "verify": "node tools/verify.ts",
     "typecheck:tools": "tsc -p tsconfig.json",
     "test:integrity": "node tools/check-test-integrity.ts",
+    "test:hooks": "vitest run",
     "docs:check": "node tools/check-docs.ts"
   },
   "devDependencies": {
@@ -38,6 +39,7 @@
     "sherif": "catalog:",
     "turbo": "catalog:",
     "typescript": "catalog:",
+    "vitest": "catalog:",
     "zod": "catalog:"
   },
   "engines": {

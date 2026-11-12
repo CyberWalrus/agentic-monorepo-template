@@ -1,19 +1,42 @@
 import { readFileSync } from 'node:fs';
 import { matchesGlob } from 'node:path';
 
-import * as z from 'zod';
-
-const ProtectedPathsSchema = z.object({
-  deny: z.array(z.string()),
-  review: z.array(z.string()),
-});
-
 export type Protection = 'deny' | 'review' | null;
 
-const raw: unknown = JSON.parse(
-  readFileSync(new URL('protected-paths.json', import.meta.url), 'utf8'),
+export interface ProtectedPaths {
+  deny: string[];
+  review: string[];
+}
+
+/**
+ * Ручная валидация вместо zod: этот модуль импортируют хуки агента, которым нельзя
+ * зависеть от node_modules (З4). Битый конфиг — throw: импортирующий хук упадёт
+ * закрытым (exit 2), а не промолчит.
+ */
+export function parseProtectedPaths(raw: unknown): ProtectedPaths {
+  if (!isRecord(raw)) {
+    throw new Error(
+      'tools/protected-paths.json: expected an object with "deny" and "review" arrays',
+    );
+  }
+  return { deny: stringArray(raw['deny']), review: stringArray(raw['review']) };
+}
+
+/** Валидирует и возвращает список строк; на нарушении — throw (fail-closed). */
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+    throw new Error('tools/protected-paths.json: "deny" and "review" must be arrays of strings');
+  }
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const config = parseProtectedPaths(
+  JSON.parse(readFileSync(new URL('protected-paths.json', import.meta.url), 'utf8')),
 );
-const config = ProtectedPathsSchema.parse(raw);
 
 /**
  * Уровень защиты для пути относительно корня репозитория. Каталог, внутри
