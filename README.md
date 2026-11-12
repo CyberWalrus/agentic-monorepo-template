@@ -7,8 +7,8 @@
 ## Быстрый старт
 
 ```bash
-nvm use            # Node 26 (.nvmrc)
-pnpm install       # pnpm 12 из packageManager; ставит git-хуки
+nvm use            # Node из .nvmrc
+pnpm install       # pnpm из packageManager; ставит git-хуки
 pnpm verify        # все быстрые гейты (~1–5 с с кэшем)
 pnpm dev           # web http://localhost:3000, api http://localhost:3001
 ```
@@ -17,7 +17,9 @@ pnpm dev           # web http://localhost:3000, api http://localhost:3001
 
 ## Стек
 
-Node 26 · pnpm 12 · Turborepo · TypeScript 7 · Oxlint + Oxfmt · Vite 8 (Rolldown) · React 19.3 + TanStack Start + TanStack Query · Hono + oRPC + Zod 4 · Vitest 5 browser mode · Playwright 1.64 · dependency-cruiser · Knip · sherif · StrykerJS · Lefthook. Почему именно так: [ADR 0001](docs/adr/0001-initial-stack.md), [исследование стека](docs/research/2026-11-tech-stack.md).
+Node (`.nvmrc`) · pnpm (`packageManager`) · Turborepo · TypeScript · Oxlint + Oxfmt · Vite (Rolldown) · React + TanStack Start + TanStack Query · Hono + oRPC + Zod · Vitest browser mode · Playwright · dependency-cruiser · Knip · sherif · StrykerJS · Lefthook.
+
+Версии зависимостей — только в каталоге `catalog:` в [pnpm-workspace.yaml](pnpm-workspace.yaml). Почему именно так: [ADR 0001](docs/adr/0001-initial-stack.md), [исследование стека](docs/research/2026-11-tech-stack.md).
 
 ## Контуры проверки
 
@@ -64,5 +66,7 @@ tools               гейты: verify, бюджеты, защищённые п�
 - [Зачем нужна система](docs/vision.md)
 - [Исследование стека, ноябрь 2026](docs/research/2026-11-tech-stack.md)
 - [ADR 0001: стек первой реализации](docs/adr/0001-initial-stack.md)
+- [Архитектурные и инфраструктурные подходы](docs/architecture.md): законы обвязки, слои, правила изменения гейтов
+- [План развития обвязки](docs/roadmap.md): аудит от 2026-11-12, что переделать, улучшить и добавить
 - [Настройка GitHub](docs/github-setup.md): ruleset, labels, секреты
 - [AGENTS.md](AGENTS.md) и [CLAUDE.md](CLAUDE.md): инструкции для агентов

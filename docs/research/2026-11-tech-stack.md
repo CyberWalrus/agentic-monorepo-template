@@ -31,6 +31,8 @@
 | Агентный слой                   | **AGENTS.md** + Claude Code (`.claude/`: settings, hooks, skills, agents) + `claude-code-action@v1`                      | —                                        | Открытый стандарт инструкций плюс детерминированные хуки                                                                                                                                         |
 | Агентный браузер                | **Playwright MCP/CLI** (встроены с 1.62) + **Chrome DevTools MCP**                                                       | —                                        | Playwright управляет браузером, DevTools MCP отлаживает: perf-трейсы, Lighthouse, heap                                                                                                           |
 
+> Сверка с [ADR 0001](../adr/0001-initial-stack.md) от 2026-11-12: перф в итоге решён без SaaS — Playwright-бюджеты (TTFB/LCP/CLS, сценарии с CPU x4), бюджет бандла и k6; **Lighthouse CI и CodSpeed из таблицы выше не подключены** и остаются опциональным слоем. Nx с момента исследования обновился до 24.x. Таблица сохранена как историческая запись предложения.
+
 ## Детали по слоям
 
 ### Фундамент: runtime, пакеты, монорепо

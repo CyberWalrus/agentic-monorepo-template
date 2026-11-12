@@ -6,7 +6,9 @@
 
 ## Стек
 
-Node 26 · pnpm 12 (catalogs) · Turborepo · TypeScript 7 · Oxlint + Oxfmt · Vite 8 · React 19.3 + TanStack Start + TanStack Query · Hono + oRPC + Zod 4 · Vitest 5 (browser mode) · Playwright 1.64 · dependency-cruiser · Knip · StrykerJS.
+Node (`.nvmrc`) · pnpm (`packageManager`) · Turborepo · TypeScript · Oxlint + Oxfmt · Vite · React + TanStack Start + TanStack Query · Hono + oRPC + Zod · Vitest (browser mode) · Playwright · dependency-cruiser · Knip · StrykerJS.
+
+Версии зависимостей — только в каталоге `catalog:` в [pnpm-workspace.yaml](pnpm-workspace.yaml). Почему такой стек: [ADR 0001](docs/adr/0001-initial-stack.md).
 
 ## Структура
 
@@ -34,7 +36,7 @@ perf-budgets.json        Перф-бюджеты (защищён)
 | `pnpm --filter @repo/contracts openapi` | Перегенерировать openapi.json                                               | После изменения контракта      |
 | `pnpm format` / `pnpm lint:fix`         | Автоисправление                                                             | Когда линт или формат красные  |
 
-Окружение: `nvm use` (Node 26), pnpm 12 из `packageManager`.
+Окружение: `nvm use` (версия в `.nvmrc`), pnpm из `packageManager`.
 
 ## Как делать фичу
 
@@ -72,3 +74,10 @@ perf-budgets.json        Перф-бюджеты (защищён)
 - Новое поведение покрыто тестами на правильном уровне (скил `writing-tests`), мутанты в изменённой доменной логике убиты.
 - Если менялся UI, `pnpm visual` зелёный или в PR явно перечислены ожидаемые визуальные изменения для человека.
 - PR заполнен по шаблону: что сделано, как проверено, доказательства (trace / video / отчёты).
+
+## Развитие самой обвязки
+
+Если задача меняет не продукт, а сам шаблон (гейты, хуки, CI, структуру репозитория, инструкции агентов), сначала прочитай:
+
+- [docs/architecture.md](docs/architecture.md): законы обвязки и принятые архитектурные и инфраструктурные подходы. Изменение не должно им противоречить.
+- [docs/roadmap.md](docs/roadmap.md): что переделать, улучшить и добавить, с доказательствами, подводными камнями и критериями готовности. Задачи с пометкой 🔒 трогают защищённые пути и требуют режима обслуживания.
