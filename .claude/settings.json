@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(pnpm verify *)",
+      "Bash(pnpm verify)",
+      "Bash(pnpm test *)",
+      "Bash(pnpm test)",
+      "Bash(pnpm typecheck *)",
+      "Bash(pnpm lint *)",
+      "Bash(pnpm format *)",
+      "Bash(pnpm build *)",
+      "Bash(pnpm e2e *)",
+      "Bash(pnpm perf *)",
+      "Bash(pnpm visual)",
+      "Bash(pnpm mutation *)",
+      "Bash(pnpm boundaries *)",
+      "Bash(pnpm knip *)",
+      "Bash(pnpm turbo run *)",
+      "Bash(pnpm --filter * test *)",
+      "Bash(pnpm --filter * typecheck *)",
+      "Bash(pnpm --filter @repo/contracts openapi)",
+      "Bash(pnpm exec playwright test *)",
+      "Bash(pnpm exec playwright trace *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "mcp__playwright",
+      "mcp__playwright-test",
+      "mcp__chrome-devtools"
+    ],
+    "deny": [
+      "Bash(pnpm visual:update *)",
+      "Bash(pnpm visual:update)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  },
+  "enabledMcpjsonServers": ["playwright", "playwright-test", "chrome-devtools"],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.ts\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-paths.ts\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-bash.ts\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/lint-changed-file.ts\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-verify.ts\"",
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  }
+}
