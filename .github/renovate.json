@@ -1,0 +1,33 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommits", "group:monorepos"],
+  "schedule": ["before 6am on monday"],
+  "minimumReleaseAge": "3 days",
+  "labels": ["dependencies"],
+  "rangeStrategy": "bump",
+  "packageRules": [
+    {
+      "description": "Playwright: базлайны и Docker-образ зависят от версии — один PR, обязательный pnpm visual и tools/playwright-agents.sh",
+      "matchPackageNames": ["playwright", "@playwright/test", "mcr.microsoft.com/playwright"],
+      "groupName": "playwright",
+      "prBodyNotes": [
+        "After merging: run `tools/playwright-agents.sh` and `pnpm visual`; a human updates baselines if rendering changed."
+      ]
+    },
+    {
+      "description": "Гейты: обновления линтеров могут добавить правила — отдельной группой",
+      "matchPackageNames": [
+        "oxlint",
+        "oxlint-tsgolint",
+        "oxfmt",
+        "knip",
+        "dependency-cruiser",
+        "sherif"
+      ],
+      "groupName": "quality gates"
+    },
+    { "matchPackageNames": ["/^@tanstack\\//"], "groupName": "tanstack" },
+    { "matchPackageNames": ["/^@orpc\\//"], "groupName": "orpc" },
+    { "matchPackageNames": ["/^@stryker-mutator\\//"], "groupName": "stryker" }
+  ]
+}
