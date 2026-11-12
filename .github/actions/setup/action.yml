@@ -7,6 +7,11 @@ inputs:
 runs:
   using: composite
   steps:
+    # В контейнерных job (visual) workspace смонтирован с чужим uid: git отказывает
+    # с "dubious ownership", и prepare-скрипт pnpm install (lefthook install) падает.
+    - name: Trust workspace for git (container jobs)
+      shell: bash
+      run: git config --global --add safe.directory "${GITHUB_WORKSPACE:-$(pwd)}"
     - uses: pnpm/action-setup@v6
     - uses: actions/setup-node@v7
       with:
