@@ -1,0 +1,102 @@
+# Доверенный гейт целостности (З2, ADR 0002): определение workflow берётся из базовой
+# ветки, код PR не читается и не исполняется. Список файлов — из GitHub API.
+#
+# ЗАПРЕЩЕНО менять без режима обслуживания и ревью мейнтейнера. Запрещено:
+# - добавлять события триггеров или checkout любого ref, кроме base.sha;
+# - исполнять что-либо из PR (скрипты и список путей — только из базы);
+# - использовать секреты: у этого события есть доступ к секретам репозитория.
+name: gate-integrity
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
+    # edited обязателен: смена base-ветки не порождает synchronize, а зелёный check
+    # привязан к head SHA — без edited retarget оставил бы проверенный не тот дифф.
+  merge_group:
+
+concurrency:
+  group: gate-integrity-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Новый push обнуляет прежнее одобрение: снимаем label до того, как integrity
+  # прочитает состояние. «Label не стоит» — успех, а не ошибка.
+  unlabel-stale-approval:
+    name: unlabel-stale-approval
+    if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
+    permissions:
+      pull-requests: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Remove gate-change-approved older than this push
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/labels/gate-change-approved" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/${{ github.repository }}/issues/$PR_NUMBER/labels/gate-change-approved"
+            echo "Снят label gate-change-approved: новый push требует нового одобрения."
+          else
+            echo "Label не стоит — снимать нечего."
+          fi
+
+  integrity:
+    name: gate-integrity
+    if: always() && github.event_name == 'pull_request_target'
+    needs: [unlabel-stale-approval]
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Fail-closed (З4): если job снятия label упал, проверке нельзя доверять
+      # состояние label — падаем, а не пропускаем (skipped check зачёлся бы как success).
+      - name: Fail if unlabel job failed
+        if: needs.unlabel-stale-approval.result == 'failure'
+        run: |
+          echo "unlabel-stale-approval упал: состояние label недостоверно, проверка блокируется."
+          exit 1
+
+      # Только base.sha. Никогда не checkout head PR и merge ref (код PR под токеном
+      # этого события — паттерн pwn request). Локальный экшен тоже резолвится из базы.
+      - name: Checkout trusted base
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+      - uses: ./.github/actions/setup
+
+      - name: Fetch PR facts from GitHub API
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels,pushedAt > pr.json
+          gh api --paginate "repos/${{ github.repository }}/issues/$PR_NUMBER/events" > events.json
+          gh api --paginate "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" > files.json
+
+      - name: Approval is valid only from a maintainer after the last push
+        id: approval
+        run: node tools/check-gate-approval.ts pr.json events.json .github/CODEOWNERS
+
+      - name: Changed files against protected paths
+        env:
+          APPROVED: ${{ steps.approval.outputs.approved }}
+        run: node tools/check-protected-paths.ts --api-files files.json ${{ env.APPROVED == 'true' && '--approved' || '' }}
+
+  # Единственный job на merge_group. В очереди определение workflow — из временной
+  # ветки с изменениями PR, повторная проверка не из доверенной базы; PR попадает
+  # в очередь только после зелёного gate-integrity и ревью по ruleset (ADR 0002).
+  # Имя обязано совпадать с required check, иначе очередь будет ждать вечно.
+  merge-ack:
+    name: gate-integrity
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Acknowledge merge queue entry
+        run: echo "gate-integrity проверен на head SHA до попадания в очередь."
