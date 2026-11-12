@@ -23,7 +23,8 @@
     "visual:update": "VISUAL_UPDATE=1 tools/visual.sh",
     "verify": "node tools/verify.ts",
     "typecheck:tools": "tsc -p tsconfig.json",
-    "test:integrity": "node tools/check-test-integrity.ts"
+    "test:integrity": "node tools/check-test-integrity.ts",
+    "docs:check": "node tools/check-docs.ts"
   },
   "devDependencies": {
     "@types/node": "catalog:",
