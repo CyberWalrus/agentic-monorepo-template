@@ -22,6 +22,7 @@
     "visual": "tools/visual.sh",
     "visual:update": "VISUAL_UPDATE=1 tools/visual.sh",
     "verify": "node tools/verify.ts",
+    "canaries": "node tools/run-gate-canaries.ts",
     "typecheck:tools": "tsc -p tsconfig.json",
     "test:integrity": "node tools/check-test-integrity.ts",
     "test:hooks": "vitest run --reporter=json --reporter=default --outputFile=reports/vitest-hooks.json",
