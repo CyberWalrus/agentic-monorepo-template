@@ -13,7 +13,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { projectDir, readHookInput } from './lib.ts';
@@ -159,7 +159,8 @@ function statusRaw(): string {
 
 /**
  * Хеш имён и содержимого untracked-файлов: новый файл после зелёного Stop и
- * правка его содержимого меняют отпечаток. Нечитаемый файл считается по имени.
+ * правка его содержимого меняют отпечаток. Нечитаемый или не-регулярный файл
+ * (fifo/socket не должны вешать readFileSync) считается по имени с маркером.
  */
 function untrackedFingerprint(): string {
   const out = gitOut(['ls-files', '--others', '--exclude-standard', '-z']);
@@ -170,6 +171,10 @@ function untrackedFingerprint(): string {
   for (const name of out.split('\0').filter(Boolean)) {
     hash.update(name);
     try {
+      if (!lstatSync(join(projectDir, name)).isFile()) {
+        hash.update('<not-regular>');
+        continue;
+      }
       hash.update(readFileSync(join(projectDir, name)));
     } catch {
       hash.update('<unreadable>');

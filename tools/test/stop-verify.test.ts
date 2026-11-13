@@ -80,6 +80,13 @@ beforeAll(() => {
   writeFileSync(join(fixture, 'src', 'a.ts'), 'export const a = 1;\n');
   git(['add', '.']);
   git(['commit', '-m', 'feature change']);
+  // ветка с docs-only диффом: готовится заранее, чтобы тесты не зависели от порядка
+  git(['checkout', '-b', 'docs-only', 'main']);
+  mkdirSync(join(fixture, 'docs'), { recursive: true });
+  writeFileSync(join(fixture, 'docs', 'guide.md'), '# guide\n');
+  git(['add', '.']);
+  git(['commit', '-m', 'docs only']);
+  git(['checkout', 'feature']);
 });
 
 afterAll(() => {
@@ -156,13 +163,26 @@ it('повторный Stop на том же состоянии не гоняе�
 
 it('правка содержимого уже изменённого файла после зелёного Stop снова гоняет verify', () => {
   const sessionId = uniqueSession();
-  stop(sessionId);
+  // файл изменён ДО зелёного Stop: статус между остановками одинаковый (' M'),
+  // отличается только патч — тест изолирует компонент diffPatch отпечатка
   appendFileSync(join(fixture, 'src', 'a.ts'), 'export const c = 3;\n');
+  stop(sessionId);
+  appendFileSync(join(fixture, 'src', 'a.ts'), 'export const d = 4;\n');
   const result = stop(sessionId);
-  expect(result.calls, 'content change alters the fingerprint').toBe(1);
+  expect(result.calls, 'patch change alters the fingerprint at equal status').toBe(1);
   // вернуть содержимое для остальных тестов
   writeFileSync(join(fixture, 'src', 'a.ts'), 'export const a = 1;\n');
   stop(sessionId);
+}, 30_000);
+
+it('правка содержимого untracked файла после зелёного Stop снова гоняет verify', () => {
+  const sessionId = uniqueSession();
+  writeFileSync(join(fixture, 'src', 'wip.ts'), 'export const wip = 1;\n');
+  stop(sessionId);
+  appendFileSync(join(fixture, 'src', 'wip.ts'), 'export const wip2 = 2;\n');
+  const result = stop(sessionId);
+  expect(result.calls, 'untracked content is in the fingerprint').toBe(1);
+  rmSync(join(fixture, 'src', 'wip.ts'), { force: true });
 }, 30_000);
 
 it('новое состояние снова гоняет verify', () => {
@@ -176,17 +196,25 @@ it('новое состояние снова гоняет verify', () => {
 
 it('docs-only изменения пропускаются', () => {
   const sessionId = uniqueSession();
-  // отдельный бранч от main: на feature уже есть закоммиченный src/a.ts
-  git(['checkout', '-b', 'docs-only', 'main']);
+  git(['checkout', 'docs-only']);
   try {
-    mkdirSync(join(fixture, 'docs'), { recursive: true });
-    writeFileSync(join(fixture, 'docs', 'guide.md'), '# guide\n');
-    git(['add', '.']);
-    git(['commit', '-m', 'docs only']);
     const result = stop(sessionId);
     expect(result.calls, 'docs-only did not run verify').toBe(0);
     expect(result.status).toBe(0);
   } finally {
+    git(['checkout', 'feature']);
+  }
+}, 30_000);
+
+it('не-markdown файл под docs/ считается кодом и запускает verify', () => {
+  const sessionId = uniqueSession();
+  git(['checkout', 'docs-only']);
+  try {
+    writeFileSync(join(fixture, 'docs', 'data.txt'), 'data\n');
+    const result = stop(sessionId);
+    expect(result.calls, 'docs/ non-md is code').toBe(1);
+  } finally {
+    rmSync(join(fixture, 'docs', 'data.txt'), { force: true });
     git(['checkout', 'feature']);
   }
 }, 30_000);
