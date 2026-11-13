@@ -12,7 +12,11 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { afterAll, expect, it } from 'vitest';
+import { afterAll, expect, it, vi } from 'vitest';
+
+// Большинство тестов спавнит чекер, один — настоящий vitest: под параллельной
+// нагрузкой verify дефолтные 5 c на тест флакуют (наблюдалось на чистом main).
+vi.setConfig({ testTimeout: 30_000 });
 
 const repoDir = resolve(import.meta.dirname, '..', '..');
 const checker = join(repoDir, 'tools', 'check-test-report.ts');
@@ -146,7 +150,9 @@ it('приёмы из аудита A3 видны в реальном отчёт�
   expect(result.output).toContain('skip.test.ts');
   // Честный тест не флагуется.
   expect(result.output).not.toContain('honest passing test');
-});
+  // Настоящий прогон vitest в фикстуре дороже дефолта файла: под нагрузкой
+  // занимал 5.1 c и падал по таймауту теста (spawnSync-бюджет ниже — 120 c).
+}, 60_000);
 
 it('pending-статус и пустой отчёт ловятся', () => {
   const pending = syntheticReport('vitest-pending', {

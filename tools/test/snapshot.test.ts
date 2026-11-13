@@ -24,7 +24,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
-import { beforeAll, expect, it } from 'vitest';
+import { beforeAll, expect, it, vi } from 'vitest';
+
+// Все тесты файла спавнят настоящие хуки в git-фикстуре: под параллельной
+// нагрузкой verify дефолтные 5 c на тест флакуют (наблюдалось на чистом main).
+vi.setConfig({ testTimeout: 30_000 });
 
 import { stateDir } from '../snapshot.ts';
 

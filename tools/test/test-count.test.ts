@@ -12,7 +12,11 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterAll, expect, it } from 'vitest';
+import { afterAll, expect, it, vi } from 'vitest';
+
+// Все тесты файла спавнят subprocess (git, чекер): под параллельной нагрузкой
+// verify дефолтные 5 c на тест флакуют (наблюдалось на чистом main).
+vi.setConfig({ testTimeout: 30_000 });
 
 const repoDir = resolve(import.meta.dirname, '..', '..');
 const checker = join(repoDir, 'tools', 'check-test-count.ts');
