@@ -2,12 +2,14 @@
  * Stop: агент не завершает работу, пока `pnpm verify` красный (roadmap A2 пункт 2).
  * Изменения ищутся от merge-base с main (fallback: origin/main → main → HEAD),
  * поэтому закоммиченная работа проверяется так же, как незакоммиченная; untracked
- * файлы тоже изменение. docs-only дифф проверку не запускает. Чтобы не гонять
- * verify повторно на том же состоянии, хранится отпечаток последнего зелёного
- * прогона (HEAD + diff + status) в state вне репозитория. После 3 подряд красных
- * хук отпускает, но требует сообщить пользователю. Без zod (З4): отчёт verify
- * валидируется вручную, нечитаемый отчёт — как красный, неожиданная ошибка —
- * exit 2 через обёртку, никогда не код 1.
+ * файлы тоже изменение. Документация (*.md) дифф проверку не запускает; прочее
+ * под `docs/` — код и проверяется. Чтобы не гонять verify повторно на том же
+ * состоянии, хранится отпечаток последнего зелёного прогона: HEAD + полный патч
+ * diff + `git status --porcelain` + содержимое untracked-файлов — правка
+ * содержимого уже изменённого файла меняет отпечаток. State вне репозитория.
+ * После 3 подряд красных хук отпускает, но требует сообщить пользователю.
+ * Без zod (З4): отчёт verify валидируется вручную, нечитаемый отчёт — как
+ * красный, неожиданная ошибка — exit 2 через обёртку, никогда не код 1.
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -15,12 +17,12 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { projectDir, readHookInput } from './lib.ts';
-import { stateDir } from '../../tools/snapshot.ts';
+import { ensureStateRoot, stateDir } from '../../tools/snapshot.ts';
 
 const MAX_BLOCKS = 3;
 const VERIFY_TIMEOUT_MS = 280_000;
-/** Документация не гоняет verify: её гейт — docs:check внутри verify, но в Stop его не ждём. */
-const DOCS = /^docs\/|\.md$/;
+/** Документация (*.md) verify не запускает; всё остальное — код. */
+const DOCS = /\.md$/;
 
 interface VerifyStep {
   name: string;
@@ -41,6 +43,7 @@ interface StopState {
 }
 
 const input = await readHookInput();
+ensureStateRoot();
 const statePath = join(stateDir(projectDir, input.session_id), 'stop-verify.json');
 const state = loadState(statePath);
 
@@ -60,7 +63,7 @@ if (docsOnly) {
 }
 
 const fingerprint = createHash('sha1')
-  .update(`${head}\n${diffRaw(base)}\n${statusRaw()}`)
+  .update([head, diffPatch(base), statusRaw(), untrackedFingerprint()].join('\0'))
   .digest('hex');
 if (state?.green === fingerprint) {
   process.exit(0);
@@ -142,15 +145,37 @@ function diffAgainst(from: string): string[] | null {
         .filter(Boolean);
 }
 
-function diffRaw(from: string): string {
+/** Полный патч (не только имена): правка содержимого уже изменённого файла меняет отпечаток. */
+function diffPatch(from: string): string {
   if (from === '') {
     return '';
   }
-  return gitOut(['diff', '--name-only', from, '--']) ?? '';
+  return gitOut(['diff', from, '--']) ?? '';
 }
 
 function statusRaw(): string {
   return gitOut(['status', '--porcelain']) ?? '';
+}
+
+/**
+ * Хеш имён и содержимого untracked-файлов: новый файл после зелёного Stop и
+ * правка его содержимого меняют отпечаток. Нечитаемый файл считается по имени.
+ */
+function untrackedFingerprint(): string {
+  const out = gitOut(['ls-files', '--others', '--exclude-standard', '-z']);
+  if (out === null) {
+    return '<git ls-files failed>';
+  }
+  const hash = createHash('sha1');
+  for (const name of out.split('\0').filter(Boolean)) {
+    hash.update(name);
+    try {
+      hash.update(readFileSync(join(projectDir, name)));
+    } catch {
+      hash.update('<unreadable>');
+    }
+  }
+  return hash.digest('hex');
 }
 
 function listUntracked(): string[] | null {
