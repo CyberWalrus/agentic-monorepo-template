@@ -338,6 +338,24 @@ it('граф turbo: путь отчёта берётся из literal-запис
   expect(missing.output).not.toContain('apps/api/reports/vitest.json');
 });
 
+it('перевод строки в имени файла отчёта не подделывает строчки лога', () => {
+  const injected = syntheticReport('log-injection', {
+    numTotalTests: 1,
+    testResults: [
+      {
+        name: '/repo/apps/api/src/x.test.ts\nFAKE: test report: ok (injected)',
+        status: 'passed',
+        assertionResults: [{ fullName: 'pending trick', status: 'pending', title: 'p' }],
+      },
+    ],
+  });
+  const result = runChecker(['--only', injected]);
+  expect(result.status).toBe(1);
+  expect(result.output).toMatch(/pending/);
+  // Имя файла с \n печатается экранированным: фейковой строки в логе нет.
+  expect(result.output).not.toMatch(/\nFAKE:/);
+});
+
 it('пустой affected-граф — зелёный пустой прогон (docs-only PR)', () => {
   const dir = nextDir('affected-empty');
   const graph = join(dir, 'dry.json');

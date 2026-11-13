@@ -197,7 +197,7 @@ function checkVitestReport(report: Record<string, unknown>, label: string, root:
       problems.push(`${label}: testResult without a file name`);
       continue;
     }
-    const file = rel(fileResult['name'], root);
+    const file = clean(rel(fileResult['name'], root));
     const assertions = fileResult['assertionResults'];
     if (!Array.isArray(assertions)) {
       problems.push(`${file}: "assertionResults" must be an array`);
