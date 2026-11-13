@@ -10,7 +10,7 @@
     "dev": "node --watch src/server.ts",
     "start": "node src/server.ts",
     "typecheck": "tsc",
-    "test": "vitest run --coverage",
+    "test": "vitest run --coverage --reporter=json --reporter=default --outputFile=reports/vitest.json",
     "mutation": "stryker run"
   },
   "dependencies": {

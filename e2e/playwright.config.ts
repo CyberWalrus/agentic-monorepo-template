@@ -3,6 +3,10 @@ import { defineConfig, devices } from '@playwright/test';
 const CI = Boolean(process.env['CI']);
 const WEB_URL = 'http://localhost:3000';
 const API_URL = 'http://localhost:3001';
+// JSON-отчёт читает гейт test-report (З3, A3): skipped/todo/expected failure = 0.
+// Любой запуск Playwright (включая --project=perf/visual) перезаписывает этот файл,
+// поэтому проверка отчёта e2e идёт сразу после задачи e2e, до perf.
+const JSON_REPORTER = ['json', { outputFile: 'reports/e2e.json' }] as const;
 
 export default defineConfig({
   testDir: '.',
@@ -15,8 +19,8 @@ export default defineConfig({
   // В CI базлайны никогда не создаются и не перезаписываются: только `pnpm visual:update` человеком.
   updateSnapshots: CI ? 'none' : 'missing',
   reporter: CI
-    ? [['github'], ['html', { open: 'never' }], ['json', { outputFile: 'reports/e2e.json' }]]
-    : [['list'], ['html', { open: 'never' }]],
+    ? [['github'], ['html', { open: 'never' }], JSON_REPORTER]
+    : [['list'], ['html', { open: 'never' }], JSON_REPORTER],
   // Базлайны без суффикса платформы: существуют только для Linux-образа Playwright.
   snapshotPathTemplate: '{testDir}/__screenshots__/{testFilePath}/{arg}{ext}',
   expect: {

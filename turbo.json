@@ -12,7 +12,7 @@
     },
     "test": {
       "dependsOn": ["transit"],
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**", "reports/vitest.json"]
     },
     "test:visual": {
       "dependsOn": ["transit"],
@@ -26,7 +26,7 @@
     },
     "e2e": {
       "dependsOn": ["transit", "^build"],
-      "outputs": ["playwright-report/**", "test-results/**"],
+      "outputs": ["playwright-report/**", "test-results/**", "reports/**"],
       // VIDEO=on — видео прогона как доказательство для PR; без env Turborepo не передаст его и не учтёт в хеше.
       "env": ["CI", "VIDEO"]
     },
