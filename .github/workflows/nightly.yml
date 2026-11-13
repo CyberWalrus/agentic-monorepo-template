@@ -76,9 +76,30 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm canaries
 
+  verify-budgets:
+    name: verify budgets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+        with: { playwright: 'true' }
+      # З6/B1: бюджеты времени enforce только здесь (ubuntu-раннер — та же
+      # калибровка, что в verify-budgets.json). Длительности шагов — тренд-данные.
+      - run: mkdir -p reports && pnpm verify --full --enforce-budgets --json > reports/verify-durations.json
+        env: { CI: 'true' }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: verify-durations-${{ github.run_id }}
+          path: reports/verify-durations.json
+          retention-days: 90
+
   report:
     name: report failure
-    needs: [flake-hunt, mutation-full, perf-trend, gate-canaries]
+    needs: [flake-hunt, mutation-full, perf-trend, gate-canaries, verify-budgets]
     if: failure()
     runs-on: ubuntu-latest
     steps:

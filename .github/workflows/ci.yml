@@ -36,6 +36,8 @@ jobs:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
+      - name: start clock
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - run: pnpm format:check
       - run: pnpm lint --format github
       - run: pnpm turbo run typecheck $AFFECTED --output-logs=errors-only
@@ -53,6 +55,10 @@ jobs:
       - run: pnpm sandbox:check
       - run: pnpm docs:check
       - run: pnpm --filter @repo/contracts openapi:check
+      - name: duration to summary
+        if: always()
+        env: { JOB: static }
+        run: echo "duration $JOB — $(( $(date +%s) - ${JOB_START:-0} ))s" >> "$GITHUB_STEP_SUMMARY"
 
   unit:
     name: unit
@@ -63,6 +69,8 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
+      - name: start clock
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - run: pnpm turbo run test $AFFECTED --output-logs=errors-only
       # Гейт по отчёту раннера (З3, A3): ожидания выводятся из dry-графа turbo,
       # поэтому требуются отчёты ровно гонявшихся задач. Тот же $AFFECTED, что
@@ -77,6 +85,10 @@ jobs:
           name: coverage
           path: '**/coverage/'
           if-no-files-found: ignore
+      - name: duration to summary
+        if: always()
+        env: { JOB: unit }
+        run: echo "duration $JOB — $(( $(date +%s) - ${JOB_START:-0} ))s" >> "$GITHUB_STEP_SUMMARY"
 
   mutation:
     name: mutation
@@ -94,6 +106,8 @@ jobs:
           restore-keys: |
             stryker-${{ github.head_ref || github.ref_name }}-
             stryker-main-
+      - name: start clock
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - run: pnpm turbo run mutation $AFFECTED --output-logs=errors-only
       - uses: actions/upload-artifact@v7
         if: always()
@@ -101,6 +115,10 @@ jobs:
           name: mutation-report
           path: apps/api/reports/mutation/
           if-no-files-found: ignore
+      - name: duration to summary
+        if: always()
+        env: { JOB: mutation }
+        run: echo "duration $JOB — $(( $(date +%s) - ${JOB_START:-0} ))s" >> "$GITHUB_STEP_SUMMARY"
 
   e2e:
     name: e2e
@@ -111,6 +129,8 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
+      - name: start clock
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - run: pnpm turbo run e2e $AFFECTED --output-logs=errors-only
       # Проект functional с default:false не запускается без явного --project —
       # гейт требует его присутствия в отчёте (A3). $AFFECTED — как у прогона.
@@ -122,6 +142,10 @@ jobs:
           path: |
             e2e/playwright-report/
             e2e/test-results/
+      - name: duration to summary
+        if: always()
+        env: { JOB: e2e }
+        run: echo "duration $JOB — $(( $(date +%s) - ${JOB_START:-0} ))s" >> "$GITHUB_STEP_SUMMARY"
 
   visual:
     name: visual
@@ -133,6 +157,8 @@ jobs:
       options: --ipc=host
     steps:
       - uses: actions/checkout@v7
+      - name: start clock
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup
       - run: bash tools/visual-inner.sh
         env: { CI: 'true' }
@@ -144,6 +170,10 @@ jobs:
             e2e/playwright-report/
             e2e/test-results/
             packages/ui/.vitest/
+      - name: duration to summary
+        if: always()
+        env: { JOB: visual }
+        run: echo "duration $JOB — $(( $(date +%s) - ${JOB_START:-0} ))s" >> "$GITHUB_STEP_SUMMARY"
 
   perf:
     name: perf
@@ -154,6 +184,8 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
+      - name: start clock
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
       - run: pnpm bundle
       - run: pnpm turbo run perf --output-logs=errors-only
@@ -172,6 +204,10 @@ jobs:
             e2e/reports/perf.json
             e2e/playwright-report/
           if-no-files-found: ignore
+      - name: duration to summary
+        if: always()
+        env: { JOB: perf }
+        run: echo "duration $JOB — $(( $(date +%s) - ${JOB_START:-0} ))s" >> "$GITHUB_STEP_SUMMARY"
 
   # Единственный required check в ruleset: имя стабильно, пропущенные affected-джобы не блокируют.
   gate:
