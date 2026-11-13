@@ -96,13 +96,13 @@ try {
   // Worktree от HEAD: канарейки проверяют закоммиченное состояние.
   const added = git(['worktree', 'add', worktreeDir, 'HEAD']);
   if (added.status !== 0) {
-    console.error(`git worktree add failed:\n${added.output}`);
-    process.exit(1);
+    throw new Error(`git worktree add failed:\n${added.output}`);
   }
   const installed = run(['pnpm', 'install', '--frozen-lockfile'], worktreeDir, 600_000);
   if (installed.status !== 0) {
-    console.error(`pnpm install in worktree failed:\n${installed.output.slice(-2000)}`);
-    process.exit(1);
+    // throw, а не process.exit: exit обходит finally и оставляет worktree
+    // зарегистрированным в основном репо и каталог в tmp.
+    throw new Error(`pnpm install in worktree failed:\n${installed.output.slice(-2000)}`);
   }
 
   // Негатив-контроль: на чистом worktree все шаги набора зелёные — иначе
@@ -112,12 +112,19 @@ try {
     .join(',');
   const control = verifyInWorktree(union, false);
   if (control.json === null || !control.json.ok) {
-    console.error(
+    throw new Error(
       `negative control failed — worktree is red before any bad change:\n${control.output.slice(-3000)}`,
     );
-    process.exit(1);
   }
   console.log(`negative control: ${union} — ok`);
+  // Отдельный контроль slow-пары: budget-канарейка не должна стрелять вакуумно.
+  const bundleControl = verifyInWorktree('build,bundle', true);
+  if (bundleControl.json === null || !bundleControl.json.ok) {
+    throw new Error(
+      `negative control (build,bundle) failed — bundle gate is already red on the clean base:\n${bundleControl.output.slice(-2000)}`,
+    );
+  }
+  console.log('negative control: build,bundle — ok');
 
   for (const canary of CANARIES) {
     canary.apply(worktreeDir);
@@ -142,8 +149,16 @@ try {
       );
     }
     // Возврат worktree в чистое состояние (правки + untracked probe-файлы).
-    run(['git', 'checkout', '--', '.'], worktreeDir);
-    run(['git', 'clean', '-fdq'], worktreeDir);
+    // reports/ (в .gitignore) переживает revert намеренно: канарейки его не читают.
+    for (const revert of [
+      ['git', 'checkout', '--', '.'],
+      ['git', 'clean', '-fdq'],
+    ]) {
+      const reverted = run(revert, worktreeDir);
+      if (reverted.status !== 0) {
+        throw new Error(`revert failed (${revert.join(' ')}):\n${reverted.output}`);
+      }
+    }
   }
 } finally {
   git(['worktree', 'remove', '--force', worktreeDir]);

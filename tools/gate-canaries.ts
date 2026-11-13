@@ -31,7 +31,7 @@ export interface GateCanary {
 // Высокоэнтропийный литерал: повторяющиеся символы gzip сжимает, и перерасход
 // бандла перестанет ловиться.
 const CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-const BLOAT = Array.from(
+export const BLOAT = Array.from(
   { length: 40_000 },
   () => CHARSET[Math.floor(Math.random() * CHARSET.length)],
 ).join('');
@@ -51,12 +51,24 @@ export const CANARIES: GateCanary[] = [
     name: 'межфичевый импорт',
     steps: 'boundaries',
     failedStep: 'boundaries',
-    expect: /tasks/,
+    expect: /evil/,
     apply: (root) =>
       write(
         root,
         'apps/web/src/features/evil/index.ts',
         "import { useTasks } from '../tasks/use-tasks';\n\nexport const evil = () => useTasks();\n",
+      ),
+  },
+  {
+    name: 'нарушение форматирования',
+    steps: 'format',
+    failedStep: 'format',
+    expect: /evil-probe/,
+    apply: (root) =>
+      write(
+        root,
+        'apps/api/src/evil-probe.ts',
+        'const   evil=1;;const  other=2\nexport { evil, other };\n',
       ),
   },
   {
@@ -79,7 +91,7 @@ export const CANARIES: GateCanary[] = [
     name: 'type-ошибка в tools',
     steps: 'typecheck:tools',
     failedStep: 'typecheck:tools',
-    expect: /error TS/,
+    expect: /evil-probe/,
     apply: (root) =>
       write(root, 'tools/evil-probe.ts', "export const evil: number = 'not-a-number';\n"),
   },
@@ -148,6 +160,13 @@ export const CANARIES: GateCanary[] = [
       if (!isRecord(dependencies)) {
         throw new Error('canary anchor not found: no dependencies block');
       }
+      const keys = Object.keys(dependencies);
+      const lastKey = keys.at(-1);
+      if (lastKey === undefined || lastKey < 'lodash') {
+        // lodash дописывается последним: если последний ключ встанет раньше,
+        // порядок не нарушится и канарейка перестанет стрелять.
+        throw new Error('canary anchor not found: last dependency sorts before "lodash"');
+      }
       for (const value of Object.values(dependencies)) {
         if (typeof value !== 'string') {
           throw new Error('canary anchor not found: dependencies value is not a string');
@@ -161,7 +180,7 @@ export const CANARIES: GateCanary[] = [
     name: 'дрейф контракта',
     steps: 'openapi',
     failedStep: 'openapi',
-    expect: /openapi/i,
+    expect: /out of date/,
     apply: (root) => {
       const path = join(root, 'packages/contracts/src/tasks.ts');
       const source = readFileSync(path, 'utf8');

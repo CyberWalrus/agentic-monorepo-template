@@ -42,6 +42,14 @@ if (only !== undefined) {
   fast.splice(0, fast.length, ...selected(fast));
   post.splice(0, post.length, ...selected(post));
   slow.splice(0, slow.length, ...selected(slow));
+  // Без --full slow-волна не исполняется: --only с slow-шагом без --full —
+  // прогон, который ничего не сделал, с зелёным PASS. Не даём и такого.
+  if (slow.length > 0 && !full) {
+    console.error(
+      'verify --only: slow step(s) selected but --full is missing (slow wave runs only with --full)',
+    );
+    process.exit(1);
+  }
 }
 
 function run(step: Step): Promise<StepResult> {

@@ -24,6 +24,8 @@ on:
       - e2e/playwright.config.ts
       - '**/stryker.config.json'
       - .nvmrc
+  # Правки самих workflow (.github/workflows/**) канарейки не перезапускают —
+  # их защиту обеспечивает gate-integrity (pull_request_target из base, З2).
   workflow_dispatch:
 
 concurrency:

@@ -6,16 +6,23 @@
  * идёт из workflow canaries.yml и nightly (`pnpm canaries`).
  */
 import { existsSync, readFileSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CANARIES } from '../gate-canaries.ts';
-import { allStepNames, slow } from '../verify-steps.ts';
+import { BLOAT, CANARIES } from '../gate-canaries.ts';
+import { allStepNames, fast, post, slow } from '../verify-steps.ts';
 
 const slowNames = new Set(slow.map((step) => step.name));
 
+// Шаги, которым канарейка по документированным причинам не нужна:
+// test-count — warning-only (exit 0 по контракту), e2e/e2e-report/perf —
+// тяжёлые, их время покрывают бюджеты nightly (architecture.md З6).
+const CANARY_EXEMPT_STEPS = new Set(['test-count', 'e2e', 'e2e-report', 'perf']);
+
 describe('таблица канареек гейтов', () => {
+  const known = new Set(allStepNames);
+
   it('имена шагов существуют в verify, целевой шаг входит в --only', () => {
-    const known = new Set(allStepNames);
     for (const canary of CANARIES) {
       const steps = canary.steps.split(',');
       for (const step of steps) {
@@ -26,6 +33,24 @@ describe('таблица канареек гейтов', () => {
       expect(steps, `целевой шаг «${canary.name}» должен быть в --only`).toContain(
         canary.failedStep,
       );
+    }
+  });
+
+  it('каждый блокирующий шаг verify покрыт канарейкой (кроме вайтлиста З6)', () => {
+    const canaried = new Set(CANARIES.flatMap((canary) => canary.steps.split(',')));
+    const blocking = [...fast, ...post, ...slow].map((step) => step.name);
+    for (const step of blocking) {
+      if (CANARY_EXEMPT_STEPS.has(step)) {
+        continue;
+      }
+      expect(
+        canaried.has(step),
+        `блокирующий шаг ${step} без канарейки — добавь канарейку или задокументируй исключение в З6`,
+      ).toBe(true);
+    }
+    // Вайтлист не разрастается молча: каждый исключённый шаг обязан существовать.
+    for (const step of CANARY_EXEMPT_STEPS) {
+      expect(known.has(step), `исключённый шаг ${step} не найден в verify`).toBe(true);
     }
   });
 
@@ -50,9 +75,10 @@ describe('таблица канареек гейтов', () => {
   });
 
   it('bundle-канарейка перекрывает бюджет с запасом текущего факта', () => {
-    // Если базовый бандл похудеет, +40КБ перестанет превышать бюджет и
-    // канарейка молча перестанет ловить. Факт берём из последнего локального
-    // прогона (reports/bundle.json пишет pnpm bundle).
+    // Если базовый бандл похудеет, дельта канарейки перестанет превышать
+    // бюджет и она молча перестанет ловить. Факт — из последнего локального
+    // прогона (reports/bundle.json пишет pnpm bundle), дельта — честный gzip
+    // литерала (40 000 случайных base64-символов сжимаются до ~30КБ).
     const canary = CANARIES.find((item) => item.failedStep === 'bundle');
     expect(canary, 'bundle-канарейка в таблице').toBeDefined();
     const budgets: unknown = JSON.parse(
@@ -70,7 +96,8 @@ describe('таблица канареек гейтов', () => {
     if (total === undefined) {
       return;
     }
-    expect(40_000 / 1024, 'дельта канарейки против запаса до бюджета').toBeGreaterThan(
+    const canaryDeltaKb = gzipSync(Buffer.from(BLOAT, 'utf8')).length / 1024;
+    expect(canaryDeltaKb, 'дельта канарейки против запаса до бюджета').toBeGreaterThan(
       budget - total,
     );
   });
