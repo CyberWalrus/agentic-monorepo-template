@@ -24,7 +24,8 @@
     "verify": "node tools/verify.ts",
     "typecheck:tools": "tsc -p tsconfig.json",
     "test:integrity": "node tools/check-test-integrity.ts",
-    "test:hooks": "vitest run",
+    "test:hooks": "vitest run --reporter=json --reporter=default --outputFile=reports/vitest-hooks.json",
+    "test:report": "node tools/check-test-report.ts",
     "sandbox:check": "node tools/check-sandbox-paths.ts",
     "docs:check": "node tools/check-docs.ts"
   },

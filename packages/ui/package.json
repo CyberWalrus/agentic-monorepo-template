@@ -9,7 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsc",
-    "test": "vitest run --project unit",
+    "test": "vitest run --project unit --reporter=json --reporter=default --outputFile=reports/vitest.json",
     "test:visual": "vitest run --project visual"
   },
   "devDependencies": {

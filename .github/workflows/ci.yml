@@ -45,6 +45,8 @@ jobs:
       - run: pnpm sherif
       - run: pnpm test:integrity
       - run: pnpm test:hooks
+      # Корневой vitest вне turbo: его отчёт проверяется здесь явным --only (A3).
+      - run: pnpm test:report --only reports/vitest-hooks.json
       - run: pnpm sandbox:check
       - run: pnpm docs:check
       - run: pnpm --filter @repo/contracts openapi:check
@@ -59,6 +61,9 @@ jobs:
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
       - run: pnpm turbo run test $AFFECTED --output-logs=errors-only
+      # Гейт по отчёту раннера (З3, A3): ожидания выводятся из dry-графа turbo,
+      # поэтому при --affected требуются отчёты ровно гонявшихся задач.
+      - run: pnpm test:report --from-turbo test --affected
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -100,6 +105,9 @@ jobs:
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
       - run: pnpm turbo run e2e $AFFECTED --output-logs=errors-only
+      # Проект functional с default:false не запускается без явного --project —
+      # гейт требует его присутствия в отчёте (A3).
+      - run: pnpm test:report --from-turbo e2e --affected --expect-project functional
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

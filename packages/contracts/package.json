@@ -8,7 +8,7 @@
   },
   "scripts": {
     "typecheck": "tsc",
-    "test": "vitest run",
+    "test": "vitest run --reporter=json --reporter=default --outputFile=reports/vitest.json",
     "openapi": "node scripts/openapi.ts",
     "openapi:check": "node scripts/openapi.ts --check"
   },

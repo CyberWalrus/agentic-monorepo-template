@@ -49,11 +49,27 @@ const fast: Step[] = [
   { name: 'openapi', command: 'pnpm', args: ['--filter', '@repo/contracts', 'openapi:check'] },
 ];
 
+// Гейт по отчёту раннера (З3, A3) идёт после тестов: отчёты существуют, только
+// если тесты отработали, — иначе он проверял бы протухший кэш turbo. Корневой
+// vitest (test:hooks) вне turbo, поэтому его отчёт добавляется явным --only.
+const testReport: Step = {
+  name: 'test-report',
+  command: 'pnpm',
+  args: ['test:report', '--from-turbo', 'test', '--only', 'reports/vitest-hooks.json'],
+};
+
 // E2E и перф делят порты 3000/3001, поэтому идут последовательно после быстрых шагов.
+// Порядок e2e → e2e-report → perf — контракт: отчёт e2e/reports/e2e.json пишет
+// любой запуск Playwright, perf его перезапишет; переставлять шаги нельзя.
 const slow: Step[] = [
   turbo('build'),
   { name: 'bundle', command: 'pnpm', args: ['bundle'] },
   turbo('e2e'),
+  {
+    name: 'e2e-report',
+    command: 'pnpm',
+    args: ['test:report', '--from-turbo', 'e2e', '--expect-project', 'functional'],
+  },
   turbo('perf'),
 ];
 
@@ -81,6 +97,9 @@ function run(step: Step): Promise<StepResult> {
 
 const started = performance.now();
 const results = await Promise.all(fast.map(run));
+if (results.every((result) => result.ok)) {
+  results.push(await run(testReport));
+}
 if (full && results.every((result) => result.ok)) {
   for (const step of slow) {
     const result = await run(step);
