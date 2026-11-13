@@ -72,6 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
+        with: { playwright: 'true' }
       - run: pnpm install --frozen-lockfile
       - run: pnpm canaries
 
