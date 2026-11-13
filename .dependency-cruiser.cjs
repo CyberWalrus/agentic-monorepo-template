@@ -95,7 +95,8 @@ module.exports = {
   options: {
     doNotFollow: { path: 'node_modules' },
     exclude: {
-      path: '^e2e/perf/k6/|(^|/)(\\.playwright-cli|dist|\\.output|coverage|reports|test-results|node_modules)/|routeTree\\.gen\\.ts$',
+      // playwright-report: html-отчёт Playwright — артефакт с чужими бандлами (локальные прогоны).
+      path: '^e2e/perf/k6/|(^|/)(\\.playwright-cli|dist|\\.output|coverage|reports|test-results|playwright-report|node_modules)/|routeTree\\.gen\\.ts$',
     },
     tsPreCompilationDeps: true,
     combinedDependencies: false,

@@ -1,4 +1,7 @@
 import { test as base, expect } from '@playwright/test';
+import { resolve } from 'node:path';
+
+import { apiOrigin, resolvePorts } from '../tools/ports.ts';
 
 export interface SeedTask {
   id: string;
@@ -8,8 +11,11 @@ export interface SeedTask {
 }
 
 // Напрямую в API, мимо прокси web-сервера: через origin web доступен только
-// /rpc (ADR 0005), /__test__/* через web намеренно недоступен.
-const API_URL = 'http://localhost:3001';
+// /rpc (ADR 0005), /__test__/* через web намеренно недоступен. Порты — те же,
+// что выбрал e2e-конфиг: читаем reports/ports.json, а не выбираем заново
+// (зонд после старта серверов уехал бы на чужой порт — З9, A5).
+const ports = await resolvePorts(resolve(import.meta.dirname, '..'));
+export const API_URL = apiOrigin(ports);
 
 interface Fixtures {
   /** Заменяет все задачи в API. Только для serial-проектов (visual, perf). */

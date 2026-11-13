@@ -10,8 +10,8 @@
 nvm use            # Node из .nvmrc
 pnpm install       # pnpm из packageManager; ставит git-хуки
 pnpm verify        # все быстрые гейты (~1–5 с с кэшем)
-pnpm dev           # web http://localhost:3000, api http://localhost:3001
-                   # адрес API для web задаётся переменной API_URL (дефолт подставляется до A5 PR-3)
+pnpm dev           # web и api на портах из worktree (выбор — в reports/ports.json)
+                   # e2e против живого dev-сервера: REUSE_SERVER=1 pnpm e2e
 ```
 
 Скриншот-тесты требуют Docker: `pnpm visual`.
