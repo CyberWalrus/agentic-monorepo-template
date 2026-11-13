@@ -26,6 +26,31 @@ const sizes = await Promise.all(
     })),
 );
 
+// Детерминизм сборки (ADR 0005): адрес API не должен запекаться в клиентский
+// бандл — иначе dist зависит от окружения сборки, кэш turbo между worktree
+// (разные порты API) промахивается, а браузер стучится мимо прокси. Все
+// loopback-формы: имя хоста, IPv4-петля, wildcard и IPv6-петля.
+const jsFiles = files.filter((file) => file.endsWith('.js'));
+const bakedAddresses: string[] = [];
+for (const file of jsFiles) {
+  const source = await readFile(join(assetsDir, file), 'utf8');
+  for (const match of source.matchAll(/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):\d+/g)) {
+    bakedAddresses.push(`${file}: ${match[0]}`);
+  }
+}
+if (bakedAddresses.length > 0) {
+  console.error(
+    [
+      '✗ Baked API addresses in the client bundle (ADR 0005): the build must not depend',
+      '  on API_URL. Read the address at runtime: SSR — process.env.API_URL, browser —',
+      '  location.origin (api-client.ts). Do not add localhost literals to client code.',
+      '',
+      ...bakedAddresses.slice(0, 10),
+    ].join('\n'),
+  );
+  process.exit(1);
+}
+
 const js = sizes.filter((s) => s.file.endsWith('.js'));
 const css = sizes.filter((s) => s.file.endsWith('.css'));
 const sum = (items: { gzipKb: number }[]) => items.reduce((total, item) => total + item.gzipKb, 0);

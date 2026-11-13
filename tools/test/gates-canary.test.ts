@@ -1,8 +1,8 @@
 /**
  * Санити-тест таблицы канареек гейтов (З6, B1): каждая канарейка ссылается на
  * существующий шаг verify, имеет непустые apply и expect, целевой шаг входит в
- * её --only, и только build/bundle помечены как slow (требуют --full). Сам
- * прогон канареек здесь не запускается — он тяжёлый (worktree + install) и
+ * её --only, и slow-шаги в --only требуют --full (full совпадает с slow).
+ * Сам прогон канареек здесь не запускается — он тяжёлый (worktree + install) и
  * идёт из workflow canaries.yml и nightly (`pnpm canaries`).
  */
 import { existsSync, readFileSync } from 'node:fs';
@@ -15,9 +15,10 @@ import { allStepNames, fast, post, slow } from '../verify-steps.ts';
 const slowNames = new Set(slow.map((step) => step.name));
 
 // Шаги, которым канарейка по документированным причинам не нужна:
-// test-count — warning-only (exit 0 по контракту), e2e/e2e-report/perf —
+// test-count — warning-only (exit 0 по контракту), e2e-report/perf —
 // тяжёлые, их время покрывают бюджеты nightly (architecture.md З6).
-const CANARY_EXEMPT_STEPS = new Set(['test-count', 'e2e', 'e2e-report', 'perf']);
+// e2e канареечится с ADR 0005 (прокси /rpc) и в вайтлист больше не входит.
+const CANARY_EXEMPT_STEPS = new Set(['test-count', 'e2e-report', 'perf']);
 
 describe('таблица канареек гейтов', () => {
   const known = new Set(allStepNames);

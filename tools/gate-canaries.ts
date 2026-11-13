@@ -7,10 +7,11 @@
  * заканареченного правила делает шаг зелёным и роняет канарейку.
  *
  * Исключения (документированы в architecture.md З6): test-count — warning-only,
- * exit 0 по контракту; e2e/e2e-report/perf — тяжёлые, их время покрывают
- * бюджеты nightly. Изменение защищённого файла как таковое ловят контуры
- * L0 (хуки) и L3 (gate-integrity); локально канареечится одностороннее
- * ослабление З10-пары (канарейка sandbox).
+ * exit 0 по контракту; e2e-report/perf — тяжёлые, их время покрывают бюджеты.
+ * e2e канареечится начиная с ADR 0005 (прокси /rpc): удаление прокси —
+ * детерминированный bad-change, уроняющий e2e. Изменение защищённого файла как
+ * таковое ловят контуры L0 (хуки) и L3 (gate-integrity); локально канареечится
+ * одностороннее ослабление З10-пары (канарейка sandbox).
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -235,6 +236,66 @@ export const CANARIES: GateCanary[] = [
       }
       parsed['deny'] = deny.filter((item) => item !== 'knip.json');
       writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
+    },
+  },
+  {
+    // Без прокси браузерный fetch `/rpc` попадает в SSR-обработчик Start и
+    // функции API недоступны: падают ВСЕ клиентские тесты, в хвосте вывода
+    // Playwright остаётся «N failed» с N ≥ 2 — массовое падение отличает
+    // канарейку от одиночного флака (ADR 0005).
+    name: 'прокси /rpc удалён',
+    steps: 'e2e',
+    full: true,
+    failedStep: 'e2e',
+    expect: /([2-9]|\d{2,})\s+failed/,
+    apply: (root) => {
+      const path = join(root, 'apps/web/vite.config.ts');
+      const source = readFileSync(path, 'utf8');
+      const stripped = source.replaceAll('proxy: rpcProxy', 'proxy: undefined');
+      if (stripped === source) {
+        throw new Error('canary anchor not found: apps/web/vite.config.ts has no rpcProxy');
+      }
+      writeFileSync(path, stripped);
+    },
+  },
+  {
+    // Правило «через web-origin доступен только /rpc» (ADR 0005) закреплено
+    // e2e-тестом api-origin; канарейка гарантирует, что тест не перестанет
+    // ловить: добавленный в прокси /__test__ красит e2e его тестом. Якорь —
+    // заголовок теста: он остаётся в хвосте вывода Playwright, текст ассерта
+    // вылетает из 60 строк (наблюдалось в первом прогоне этой канарейки).
+    name: '/__test__ добавлен в прокси',
+    steps: 'e2e',
+    full: true,
+    failedStep: 'e2e',
+    expect: /test API is not reachable through the web origin/,
+    apply: (root) => {
+      const path = join(root, 'apps/web/vite.config.ts');
+      const source = readFileSync(path, 'utf8');
+      const leaked = source.replaceAll(
+        "'/rpc': { target: process.env['API_URL'] ?? '', changeOrigin: false }",
+        "'/rpc': { target: process.env['API_URL'] ?? '', changeOrigin: false },\n    '/__test__': { target: process.env['API_URL'] ?? '', changeOrigin: false },",
+      );
+      if (leaked === source) {
+        throw new Error('canary anchor not found: apps/web/vite.config.ts has no /rpc proxy entry');
+      }
+      writeFileSync(path, leaked);
+    },
+  },
+  {
+    // Детерминизм сборки (ADR 0005): запечённый адрес в клиентском бандле
+    // ловит скан шага bundle. atob(btoa()) не сворачивается минификатором
+    // (урок B1), литерал остаётся в чанке.
+    name: 'адрес API запечён в бандл',
+    steps: 'build,bundle',
+    full: true,
+    failedStep: 'bundle',
+    expect: /Baked API addresses/i,
+    apply: (root) => {
+      const path = join(root, 'apps/web/src/lib/api-client.ts');
+      const source = readFileSync(path, 'utf8');
+      const content = `${source}\nconst evilBakedProbe = 'http://localhost:3001';\nconsole.log(atob(btoa(evilBakedProbe)));\n`;
+      writeFileSync(path, content);
     },
   },
 ];

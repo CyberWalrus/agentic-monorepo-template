@@ -5,7 +5,9 @@ import { defineConfig, devices } from '@playwright/test';
 
 const CI = Boolean(process.env['CI']);
 const WEB_URL = 'http://localhost:3000';
-const API_URL = 'http://localhost:3001';
+// Цель прокси /rpc (ADR 0005): env из задачи e2e/perf (turbo), fallback — до
+// вывода портов из worktree (A5 PR-3), после которого он исчезнет.
+const API_URL = process.env['API_URL'] ?? 'http://localhost:3001';
 // Токен прогона (З9, A5): он же уходит API через INSTANCE_ID, global-setup.ts
 // сверяет /health с ним — прогон не может незаметно пойти против чужого
 // процесса на том же порту. 0600: токен не читается другими пользователями.
@@ -78,13 +80,15 @@ export default defineConfig({
       command: 'pnpm --filter @repo/api start',
       url: `${API_URL}/health`,
       reuseExistingServer: !CI,
-      env: { PORT: '3001', WEB_ORIGIN: WEB_URL, ENABLE_TEST_API: '1', INSTANCE_ID },
+      env: { PORT: '3001', ENABLE_TEST_API: '1', INSTANCE_ID },
     },
     {
-      // Production-сборка (`turbo run e2e` собирает web заранее).
+      // Production-сборка (`turbo run e2e` собирает web заранее). API_URL —
+      // цель прокси /rpc (ADR 0005), читается при старте preview, не при сборке.
       command: 'pnpm --filter @repo/web start',
       url: WEB_URL,
       reuseExistingServer: !CI,
+      env: { API_URL },
     },
   ],
 });

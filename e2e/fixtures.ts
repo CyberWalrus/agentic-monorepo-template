@@ -7,6 +7,8 @@ export interface SeedTask {
   createdAt: string;
 }
 
+// Напрямую в API, мимо прокси web-сервера: через origin web доступен только
+// /rpc (ADR 0005), /__test__/* через web намеренно недоступен.
 const API_URL = 'http://localhost:3001';
 
 interface Fixtures {

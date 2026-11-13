@@ -2,7 +2,6 @@ import { OpenAPIHandler } from '@orpc/openapi/fetch';
 import { RPCHandler } from '@orpc/server/fetch';
 import { TaskSchema } from '@repo/contracts';
 import { Hono } from 'hono';
-import { cors } from 'hono/cors';
 import * as z from 'zod';
 
 import { router } from './router.ts';
@@ -10,8 +9,6 @@ import type { TaskRepository } from './tasks/repository.ts';
 
 export interface AppOptions {
   tasks: TaskRepository;
-  /** Origin фронтенда для CORS. */
-  webOrigin: string;
   /**
    * Включает `/__test__/*` для подготовки данных в E2E.
    * Никогда не включается в production: см. `server.ts`.
@@ -24,13 +21,14 @@ export interface AppOptions {
   instanceId?: string;
 }
 
-export function createApp({ tasks, webOrigin, enableTestApi = false, instanceId }: AppOptions) {
+export function createApp({ tasks, enableTestApi = false, instanceId }: AppOptions) {
   const app = new Hono();
   const context = { tasks };
   const rpcHandler = new RPCHandler(router);
   const openApiHandler = new OpenAPIHandler(router);
 
-  app.use('*', cors({ origin: webOrigin }));
+  // Без CORS (ADR 0005): браузер ходит в `/rpc` своего web-сервера (один
+  // origin), остальные клиенты API (k6, фикстуры, OpenAPI) — не браузерные.
 
   app.get('/health', (c) => c.json({ status: 'ok', instance: instanceId ?? null }));
 
