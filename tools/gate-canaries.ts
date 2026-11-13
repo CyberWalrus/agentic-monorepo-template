@@ -187,7 +187,7 @@ export const CANARIES: GateCanary[] = [
       // иначе в worktree падает typecheck, а не bundle.
       const path = join(root, 'apps/web/src/routes/__root.tsx');
       const source = readFileSync(path, 'utf8');
-      const content = `${source}\nconst evilBloatProbe = '${BLOAT}';\nconsole.log(evilBloatProbe.length);\n`;
+      const content = `${source}\nconst evilBloatProbe = '${BLOAT}';\nconsole.log(evilBloatProbe.slice(0, 16));\n`;
       writeFileSync(path, content);
     },
   },
