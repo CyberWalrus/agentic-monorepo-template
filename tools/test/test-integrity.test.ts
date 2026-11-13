@@ -46,6 +46,7 @@ const MODIFIER_CASES: Array<[string, string | null]> = [
   [`it.${FAILS}('hides a bug', () => { expect(1).toBe(2); });`, `.${FAILS}(`],
   [`test.${FAIL}('playwright expected failure', () => {});`, `.${FAIL}(`],
   [`it.${FAILS}.each([1])('each expected failure', () => {});`, `.${FAILS}.each(`],
+  [`it.${FAILS}.runIf(false)('runIf expected failure', () => {});`, `.${FAILS}.runIf(`],
   [
     `it.${FAILS}.${SKIP}If(true)('conditional expected failure', () => { expect(1).toBe(2); });`,
     `.${FAILS}.${SKIP}If(`,
@@ -56,6 +57,7 @@ const MODIFIER_CASES: Array<[string, string | null]> = [
   ],
   [`test.describe.${ONLY}('focused via prefix', () => {});`, `.${ONLY}(`],
   [`describe.${ONLY}('focused suite', () => {});`, `.${ONLY}(`],
+  [`describe.parallel.${SKIP}('parallel skipped', () => {});`, `.${SKIP}(`],
   [`it.${SKIP}('skipped', () => {});`, `.${SKIP}(`],
   [`it.concurrent.${SKIP}('concurrent skipped', () => {});`, `.${SKIP}(`],
   [`it.${SKIP}.each([1])('skipped each', () => {});`, `.${SKIP}.each(`],
