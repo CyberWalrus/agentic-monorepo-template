@@ -25,6 +25,7 @@
     "typecheck:tools": "tsc -p tsconfig.json",
     "test:integrity": "node tools/check-test-integrity.ts",
     "test:hooks": "vitest run",
+    "sandbox:check": "node tools/check-sandbox-paths.ts",
     "docs:check": "node tools/check-docs.ts"
   },
   "devDependencies": {
