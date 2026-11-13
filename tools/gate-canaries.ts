@@ -363,18 +363,20 @@ export const CANARIES: GateCanary[] = [
   {
     // Версия Docker-образа Playwright в ci.yml равна каталогу @playwright/test
     // (З4/A8, один чекер check-visual-image.ts). Плохое изменение — сдвиг версии
-    // образа: чекер краснеет своим шагом. Якорь по префиксу, не по версии:
-    // Renovate обновляет версию, якорь не должен за ней следить.
+    // образа внутри noble-формы: чекер краснеет сообщением с обеими версиями.
+    // Якорь по префиксу, не по номеру: Renovate обновляет версию, якорь не
+    // должен за ней следить. Тег остаётся валидным (-noble): выход из формы
+    // ловил бы fail-closed «no image» вместо целевого «diverge».
     name: 'версия образа разошлась с каталогом',
     steps: 'visual-image',
     failedStep: 'visual-image',
-    expect: /v0\.0\.0-canary/,
+    expect: /v0\.0\.0-noble/,
     apply: (root) => {
       const path = join(root, '.github/workflows/ci.yml');
       const source = readFileSync(path, 'utf8');
       const drifted = source.replace(
         /image:\s*mcr\.microsoft\.com\/playwright:v[\d.]+-noble/,
-        'image: mcr.microsoft.com/playwright:v0.0.0-canary',
+        'image: mcr.microsoft.com/playwright:v0.0.0-noble',
       );
       if (drifted === source) {
         throw new Error('canary anchor not found: ci.yml has no Playwright image line');

@@ -97,22 +97,30 @@ describe('snapshotsUpdateMode', () => {
 describe('wiring: правила живы в конфигах', () => {
   it('Playwright-конфиг вызывает guard до побочных эффектов', () => {
     const source = readFileSync(resolve(repoDir, 'e2e', 'playwright.config.ts'), 'utf8');
-    expect(source).toContain("from '../tools/visual-guard.ts'");
-    // Вызов стоит выше импорта ports.ts-потребителей: guard до resolvePorts,
-    // который пишет reports/ports.json, и до записи instance-token.
+    // Булевы ассерты, а не toContain по всему конфигу: дифф упавшего toContain
+    // печатает весь файл и выталкивает заголовок теста из 60-строчного хвоста
+    // вывода verify — канарейки с якорем-заголовком перестают стрелять (A8).
+    const guardImported = source.includes("from '../tools/visual-guard.ts'");
     const guardCall = source.indexOf('assertVisualRunAllowed({');
     const portsCall = source.indexOf('await resolvePorts(');
-    expect(guardCall).toBeGreaterThan(-1);
-    expect(portsCall).toBeGreaterThan(guardCall);
-    // Запись базлайнов — не по флагу CI, а по VISUAL_UPDATE.
-    expect(source).toContain('snapshotsUpdateMode(process.env)');
-    expect(source).not.toMatch(/updateSnapshots:\s*CI\s*\?/);
+    const guardBeforePorts = guardCall > -1 && portsCall > guardCall;
+    const updateModeWired = source.includes('snapshotsUpdateMode(process.env)');
+    const noCiTernary = !/updateSnapshots:\s*CI\s*\?/.test(source);
+    expect(guardImported, 'visual-guard imported').toBe(true);
+    // Вызов стоит выше resolvePorts (пишет reports/ports.json) и записи
+    // instance-token: запрет не должен создавать файлов.
+    expect(guardBeforePorts, 'guard до resolvePorts').toBe(true);
+    expect(updateModeWired, 'запись базлайнов только через VISUAL_UPDATE').toBe(true);
+    expect(noCiTernary, 'updateSnapshots не по флагу CI').toBe(true);
   });
 
   it('инлайн-проверка Vitest-конфига UI жива (пакет не импортирует tools)', () => {
     const source = readFileSync(resolve(repoDir, 'packages', 'ui', 'vitest.config.ts'), 'utf8');
-    expect(source).toContain("process.platform !== 'linux'");
-    expect(source).toContain('must run inside the Playwright Docker image');
-    expect(source).not.toMatch(/from\s+'.*tools\//);
+    const platformCheck = source.includes("process.platform !== 'linux'");
+    const message = source.includes('must run inside the Playwright Docker image');
+    const noToolsImport = !/from\s+'.*tools\//.test(source);
+    expect(platformCheck, 'отказ вне Linux').toBe(true);
+    expect(message, 'текст отказа').toBe(true);
+    expect(noToolsImport, 'пакет не импортирует tools').toBe(true);
   });
 });
