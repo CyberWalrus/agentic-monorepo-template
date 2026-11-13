@@ -76,6 +76,7 @@
 | Пакет импортируется только через `exports`                           | `no-deep-package-imports`                        |
 | Циклов нет                                                           | `no-circular` и правило Oxlint `import/no-cycle` |
 | Production-код не зависит от devDependencies                         | `not-to-dev-dep`                                 |
+| Продуктовый код не импортирует обвязку (`tools/`)                    | `product-not-to-tools` (ADR 0005)                |
 
 Новое правило границ добавляется вместе с канарейкой: плохой импорт в фикстуре, гейт обязан упасть.
 

@@ -49,6 +49,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export const CANARIES: GateCanary[] = [
   {
+    // Продуктовый код не импортирует tools/ (правило границ, ADR 0005/З9):
+    // порты и окружение приходят через запуск, tools — потребитель, не зависимость.
+    name: 'импорт tools из продукта',
+    steps: 'boundaries',
+    failedStep: 'boundaries',
+    expect: /product-not-to-tools/,
+    apply: (root) =>
+      write(
+        root,
+        'apps/web/src/lib/evil-probe.ts',
+        "import { MIN_BASE } from '../../../../tools/ports.ts';\n\nexport const evil = () => MIN_BASE;\n",
+      ),
+  },
+  {
     name: 'межфичевый импорт',
     steps: 'boundaries',
     failedStep: 'boundaries',

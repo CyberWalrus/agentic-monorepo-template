@@ -7,6 +7,14 @@
 module.exports = {
   forbidden: [
     {
+      name: 'product-not-to-tools',
+      severity: 'error',
+      comment:
+        'Продуктовый код не импортирует гейты и обвязку (tools/): порты и окружение приходят через запуск (ADR 0005, З9). tools/ — потребитель приложений, не зависимость. Скоуп — весь пакет, не только src/: конфиги (vite.config.ts) — место, где порты запекаются при сборке.',
+      from: { path: '^(apps|packages)/[^/]+/' },
+      to: { path: '^tools/' },
+    },
+    {
       name: 'no-circular',
       severity: 'error',
       comment: 'Циклы делают модули неотделимыми и ломают tree-shaking.',
