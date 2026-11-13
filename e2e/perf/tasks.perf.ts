@@ -6,6 +6,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 
 import type { Page } from '@playwright/test';
 
+import { acquirePerfLock, type PerfLock } from '../../tools/perf-lock.ts';
 import { loadPerfBudgets } from '../../tools/perf-budgets.ts';
 import { expect, makeTasks, SHARED_DATA_LOCK, test } from '../fixtures.ts';
 
@@ -14,6 +15,19 @@ const budgets = loadPerfBudgets();
 const SAMPLES = 5;
 const CPU_THROTTLING_RATE = 4;
 const results: Record<string, Record<string, number>> = {};
+
+// Машинная блокировка (З9, A5 PR-3): параллельный verify --full в другом
+// worktree не должен шуметь под замерами. Ждёт держателя с логом, мусорный
+// lock (мёртвый pid / протухший) забирает с предупреждением.
+let machineLock: PerfLock | undefined;
+
+test.beforeAll(async () => {
+  machineLock = await acquirePerfLock({ pollMs: 2_000 });
+});
+
+test.afterAll(() => {
+  machineLock?.release();
+});
 
 function median(values: number[]): number {
   const sorted = values.toSorted((a, b) => a - b);

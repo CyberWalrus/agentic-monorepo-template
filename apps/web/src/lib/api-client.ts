@@ -17,7 +17,7 @@ function serverApiUrl(): string {
   const url = process.env['API_URL'];
   if (!url) {
     throw new Error(
-      'API_URL is empty: export it (e.g. `export API_URL=http://localhost:3001`, fixed ports until A5 PR-3) or run through `pnpm dev` / the e2e webServer',
+      'API_URL is empty: export it (see reports/ports.json after `pnpm dev`) or run through `pnpm dev` / the e2e webServer',
     );
   }
   return url;

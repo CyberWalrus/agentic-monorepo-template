@@ -47,9 +47,9 @@ export const post: Step[] = [
   { name: 'test-count', command: 'pnpm', args: ['test:count'] },
 ];
 
-// E2E и перф делят порты 3000/3001, поэтому идут последовательно после быстрых шагов.
-// Порядок e2e → e2e-report → perf — контракт: отчёт e2e/reports/e2e.json пишет
-// любой запуск Playwright, perf его перезапишет; переставлять шаги нельзя.
+// E2E → e2e-report → perf идут последовательно: perf перезаписывает отчёт
+// reports/e2e.json, который читает e2e-report; переставлять шаги нельзя.
+// Порты у шагов больше не общие: выводятся из worktree (З9, A5 PR-3).
 export const slow: Step[] = [
   turbo('build'),
   { name: 'bundle', command: 'pnpm', args: ['bundle'] },

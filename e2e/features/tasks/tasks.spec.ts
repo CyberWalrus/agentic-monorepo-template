@@ -1,4 +1,4 @@
-import { expect, test } from '../../fixtures.ts';
+import { API_URL, expect, test } from '../../fixtures.ts';
 
 test.describe('tasks', () => {
   test('creates a task and shows it in the list @critical', async ({ page, uniqueTitle }) => {
@@ -45,7 +45,7 @@ test.describe('tasks', () => {
 
     test('server-renders existing tasks @critical', async ({ page, request, uniqueTitle }) => {
       const title = uniqueTitle('Rendered on the server');
-      const response = await request.post('http://localhost:3001/api/tasks', { data: { title } });
+      const response = await request.post(`${API_URL}/api/tasks`, { data: { title } });
       expect(response.ok()).toBe(true);
 
       await page.goto('/');

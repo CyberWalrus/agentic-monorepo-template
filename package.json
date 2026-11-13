@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "prepare": "if [ -d .git ]; then lefthook install; fi",
-    "dev": "turbo run dev",
+    "dev": "node tools/dev.ts",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",

@@ -1,10 +1,14 @@
 // k6 smoke для API: p95 и доля ошибок против /perf-budgets.json.
-// Запуск: k6 run e2e/perf/k6/api-smoke.js (API должен слушать на API_URL).
+// Запуск: eval "$(node tools/ports.ts --env)" && k6 run e2e/perf/k6/api-smoke.js
+// (API_URL обязателен: порты выводятся из worktree — З9, A5; дефолта нет).
 import http from 'k6/http';
 import { check } from 'k6';
 
 const budgets = JSON.parse(open('../../../perf-budgets.json'));
-const API_URL = __ENV.API_URL || 'http://localhost:3001';
+const API_URL = __ENV.API_URL;
+if (!API_URL) {
+  throw new Error('API_URL is empty: run `eval "$(node tools/ports.ts --env)"` first');
+}
 
 export const options = {
   vus: 5,

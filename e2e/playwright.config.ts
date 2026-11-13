@@ -1,19 +1,41 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import { defineConfig, devices } from '@playwright/test';
 
+import { apiOrigin, resolvePorts } from '../tools/ports.ts';
+
 const CI = Boolean(process.env['CI']);
-const WEB_URL = 'http://localhost:3000';
-// Цель прокси /rpc (ADR 0005): env из задачи e2e/perf (turbo), fallback — до
-// вывода портов из worktree (A5 PR-3), после которого он исчезнет.
-const API_URL = process.env['API_URL'] ?? 'http://localhost:3001';
+const repoRoot = resolve(import.meta.dirname, '..');
+// Порты из worktree (З9, A5 PR-3): read-first — resolvePorts. ВАЖНО: Playwright
+// оценивает конфиг в НЕСКОЛЬКИХ процессах (раннер + global setup), каждый
+// запускается после старта серверов предыдущего — вторичному выбору зонд
+// показал бы собственные серверы, сдвиг перезаписал бы файл выбора и увёл
+// потребителей на пустой порт (наблюдалось). Поэтому выбирает ровно один
+// процесс (первый: env/file отсутствуют), остальные читают; занятость портов
+// из прошлого сеанса = громкий EADDRINUSE, сброс — `rm reports/ports.json`.
+const ports = await resolvePorts(repoRoot);
+// Выбранный порт внутрь прогона — через env: воркеры и global setup наследуют
+// его от процесса-раннера, файл ports.json могли бы переписать параллельные
+// импорты (наблюдалось: collection- и worker-импорты фикстур читали разные
+// версии файла).
+process.env['API_PORT'] = String(ports.api);
+const WEB_URL = ports.origin;
+const API_URL = apiOrigin(ports);
 // Токен прогона (З9, A5): он же уходит API через INSTANCE_ID, global-setup.ts
 // сверяет /health с ним — прогон не может незаметно пойти против чужого
 // процесса на том же порту. 0600: токен не читается другими пользователями.
-const INSTANCE_ID = randomUUID();
-mkdirSync('reports', { recursive: true });
-writeFileSync('reports/instance-token', `${INSTANCE_ID}\n`, { mode: 0o600 });
+// REUSE_SERVER=1 (ручная отладка): существующий токен от `pnpm dev` (его пишет
+// оркестратор tools/dev.ts) не перезаписывается — reuse возможен только для
+// сервера, который сам опубликовал токен этого worktree.
+const tokenFile = resolve(repoRoot, 'e2e', 'reports', 'instance-token');
+mkdirSync(resolve(tokenFile, '..'), { recursive: true });
+const reuseManualServer = process.env['REUSE_SERVER'] === '1' && existsSync(tokenFile);
+const INSTANCE_ID = reuseManualServer ? readFileSync(tokenFile, 'utf8').trim() : randomUUID();
+if (!reuseManualServer) {
+  writeFileSync(tokenFile, `${INSTANCE_ID}\n`, { mode: 0o600 });
+}
 // JSON-отчёт читает гейт test-report (З3, A3): skipped/todo/expected failure = 0.
 // Любой запуск Playwright (включая --project=perf/visual) перезаписывает этот файл,
 // поэтому проверка отчёта e2e идёт сразу после задачи e2e, до perf.
@@ -79,15 +101,18 @@ export default defineConfig({
     {
       command: 'pnpm --filter @repo/api start',
       url: `${API_URL}/health`,
-      reuseExistingServer: !CI,
-      env: { PORT: '3001', ENABLE_TEST_API: '1', INSTANCE_ID },
+      // Гейты всегда стартуют свой сервер (З9, A5 PR-3); ручной reuse — только
+      // через REUSE_SERVER=1 и токен этого worktree (см. INSTANCE_ID выше).
+      reuseExistingServer: reuseManualServer,
+      env: { PORT: String(ports.api), ENABLE_TEST_API: '1', INSTANCE_ID },
     },
     {
       // Production-сборка (`turbo run e2e` собирает web заранее). API_URL —
-      // цель прокси /rpc (ADR 0005), читается при старте preview, не при сборке.
-      command: 'pnpm --filter @repo/web start',
+      // цель прокси /rpc (ADR 0005), читается при старте preview, не при сборке;
+      // порт передаётся флагом — фиксированных портов больше нет.
+      command: `pnpm --filter @repo/web start --port ${ports.web}`,
       url: WEB_URL,
-      reuseExistingServer: !CI,
+      reuseExistingServer: reuseManualServer,
       env: { API_URL },
     },
   ],

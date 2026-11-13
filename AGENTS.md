@@ -38,6 +38,8 @@ perf-budgets.json        Перф-бюджеты (защищён)
 
 Окружение: `nvm use` (версия в `.nvmrc`), pnpm из `packageManager`.
 
+Worktree: в новом worktree сначала `pnpm install` (хранилище pnpm общее, ставится быстро). Порты выводятся из пути worktree автоматически (`pnpm dev`, `pnpm verify --full`), два worktree не пересекаются; выбранные порты — в `reports/ports.json`.
+
 ## Как делать фичу
 
 Подробно описано в скиле `feature-workflow`. Кратко:

@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/turbo/schema.json",
   "ui": "stream",
-  "globalDependencies": [".nvmrc", "tsconfig.base.json", "perf-budgets.json"],
+  "globalDependencies": [".nvmrc", "tsconfig.base.json", "perf-budgets.json", "tools/ports.ts"],
   "tasks": {
     "transit": {
       "dependsOn": ["^transit"]
@@ -28,25 +28,18 @@
       "dependsOn": ["transit", "^build"],
       "outputs": ["playwright-report/**", "test-results/**", "reports/**"],
       // VIDEO=on — видео прогона как доказательство для PR; без env Turborepo не передаст его и не учтёт в хеше.
-      // API_URL — цель прокси /rpc (ADR 0005): её читает процесс preview, который запускает Playwright.
-      "env": ["CI", "VIDEO", "API_URL"]
+      // API_URL — цель прокси /rpc; PORT_BASE — явная база портов (ADR 0005, З9); оба читает конфиг Playwright.
+      "env": ["CI", "VIDEO", "API_URL", "PORT_BASE"]
     },
     "perf": {
       "dependsOn": ["transit", "^build"],
       "outputs": ["reports/**"],
-      "env": ["CI", "API_URL"]
+      "env": ["CI", "API_URL", "PORT_BASE"]
     },
     "mutation": {
       "dependsOn": ["transit"],
       "outputs": ["reports/mutation/**"],
       "cache": false
-    },
-    "dev": {
-      // PORT/ENABLE_TEST_API/INSTANCE_ID читает apps/api/src/server.ts; API_URL —
-      // SSR-клиент web и цель прокси /rpc (ADR 0005).
-      "env": ["PORT", "ENABLE_TEST_API", "INSTANCE_ID", "API_URL"],
-      "cache": false,
-      "persistent": true
     }
   }
 }
