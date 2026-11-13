@@ -3,23 +3,30 @@
  * Фикстура — настоящий git-репозиторий в tmp с копией хуков и собственным
  * protected-paths.json. Табличные кейсы: изменение защищённого файла, проскочившее
  * guard-bash, отменяется хуком и объясняется агенту; дрейф, совпавший с новым HEAD,
- * перебазируется; новые файлы под deny — только сообщаются, не удаляются.
+ * перебазируется; новые файлы под deny — только сообщаются, не удаляются; порча
+ * state делает проверку громко слепой, а не тихо пропускающей.
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { beforeAll, expect, it } from 'vitest';
+
+import { stateDir } from '../snapshot.ts';
 
 const repoDir = resolve(import.meta.dirname, '..', '..');
 
@@ -35,6 +42,7 @@ const COPIED_FILES = [
 
 const PIN = '{"budget": 100}\n';
 const KEEP = '{"baseline": true}\n';
+const KEEPER_SH = '#!/bin/sh\necho keeper\n';
 
 let fixture = '';
 let sessionCounter = 0;
@@ -48,6 +56,8 @@ beforeAll(() => {
   mkdirSync(join(fixture, 'tools'), { recursive: true });
   mkdirSync(join(fixture, '.claude', 'hooks'), { recursive: true });
   writeFileSync(join(fixture, 'gates', 'keep.json'), KEEP);
+  writeFileSync(join(fixture, 'gates', 'keeper.sh'), KEEPER_SH);
+  chmodSync(join(fixture, 'gates', 'keeper.sh'), 0o755);
   writeFileSync(join(fixture, 'pin.json'), PIN);
   writeFileSync(join(fixture, 'README.md'), '# fixture\n');
   git(['add', '.']);
@@ -105,6 +115,17 @@ function runHook(hook: string, input: Record<string, unknown>): HookResult {
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
+/** Хук обязан выходить с 0; stderr попадает в сообщение ошибки. */
+function expectOk(result: { status: number | null; stderr: string }, what: string): void {
+  if (result.status !== 0) {
+    throw new Error(`${what} exited with ${result.status}: ${result.stderr}`);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function startup(sessionId: string, source = 'startup'): HookResult {
   return runHook('session-start.ts', {
     session_id: sessionId,
@@ -132,26 +153,9 @@ function stop(sessionId: string): HookResult {
   });
 }
 
-/** Хук обязан выходить с 0; stderr попадает в сообщение ошибки. */
-function expectOk(result: { status: number | null; stderr: string }, what: string): void {
-  if (result.status !== 0) {
-    throw new Error(`${what} exited with ${result.status}: ${result.stderr}`);
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** Тот же алгоритм ключа, что в tools/snapshot.ts: session id + хеш пути worktree. */
-function stateDirFor(sessionId: string): string {
-  const key = createHash('sha256').update(fixture).digest('hex').slice(0, 12);
-  return join(tmpdir(), 'claude-gate-guard', `${sessionId}-${key}`);
-}
-
 function snapshottedHash(sessionId: string, path: string): string {
   const parsed: unknown = JSON.parse(
-    readFileSync(join(stateDirFor(sessionId), 'manifest.json'), 'utf8'),
+    readFileSync(join(stateDir(fixture, sessionId), 'manifest.json'), 'utf8'),
   );
   if (!isRecord(parsed) || !isRecord(parsed['files'])) {
     throw new Error('manifest has no files map');
@@ -163,6 +167,17 @@ function snapshottedHash(sessionId: string, path: string): string {
   return entry['hash'];
 }
 
+/** manifest как изменяемый объект — для кейсов с подделкой state. */
+function readManifest(sessionId: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(
+    readFileSync(join(stateDir(fixture, sessionId), 'manifest.json'), 'utf8'),
+  );
+  if (!isRecord(parsed)) {
+    throw new Error('manifest is not an object');
+  }
+  return parsed;
+}
+
 function contentSha(content: string): string {
   return createHash('sha1').update(content).digest('hex');
 }
@@ -171,7 +186,7 @@ it('startup снимает снимок: tracked-файлы из deny, копи�
   const sessionId = uniqueSession();
   const result = startup(sessionId);
   expectOk(result, 'session-start');
-  const dir = stateDirFor(sessionId);
+  const dir = stateDir(fixture, sessionId);
   expect(existsSync(join(dir, 'manifest.json')), 'manifest exists').toBe(true);
   for (const path of ['pin.json', join('gates', 'keep.json')]) {
     const copy = join(dir, path.replaceAll('/', '__'));
@@ -201,7 +216,9 @@ it('resume без снимка создаёт его и предупреждае
   const sessionId = uniqueSession();
   const result = startup(sessionId, 'resume');
   expectOk(result, 'session-start on resume');
-  expect(existsSync(join(stateDirFor(sessionId), 'manifest.json')), 'snapshot created').toBe(true);
+  expect(existsSync(join(stateDir(fixture, sessionId), 'manifest.json')), 'snapshot created').toBe(
+    true,
+  );
   expect(result.stdout, 'warning is reported').toMatch(/snapshot/i);
 });
 
@@ -232,6 +249,7 @@ it.each([
   const result = postToolUse(sessionId);
   expectOk(result, 'protect-result');
   expect(result.stdout, 'the agent is told what happened').toContain(path);
+  expect(result.stdout, 'the cancellation is explained, not just a path').toMatch(/CANCELLED/);
   expect(readFileSync(join(fixture, path), 'utf8'), `${path} is restored`).toBe(original);
 });
 
@@ -247,6 +265,32 @@ it('новый файл под deny только сообщается и не у
   expectOk(result, 'protect-result');
   expect(result.stdout, 'new file is reported').toContain(join('gates', 'extra.json'));
   expect(existsSync(join(fixture, 'gates', 'extra.json')), 'new file is NOT deleted').toBe(true);
+  rmSync(join(fixture, 'gates', 'extra.json'), { force: true });
+});
+
+it('исполнительный бит восстанавливается вместе с содержимым', () => {
+  const sessionId = uniqueSession();
+  startup(sessionId);
+  const script = join(fixture, 'gates', 'keeper.sh');
+  writeFileSync(script, '#!/bin/sh\necho hacked\n');
+  chmodSync(script, 0o644);
+  const result = postToolUse(sessionId);
+  expectOk(result, 'protect-result');
+  expect(readFileSync(script, 'utf8'), 'content restored').toBe(KEEPER_SH);
+  expect(statSync(script).mode & 0o111, 'exec bit restored').not.toBe(0);
+});
+
+it('symlink на защищённом пути заменяется файлом из снимка, а не проследовывается', () => {
+  const sessionId = uniqueSession();
+  startup(sessionId);
+  const target = join(fixture, '..', 'a2-1b-symlink-victim');
+  rmSync(join(fixture, 'pin.json'));
+  symlinkSync(target, join(fixture, 'pin.json'));
+  const result = postToolUse(sessionId);
+  expectOk(result, 'protect-result');
+  expect(lstatSync(join(fixture, 'pin.json')).isSymbolicLink(), 'link is replaced').toBe(false);
+  expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'file restored from snapshot').toBe(PIN);
+  expect(existsSync(target), 'link target was never written through').toBe(false);
 });
 
 it('дрейф, совпавший с новым HEAD (pull/merge), перебазируется, а не откатывается', () => {
@@ -264,13 +308,29 @@ it('дрейф, совпавший с новым HEAD (pull/merge), переба
     contentSha('{"budget": 200}\n'),
   );
   expect(result.stdout, 'rebase is reported').toMatch(/rebas/i);
-  const parsed: unknown = JSON.parse(
-    readFileSync(join(stateDirFor(sessionId), 'manifest.json'), 'utf8'),
-  );
-  if (!isRecord(parsed) || typeof parsed['head'] !== 'string') {
+  const parsed = readManifest(sessionId);
+  if (typeof parsed['head'] !== 'string') {
     throw new Error('manifest has no head');
   }
   expect(parsed['head'], 'recorded HEAD follows the branch').toBe(headSha());
+  // возвращаем базу, чтобы последующие тесты не зависели от порядка
+  git(['revert', '--no-edit', 'HEAD']);
+});
+
+it('файл, исчезнувший вместе с HEAD (git rm), убирается из снимка, а не воскрешается', () => {
+  const sessionId = uniqueSession();
+  startup(sessionId);
+  git(['rm', join('gates', 'keep.json')]);
+  git(['commit', '-m', 'gate removed from the repo by a labeled PR']);
+  const result = postToolUse(sessionId);
+  expectOk(result, 'protect-result');
+  expect(existsSync(join(fixture, 'gates', 'keep.json')), 'deletion stays').toBe(false);
+  expect(result.stdout, 'drop is reported').toContain(join('gates', 'keep.json'));
+  expect(() => snapshottedHash(sessionId, join('gates', 'keep.json'))).toThrow(/not snapshotted/);
+  // возвращаем файл для последующих тестов
+  writeFileSync(join(fixture, 'gates', 'keep.json'), KEEP);
+  git(['add', '.']);
+  git(['commit', '-m', 'keep.json restored']);
 });
 
 it('Stop при дрейфе восстанавливает файл и блокирует завершение с объяснением', () => {
@@ -296,6 +356,59 @@ it('Stop без снимка не притворяется, что всё в п�
   const result = stop(`sess-missing-${uniqueSession()}`);
   expectOk(result, 'protect-result without snapshot');
   expect(result.stdout, 'blindness is reported').toMatch(/snapshot/i);
+});
+
+it('переписанный хеш в manifest при старой копии делает проверку громко слепой', () => {
+  const sessionId = uniqueSession();
+  startup(sessionId);
+  writeFileSync(join(fixture, 'pin.json'), '{"budget": 0}\n');
+  // агент «узаконивает» новое содержимое правкой manifest, но копию не трогает:
+  // доверять такой паре нельзя ни для сверки, ни для отката
+  const manifest = readManifest(sessionId);
+  const files = manifest['files'];
+  if (!isRecord(files)) {
+    throw new Error('manifest has no files map');
+  }
+  const pin = files['pin.json'];
+  if (!isRecord(pin)) {
+    throw new Error('pin.json is not snapshotted');
+  }
+  pin['hash'] = contentSha('{"budget": 0}\n');
+  writeFileSync(join(stateDir(fixture, sessionId), 'manifest.json'), JSON.stringify(manifest));
+  const result = postToolUse(sessionId);
+  expectOk(result, 'protect-result');
+  expect(result.stdout, 'broken state is reported loudly').toMatch(/cannot proceed/i);
+  expect(
+    readFileSync(join(fixture, 'pin.json'), 'utf8'),
+    'nothing restored from untrusted state',
+  ).toBe('{"budget": 0}\n');
+});
+
+it('пропавшая копия снимка не уводит Stop в livelock', () => {
+  const sessionId = uniqueSession();
+  startup(sessionId);
+  rmSync(join(stateDir(fixture, sessionId), 'pin.json'));
+  writeFileSync(join(fixture, 'pin.json'), '{"budget": 0}\n');
+  const result = stop(sessionId);
+  expectOk(result, 'protect-result on Stop');
+  expect(result.stdout, 'no endless blocking').not.toContain('"decision":"block"');
+  expect(result.stdout, 'broken state is reported loudly').toMatch(/cannot proceed/i);
+});
+
+it('путь из manifest не может выйти за worktree — снимок отвергается громко', () => {
+  const sessionId = uniqueSession();
+  startup(sessionId);
+  const manifest = readManifest(sessionId);
+  const files = manifest['files'];
+  if (!isRecord(files)) {
+    throw new Error('manifest has no files map');
+  }
+  files['../escaped.txt'] = { hash: contentSha('x'), executable: false };
+  writeFileSync(join(stateDir(fixture, sessionId), 'manifest.json'), JSON.stringify(manifest));
+  const result = postToolUse(sessionId);
+  expectOk(result, 'protect-result');
+  expect(existsSync(join(fixture, '..', 'escaped.txt')), 'no write outside worktree').toBe(false);
+  expect(result.stdout, 'rejection is reported').toMatch(/snapshot/i);
 });
 
 it('старые state-каталоги других сессий удаляются при старте', () => {

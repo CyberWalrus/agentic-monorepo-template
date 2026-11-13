@@ -23,6 +23,19 @@ if (outcome.kind === 'missing') {
   );
   process.exit(0);
 }
+if (outcome.kind === 'broken') {
+  // Никакой сверки и отката по ненадёжному state. Exit 0 (не 2): Stop с блоком
+  // на каждый ход без изменения состояния — livelock; громкое сообщение честнее.
+  console.log(
+    JSON.stringify({
+      systemMessage:
+        `Result check cannot proceed: ${outcome.detail}. ` +
+        'Protected files may have been changed without a trustworthy comparison. ' +
+        'Do not touch protected paths; restart the session to take a fresh snapshot.',
+    }),
+  );
+  process.exit(0);
+}
 
 const parts: string[] = [];
 for (const path of outcome.restored) {

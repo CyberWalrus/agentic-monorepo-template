@@ -34,20 +34,31 @@ try {
 
 // Динамический импорт: сбой модуля снимка (например, битый protected-paths.json)
 // не должен убить проверку окружения — она остаётся полезной без снимка.
+function warnMissing(missing: string[]): void {
+  if (missing.length > 0) {
+    problems.push(
+      'Protected files already missing at session start (not covered by the snapshot): ' +
+        `${missing.join(', ')}.`,
+    );
+  }
+}
+
 let snapshotLine: string;
 try {
   const { cleanupStateDirs, createSnapshot, loadSnapshot } =
     await import('../../tools/snapshot.ts');
   cleanupStateDirs(projectDir, sessionId);
   if (source === 'startup') {
-    const manifest = createSnapshot(projectDir, sessionId);
+    const { manifest, missing } = createSnapshot(projectDir, sessionId);
+    warnMissing(missing);
     snapshotLine =
       `Protected-file snapshot taken (${Object.keys(manifest.files).length} files): ` +
       'changes to protected paths during the session are cancelled and explained.';
   } else if (loadSnapshot(projectDir, sessionId) !== null) {
     snapshotLine = 'Protected-file snapshot reused from the start of this session.';
   } else {
-    createSnapshot(projectDir, sessionId);
+    const { missing } = createSnapshot(projectDir, sessionId);
+    warnMissing(missing);
     problems.push('Protected-file snapshot was missing; a fresh one was taken.');
     snapshotLine = '';
   }
