@@ -17,9 +17,14 @@ export interface AppOptions {
    * Никогда не включается в production: см. `server.ts`.
    */
   enableTestApi?: boolean;
+  /**
+   * Идентификатор прогона e2e для `/health` (З9, A5): global setup Playwright
+   * сверяет его с токеном прогона, чтобы тест не смотрел в чужой сервер.
+   */
+  instanceId?: string;
 }
 
-export function createApp({ tasks, webOrigin, enableTestApi = false }: AppOptions) {
+export function createApp({ tasks, webOrigin, enableTestApi = false, instanceId }: AppOptions) {
   const app = new Hono();
   const context = { tasks };
   const rpcHandler = new RPCHandler(router);
@@ -27,7 +32,7 @@ export function createApp({ tasks, webOrigin, enableTestApi = false }: AppOption
 
   app.use('*', cors({ origin: webOrigin }));
 
-  app.get('/health', (c) => c.json({ status: 'ok' }));
+  app.get('/health', (c) => c.json({ status: 'ok', instance: instanceId ?? null }));
 
   app.use('/rpc/*', async (c, next) => {
     const { matched, response } = await rpcHandler.handle(c.req.raw, { prefix: '/rpc', context });

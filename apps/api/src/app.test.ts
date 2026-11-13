@@ -10,11 +10,16 @@ import { InMemoryTaskRepository } from './tasks/repository.ts';
 const WEB_ORIGIN = 'http://localhost:3000';
 const UNKNOWN_ID = '00000000-0000-4000-8000-999999999999';
 
-function setup({ enableTestApi = false } = {}) {
+function setup({
+  enableTestApi = false,
+  instanceId,
+}: { enableTestApi?: boolean; instanceId?: string } = {}) {
   const app = createApp({
     tasks: new InMemoryTaskRepository(),
     webOrigin: WEB_ORIGIN,
     enableTestApi,
+    // exactOptionalPropertyTypes: undefined нельзя передавать явно.
+    ...(instanceId === undefined ? {} : { instanceId }),
   });
   const client: ContractRouterClient<Contract> = createORPCClient(
     new RPCLink({ url: 'http://api.test/rpc', fetch: async (request) => app.fetch(request) }),
@@ -88,12 +93,20 @@ describe('HTTP concerns', () => {
     expect(rest.status).toBe(404);
   });
 
-  it('reports health', async () => {
+  it('reports health without an instance when started outside e2e', async () => {
     const { app } = setup();
 
     const response = await app.request('/health');
 
-    expect(await response.json()).toEqual({ status: 'ok' });
+    expect(await response.json()).toEqual({ status: 'ok', instance: null });
+  });
+
+  it('reports the instance id of the e2e run that started it', async () => {
+    const { app } = setup({ instanceId: 'run-token' });
+
+    const response = await app.request('/health');
+
+    expect(await response.json()).toEqual({ status: 'ok', instance: 'run-token' });
   });
 
   it('allows CORS only for the web origin', async () => {
