@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { budgetMsFor, parseBudgets } from '../verify-budgets-loader.ts';
 import { fast, post, slow } from '../verify-steps.ts';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -57,12 +58,20 @@ describe('verify-budgets.json', () => {
     }
   });
 
-  it('тоталы не меньше максимального шага своей волны', () => {
+  it('тоталы вмещают сумму своей волны с запасом', () => {
     const fastDict = isRecord(b['fast']) ? b['fast'] : {};
     const slowDict = isRecord(b['slow']) ? b['slow'] : {};
     const fastMax = Math.max(0, ...Object.values(fastDict).map(Number));
     const slowMax = Math.max(0, ...Object.values(slowDict).map(Number));
+    const slowSum = Object.values(slowDict).reduce(
+      (sum: number, seconds) => sum + (typeof seconds === 'number' ? seconds : 0),
+      0,
+    );
+    // totalSlow вмещает СУММУ slow-волны (wall-clock fast идёт параллельно, но
+    // slow — последовательно и поверх): иначе nightly краснеет при зелёных
+    // пошаговых бюджетах без понятной причины.
     expect(typeof b['totalFast'] === 'number' && b['totalFast'] >= fastMax).toBe(true);
+    expect(typeof b['totalSlow'] === 'number' && b['totalSlow'] >= slowSum).toBe(true);
     expect(typeof b['totalSlow'] === 'number' && b['totalSlow'] >= slowMax).toBe(true);
   });
 
@@ -91,5 +100,38 @@ describe('verify-budgets.json', () => {
     // не объявлен в globalDependencies (правка калибровки не обваливает кэш turbo).
     const turboText = readFileSync(resolve(repoDir, 'turbo.json'), 'utf8');
     expect(turboText.includes('"verify-budgets.json"')).toBe(false);
+  });
+});
+
+describe('parseBudgets (загрузчик verify.ts)', () => {
+  const valid = { fast: { lint: 10 }, slow: { e2e: 150 }, totalFast: 180, totalSlow: 480 };
+
+  it('валидный файл разбирается', () => {
+    const parsed = parseBudgets(structuredClone(valid));
+    expect(parsed.fast['lint']).toBe(10);
+    expect(parsed.slow['e2e']).toBe(150);
+    expect(parsed.totalFast).toBe(180);
+  });
+
+  it.each([
+    ['не объект', 'str', 'fast' in {} ? '{}' : 'expected an object'],
+    ['массив', [], 'expected an object'],
+    ['без fast', { slow: { e2e: 150 }, totalFast: 1, totalSlow: 2 }, '"fast" must be an object'],
+    [
+      'slow с нечислом',
+      { fast: { a: 1 }, slow: { e2e: '150' }, totalFast: 1, totalSlow: 2 },
+      '"slow.e2e" must be a number',
+    ],
+    ['totalFast не число', { fast: {}, slow: {}, totalFast: 'x', totalSlow: 2 }, 'must be numbers'],
+  ])('%s — бросок', (_name, input, message) => {
+    expect(() => parseBudgets(input)).toThrow(message);
+  });
+
+  it('budgetMsFor: fast/slow волны и неизвестный шаг', () => {
+    const parsed = parseBudgets(structuredClone(valid));
+    expect(budgetMsFor('lint', false, parsed)).toBe(10_000);
+    expect(budgetMsFor('e2e', true, parsed)).toBe(150_000);
+    expect(budgetMsFor('lint', true, parsed)).toBeUndefined();
+    expect(budgetMsFor('unknown', false, parsed)).toBeUndefined();
   });
 });

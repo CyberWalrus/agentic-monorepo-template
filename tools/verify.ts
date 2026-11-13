@@ -14,6 +14,7 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
+import { budgetMsFor, parseBudgets, type VerifyBudgets } from './verify-budgets-loader.ts';
 import { allStepNames, fast, post, slow, type Step } from './verify-steps.ts';
 
 interface StepResult {
@@ -24,10 +25,6 @@ interface StepResult {
   output: string;
   budgetMs?: number;
   overBudget?: boolean;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 const json = process.argv.includes('--json');
@@ -105,50 +102,22 @@ const totalMs = Math.round(performance.now() - started);
 // откалиброваны по ubuntu-latest. Локально и в PR превышение — предупреждение
 // (машины разные), в nightly --enforce-budgets роняет прогон. Битый или
 // отсутствующий файл — предупреждение (храповик не должен молча ослепнуть),
-// но с --enforce-budgets enforce невозможен без чисел — громко.
+// но с --enforce-budgets прогон без чисел — красный (fail-closed, З4).
 const enforceBudgets = process.argv.includes('--enforce-budgets');
-interface VerifyBudgets {
-  fast: Record<string, number>;
-  slow: Record<string, number>;
-  totalFast: number;
-  totalSlow: number;
-}
 
 const budgetWarnings: string[] = [];
 let budgets: VerifyBudgets | null = null;
 const budgetsPath = resolvePath(process.cwd(), 'verify-budgets.json');
 try {
-  const parsed: unknown = JSON.parse(readFileSync(budgetsPath, 'utf8'));
-  const readNumberDict = (value: unknown, label: string): Record<string, number> => {
-    if (!isRecord(value)) {
-      throw new Error(`"${label}" must be an object of numbers`);
-    }
-    const dict: Record<string, number> = {};
-    for (const [key, seconds] of Object.entries(value)) {
-      if (typeof seconds !== 'number') {
-        throw new Error(`"${label}.${key}" must be a number`);
-      }
-      dict[key] = seconds;
-    }
-    return dict;
-  };
-  if (!isRecord(parsed)) {
-    throw new Error('expected an object');
-  }
-  const totalFast = parsed['totalFast'];
-  const totalSlow = parsed['totalSlow'];
-  if (typeof totalFast !== 'number' || typeof totalSlow !== 'number') {
-    throw new Error('"totalFast" and "totalSlow" must be numbers');
-  }
-  budgets = {
-    fast: readNumberDict(parsed['fast'], 'fast'),
-    slow: readNumberDict(parsed['slow'], 'slow'),
-    totalFast,
-    totalSlow,
-  };
+  budgets = parseBudgets(JSON.parse(readFileSync(budgetsPath, 'utf8')));
 } catch (error) {
   budgetWarnings.push(
     `verify-budgets.json is missing or unreadable (${error instanceof Error ? error.message : String(error)}) — time budgets are not checked`,
+  );
+}
+if (enforceBudgets && budgets === null) {
+  budgetWarnings.push(
+    '--enforce-budgets: no budgets to enforce (verify-budgets.json is missing or broken)',
   );
 }
 
@@ -157,17 +126,15 @@ for (const result of results) {
   if (budgets === null) {
     continue;
   }
-  const seconds = slowNames.has(result.name)
-    ? budgets.slow[result.name]
-    : budgets.fast[result.name];
-  if (seconds === undefined) {
+  const budget = budgetMsFor(result.name, slowNames.has(result.name), budgets);
+  if (budget === undefined) {
     continue;
   }
-  result['budgetMs'] = seconds * 1000;
-  result['overBudget'] = result.durationMs > result['budgetMs'];
+  result['budgetMs'] = budget;
+  result['overBudget'] = result.durationMs > budget;
   if (result['overBudget']) {
     budgetWarnings.push(
-      `${result.name}: ${result.durationMs / 1000}s exceeded budget ${seconds}s${
+      `${result.name}: ${result.durationMs / 1000}s exceeded budget ${budget / 1000}s${
         enforceBudgets ? ' — enforced run fails (З6)' : ''
       }`,
     );
@@ -187,7 +154,9 @@ if (budgets !== null) {
     );
   }
 }
-const budgetsExceeded = results.some((result) => result['overBudget'] === true) || totalOverBudget;
+// enforce без чисел — тоже «превышение»: прогон не может доказать бюджет.
+const budgetsExceeded =
+  budgets === null || results.some((result) => result['overBudget'] === true) || totalOverBudget;
 
 if (json) {
   console.log(
@@ -225,9 +194,10 @@ if (json) {
 }
 
 // Предупреждения бюджета — даже у зелёного прогона (З6: превышение времени —
-// дефект инфраструктуры, агент и человек должны его видеть).
+// дефект инфраструктуры, агент и человек должны его видеть). stderr: в nightly
+// stdout перенаправляется в verify-durations.json, лог-строки ломали бы JSON.
 for (const warning of budgetWarnings) {
-  console.log(`WARNING: ${warning}`);
+  console.error(`WARNING: ${warning}`);
 }
 
 // exitCode, а не process.exit(): иначе большой JSON в pipe обрезается.

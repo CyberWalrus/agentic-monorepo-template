@@ -58,7 +58,7 @@ jobs:
       - name: duration to summary
         if: always()
         env: { JOB: static }
-        run: echo "duration $JOB — $(( $(date +%s) - JOB_START ))s" >> "$GITHUB_STEP_SUMMARY"
+        run: echo "duration $JOB — $(( $(date +%s) - ${JOB_START:-0} ))s" >> "$GITHUB_STEP_SUMMARY"
 
   unit:
     name: unit
@@ -88,7 +88,7 @@ jobs:
       - name: duration to summary
         if: always()
         env: { JOB: unit }
-        run: echo "duration $JOB — $(( $(date +%s) - JOB_START ))s" >> "$GITHUB_STEP_SUMMARY"
+        run: echo "duration $JOB — $(( $(date +%s) - ${JOB_START:-0} ))s" >> "$GITHUB_STEP_SUMMARY"
 
   mutation:
     name: mutation
@@ -118,7 +118,7 @@ jobs:
       - name: duration to summary
         if: always()
         env: { JOB: mutation }
-        run: echo "duration $JOB — $(( $(date +%s) - JOB_START ))s" >> "$GITHUB_STEP_SUMMARY"
+        run: echo "duration $JOB — $(( $(date +%s) - ${JOB_START:-0} ))s" >> "$GITHUB_STEP_SUMMARY"
 
   e2e:
     name: e2e
@@ -145,7 +145,7 @@ jobs:
       - name: duration to summary
         if: always()
         env: { JOB: e2e }
-        run: echo "duration $JOB — $(( $(date +%s) - JOB_START ))s" >> "$GITHUB_STEP_SUMMARY"
+        run: echo "duration $JOB — $(( $(date +%s) - ${JOB_START:-0} ))s" >> "$GITHUB_STEP_SUMMARY"
 
   visual:
     name: visual
@@ -173,7 +173,7 @@ jobs:
       - name: duration to summary
         if: always()
         env: { JOB: visual }
-        run: echo "duration $JOB — $(( $(date +%s) - JOB_START ))s" >> "$GITHUB_STEP_SUMMARY"
+        run: echo "duration $JOB — $(( $(date +%s) - ${JOB_START:-0} ))s" >> "$GITHUB_STEP_SUMMARY"
 
   perf:
     name: perf
@@ -207,7 +207,7 @@ jobs:
       - name: duration to summary
         if: always()
         env: { JOB: perf }
-        run: echo "duration $JOB — $(( $(date +%s) - JOB_START ))s" >> "$GITHUB_STEP_SUMMARY"
+        run: echo "duration $JOB — $(( $(date +%s) - ${JOB_START:-0} ))s" >> "$GITHUB_STEP_SUMMARY"
 
   # Единственный required check в ruleset: имя стабильно, пропущенные affected-джобы не блокируют.
   gate:
