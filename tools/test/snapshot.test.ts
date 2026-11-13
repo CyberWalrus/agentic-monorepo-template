@@ -23,7 +23,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { beforeAll, expect, it } from 'vitest';
 
 import { stateDir } from '../snapshot.ts';
@@ -283,7 +283,7 @@ it('исполнительный бит восстанавливается вм�
 it('symlink на защищённом пути заменяется файлом из снимка, а не проследовывается', () => {
   const sessionId = uniqueSession();
   startup(sessionId);
-  const target = join(fixture, '..', 'a2-1b-symlink-victim');
+  const target = join(fixture, '..', `${basename(fixture)}-restore-victim`);
   rmSync(join(fixture, 'pin.json'));
   symlinkSync(target, join(fixture, 'pin.json'));
   const result = postToolUse(sessionId);
@@ -291,6 +291,20 @@ it('symlink на защищённом пути заменяется файлом
   expect(lstatSync(join(fixture, 'pin.json')).isSymbolicLink(), 'link is replaced').toBe(false);
   expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'file restored from snapshot').toBe(PIN);
   expect(existsSync(target), 'link target was never written through').toBe(false);
+});
+
+it('защищённый путь-symlink на старте сессии делает снимок громко слепым', () => {
+  const sessionId = uniqueSession();
+  rmSync(join(fixture, 'pin.json'));
+  symlinkSync(join(fixture, 'README.md'), join(fixture, 'pin.json'));
+  const result = startup(sessionId);
+  expect(result.stdout, 'failure is loud').toMatch(/snapshot FAILED/);
+  expect(
+    existsSync(join(stateDir(fixture, sessionId), 'manifest.json')),
+    'no trustworthy manifest',
+  ).toBe(false);
+  rmSync(join(fixture, 'pin.json'));
+  writeFileSync(join(fixture, 'pin.json'), PIN);
 });
 
 it('дрейф, совпавший с новым HEAD (pull/merge), перебазируется, а не откатывается', () => {
