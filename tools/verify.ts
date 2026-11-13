@@ -58,6 +58,13 @@ const testReport: Step = {
   args: ['test:report', '--from-turbo', 'test', '--only', 'reports/vitest-hooks.json'],
 };
 
+// Храповик числа тестов (З7, A3): warning-only, читает те же отчёты.
+const testCount: Step = {
+  name: 'test-count',
+  command: 'pnpm',
+  args: ['test:count'],
+};
+
 // E2E и перф делят порты 3000/3001, поэтому идут последовательно после быстрых шагов.
 // Порядок e2e → e2e-report → perf — контракт: отчёт e2e/reports/e2e.json пишет
 // любой запуск Playwright, perf его перезапишет; переставлять шаги нельзя.
@@ -99,6 +106,7 @@ const started = performance.now();
 const results = await Promise.all(fast.map(run));
 if (results.every((result) => result.ok)) {
   results.push(await run(testReport));
+  results.push(await run(testCount));
 }
 if (full && results.every((result) => result.ok)) {
   for (const step of slow) {
@@ -119,6 +127,11 @@ if (json) {
 } else {
   for (const result of results.filter((r) => !r.ok)) {
     console.log(`\n── ${result.name} failed: ${result.command}\n${result.output}`);
+  }
+  // Warning-only шаги (test-count) зелёные, но их предупреждения агент должен
+  // увидеть в сводке, а не только в --json.
+  for (const result of results.filter((r) => r.ok && r.output.includes('WARNING'))) {
+    console.log(`\n── ${result.name} warnings:\n${result.output}`);
   }
   console.log('\nverify', full ? '(full)' : '(fast)');
   for (const result of results) {

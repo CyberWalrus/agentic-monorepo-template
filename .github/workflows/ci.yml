@@ -65,6 +65,8 @@ jobs:
       # поэтому требуются отчёты ровно гонявшихся задач. Тот же $AFFECTED, что
       # у прогона выше: на merge_group и push оба без --affected.
       - run: pnpm test:report --from-turbo test $AFFECTED
+      # Храповик числа тестов (З7, A3): warning-only, предупреждение идёт в сводку PR.
+      - run: pnpm test:count | tee "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
