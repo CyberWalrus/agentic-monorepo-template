@@ -36,11 +36,32 @@ function sameSet(left: string[], right: string[]): boolean {
   return JSON.stringify(left.toSorted()) === JSON.stringify(right.toSorted());
 }
 
+/** Записи credentials нормализуются к строкам «target:mode» для сравнения множеств. */
+function credentialSet(entries: unknown, key: 'path' | 'name'): string[] | null {
+  if (!Array.isArray(entries)) {
+    return null;
+  }
+  const list: string[] = [];
+  for (const item of entries) {
+    if (!isRecord(item)) {
+      return null;
+    }
+    const target = item[key];
+    const mode = item['mode'];
+    if (typeof target !== 'string' || typeof mode !== 'string') {
+      return null;
+    }
+    list.push(`${target}:${mode}`);
+  }
+  return list;
+}
+
 const ADR = {
   allowWrite: ['~/Library/pnpm/store'],
   allowUnixSockets: ['~/.docker/run/docker.sock'],
   allowedDomains: ['registry.npmjs.org'],
-  credentialEnv: ['GH_TOKEN', 'GITHUB_TOKEN', 'NPM_TOKEN'],
+  credentialFiles: ['~/.ssh:deny'],
+  credentialEnv: ['GH_TOKEN:deny', 'GITHUB_TOKEN:deny', 'NPM_TOKEN:deny'],
 };
 
 const repoSettings = fileURLToPath(new URL('../.claude/settings.json', import.meta.url));
@@ -120,21 +141,19 @@ if (sandbox !== null) {
   if (credentials === null) {
     problems.push('sandbox.credentials must be an object (ADR 0004)');
   } else {
-    const files = Array.isArray(credentials['files']) ? credentials['files'] : [];
-    const sshDenied = files.some(
-      (item) => isRecord(item) && item['path'] === '~/.ssh' && item['mode'] === 'deny',
-    );
-    if (!sshDenied) {
-      problems.push('sandbox.credentials.files must deny "~/.ssh"');
-    }
-    const envVars = Array.isArray(credentials['envVars']) ? credentials['envVars'] : [];
-    for (const name of ADR.credentialEnv) {
-      const denied = envVars.some(
-        (item) => isRecord(item) && item['name'] === name && item['mode'] === 'deny',
+    // Учётные данные закреплены как точные множества: лишняя запись с другим
+    // target/mode — то же тихое расширение границы, что лишний путь в allowWrite.
+    const files = credentialSet(credentials['files'], 'path');
+    if (files === null || !sameSet(files, ADR.credentialFiles)) {
+      problems.push(
+        `sandbox.credentials.files must be exactly ${JSON.stringify(ADR.credentialFiles)} (ADR 0004)`,
       );
-      if (!denied) {
-        problems.push(`sandbox.credentials.envVars must deny "${name}"`);
-      }
+    }
+    const envVars = credentialSet(credentials['envVars'], 'name');
+    if (envVars === null || !sameSet(envVars, ADR.credentialEnv)) {
+      problems.push(
+        `sandbox.credentials.envVars must be exactly ${JSON.stringify(ADR.credentialEnv)} (ADR 0004)`,
+      );
     }
   }
   const protectedRaw: unknown = readJsonFile(protectedPath);

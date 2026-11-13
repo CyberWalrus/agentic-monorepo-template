@@ -213,7 +213,7 @@ it('открытие учётных данных ловится', () => {
   sandboxOf(noSsh)['credentials'] = { files: [], envVars: [] };
   const ssh = check(noSsh, PROTECTED);
   expect(ssh.status).toBe(1);
-  expect(ssh.output).toMatch(/must deny "~\/\.ssh"/);
+  expect(ssh.output).toMatch(/credentials\.files must be exactly/);
 
   const noToken = cloneSettings();
   const credentials = sandboxOf(noToken)['credentials'];
@@ -225,7 +225,22 @@ it('открытие учётных данных ловится', () => {
   );
   const tokens = check(noToken, PROTECTED);
   expect(tokens.status).toBe(1);
-  expect(tokens.output).toMatch(/must deny "NPM_TOKEN"/);
+  expect(tokens.output).toMatch(/credentials\.envVars must be exactly/);
+});
+
+it('ослабленный mode у учётных данных ловится как лишняя запись', () => {
+  const widened = cloneSettings();
+  const credentials = sandboxOf(widened)['credentials'];
+  if (!isRecord(credentials) || !Array.isArray(credentials['files'])) {
+    throw new Error('fixture credentials lost their shape');
+  }
+  credentials['files'] = [
+    { path: '~/.ssh', mode: 'deny' },
+    { path: '~/.aws', mode: 'deny' },
+  ];
+  const result = check(widened, PROTECTED);
+  expect(result.status).toBe(1);
+  expect(result.output).toMatch(/credentials\.files must be exactly/);
 });
 
 it.each([
@@ -253,6 +268,42 @@ it.each([
     }),
     JSON.stringify(PROTECTED),
     /denyWrite must be an array of strings/,
+  ],
+  [
+    'network не объект',
+    JSON.stringify({
+      sandbox: {
+        enabled: true,
+        allowUnsandboxedCommands: false,
+        failIfUnavailable: true,
+        excludedCommands: [],
+        filesystem: {
+          denyWrite: ['tools/**'],
+          allowWrite: ['~/Library/pnpm/store'],
+        },
+        credentials: { files: [{ path: '~/.ssh', mode: 'deny' }], envVars: [] },
+      },
+    }),
+    JSON.stringify(PROTECTED),
+    /network must be an object/,
+  ],
+  [
+    'credentials не объект',
+    JSON.stringify({
+      sandbox: {
+        enabled: true,
+        allowUnsandboxedCommands: false,
+        failIfUnavailable: true,
+        excludedCommands: [],
+        filesystem: {
+          denyWrite: ['tools/**'],
+          allowWrite: ['~/Library/pnpm/store'],
+        },
+        network: { allowLocalBinding: true, allowUnixSockets: [], allowedDomains: [] },
+      },
+    }),
+    JSON.stringify(PROTECTED),
+    /credentials must be an object/,
   ],
 ])('форма конфига: %s — падает', (_name, settingsText, protectedText, pattern) => {
   const result = checkRaw(settingsText, protectedText);
