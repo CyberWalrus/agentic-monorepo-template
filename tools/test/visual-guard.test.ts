@@ -1,6 +1,6 @@
 /**
  * Гейт визуальных базлайнов (З4, A8):
- * 1) assertVisualRunAllowed — запуск visual-проекта вне Linux-образа бросает,
+ * 1) assertVisualRunAllowed — запуск visual-проекта вне Linux бросает,
  *    ALLOW_HOST_SCREENSHOTS — задокументированный лаз; без «visual» в argv — ок.
  * 2) snapshotsUpdateMode — запись базлайнов только при VISUAL_UPDATE=1.
  * 3) Wiring: проверка стоит в конфиге Playwright до побочных эффектов, а инлайн-

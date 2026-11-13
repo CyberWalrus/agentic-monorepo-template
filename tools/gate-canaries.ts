@@ -313,7 +313,7 @@ export const CANARIES: GateCanary[] = [
     },
   },
   {
-    // Запуск visual-проекта вне Linux-образа ловит guard в конфиге Playwright
+    // Запуск visual-проекта вне Linux ловит guard в конфиге Playwright
     // (З4, A8); живость guard'а держит wiring-тест в tools/test/visual-guard.
     // Плохое изменение — guard удалён из конфига: тест краснеет, шаг test:hooks
     // с ним падает. Якорь — заголовок wiring-теста (TAIL_LINES режет ассерты).
