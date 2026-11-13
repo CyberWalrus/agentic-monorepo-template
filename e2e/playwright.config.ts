@@ -1,8 +1,17 @@
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+
 import { defineConfig, devices } from '@playwright/test';
 
 const CI = Boolean(process.env['CI']);
 const WEB_URL = 'http://localhost:3000';
 const API_URL = 'http://localhost:3001';
+// Токен прогона (З9, A5): он же уходит API через INSTANCE_ID, global-setup.ts
+// сверяет /health с ним — прогон не может незаметно пойти против чужого
+// процесса на том же порту. 0600: токен не читается другими пользователями.
+const INSTANCE_ID = randomUUID();
+mkdirSync('reports', { recursive: true });
+writeFileSync('reports/instance-token', `${INSTANCE_ID}\n`, { mode: 0o600 });
 // JSON-отчёт читает гейт test-report (З3, A3): skipped/todo/expected failure = 0.
 // Любой запуск Playwright (включая --project=perf/visual) перезаписывает этот файл,
 // поэтому проверка отчёта e2e идёт сразу после задачи e2e, до perf.
@@ -11,6 +20,8 @@ const JSON_REPORTER = ['json', { outputFile: 'reports/e2e.json' }] as const;
 export default defineConfig({
   testDir: '.',
   outputDir: 'test-results',
+  // Сверка «свой сервер» (З9, A5): логика в tools/instance.ts, токен — выше.
+  globalSetup: './global-setup.ts',
   fullyParallel: true,
   forbidOnly: CI,
   // Ретрай нужен только чтобы отличить флак от падения; флак всё равно валит прогон.
@@ -67,7 +78,7 @@ export default defineConfig({
       command: 'pnpm --filter @repo/api start',
       url: `${API_URL}/health`,
       reuseExistingServer: !CI,
-      env: { PORT: '3001', WEB_ORIGIN: WEB_URL, ENABLE_TEST_API: '1' },
+      env: { PORT: '3001', WEB_ORIGIN: WEB_URL, ENABLE_TEST_API: '1', INSTANCE_ID },
     },
     {
       // Production-сборка (`turbo run e2e` собирает web заранее).
