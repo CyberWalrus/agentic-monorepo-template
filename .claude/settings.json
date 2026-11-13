@@ -44,6 +44,7 @@
     "autoAllowBashIfSandboxed": true,
     "allowUnsandboxedCommands": false,
     "failIfUnavailable": true,
+    "excludedCommands": [],
     "filesystem": {
       "denyWrite": [
         "**/__screenshots__/**",
@@ -63,12 +64,20 @@
         ".claude/hooks/**",
         "tools/**"
       ],
-      "allowWrite": ["~/Library/pnpm"]
+      "allowWrite": ["~/Library/pnpm/store"]
     },
     "network": {
       "allowLocalBinding": true,
-      "allowAllUnixSockets": true,
-      "allowedDomains": ["registry.npmjs.org", "*.npmjs.org"]
+      "allowUnixSockets": ["~/.docker/run/docker.sock"],
+      "allowedDomains": ["registry.npmjs.org"]
+    },
+    "credentials": {
+      "files": [{ "path": "~/.ssh", "mode": "deny" }],
+      "envVars": [
+        { "name": "NPM_TOKEN", "mode": "deny" },
+        { "name": "GH_TOKEN", "mode": "deny" },
+        { "name": "GITHUB_TOKEN", "mode": "deny" }
+      ]
     }
   },
   "hooks": {
