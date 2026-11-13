@@ -5,6 +5,16 @@ import { resolve } from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
 
 import { apiOrigin, resolvePorts } from '../tools/ports.ts';
+import { assertVisualRunAllowed, snapshotsUpdateMode } from '../tools/visual-guard.ts';
+
+// Визуальные тесты — только в Docker-образе (З4, A8): базлайны без суффикса
+// платформы существуют только для Linux. Проверка стоит ДО любых побочных
+// эффектов конфига (resolvePorts, instance-token): запрет не создаёт файлов.
+assertVisualRunAllowed({
+  argv: process.argv,
+  platform: process.platform,
+  allowEnv: process.env['ALLOW_HOST_SCREENSHOTS'],
+});
 
 const CI = Boolean(process.env['CI']);
 const repoRoot = resolve(import.meta.dirname, '..');
@@ -51,8 +61,9 @@ export default defineConfig({
   // Ретрай нужен только чтобы отличить флак от падения; флак всё равно валит прогон.
   retries: CI ? 1 : 0,
   failOnFlakyTests: CI,
-  // В CI базлайны никогда не создаются и не перезаписываются: только `pnpm visual:update` человеком.
-  updateSnapshots: CI ? 'none' : 'missing',
+  // Базлайны создаются только `pnpm visual:update` человеком внутри образа
+  // (VISUAL_UPDATE=1, A8); вне его запись выключена всегда — не только в CI.
+  updateSnapshots: snapshotsUpdateMode(process.env),
   reporter: CI
     ? [['github'], ['html', { open: 'never' }], JSON_REPORTER]
     : [['list'], ['html', { open: 'never' }], JSON_REPORTER],
