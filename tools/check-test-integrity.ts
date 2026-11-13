@@ -10,7 +10,12 @@ const FORBIDDEN =
 const IGNORE = /(^|\/)(node_modules|dist|\.output|reports|test-results)\//;
 
 const findings: string[] = [];
-const patterns = ['apps/**/*.{ts,tsx}', 'packages/**/*.{ts,tsx}', 'e2e/**/*.ts'];
+const patterns = [
+  'apps/**/*.{ts,tsx}',
+  'packages/**/*.{ts,tsx}',
+  'e2e/**/*.ts',
+  'tools/**/*.test.ts',
+];
 // withFileTypes: каталоги скриншотов называются как тест-файлы (tasks.visual.ts/).
 for await (const entry of glob(patterns, { withFileTypes: true })) {
   const file = `${entry.parentPath}/${entry.name}`;

@@ -44,6 +44,7 @@ jobs:
       - run: pnpm knip
       - run: pnpm sherif
       - run: pnpm test:integrity
+      - run: pnpm test:hooks
       - run: pnpm docs:check
       - run: pnpm --filter @repo/contracts openapi:check
 

@@ -2,7 +2,7 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["tools/*.ts", ".claude/hooks/*.ts"],
+      "entry": ["tools/*.ts", ".claude/hooks/*.ts", "tools/test/*.test.ts", "vitest.config.ts"],
       "ignoreDependencies": ["chrome-devtools-mcp"]
     },
     "apps/web": {

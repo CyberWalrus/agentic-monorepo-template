@@ -42,6 +42,7 @@ const fast: Step[] = [
   { name: 'boundaries', command: 'pnpm', args: ['boundaries'] },
   { name: 'knip', command: 'pnpm', args: ['knip'] },
   { name: 'test-integrity', command: 'pnpm', args: ['test:integrity'] },
+  { name: 'test:hooks', command: 'pnpm', args: ['test:hooks'] },
   { name: 'docs', command: 'pnpm', args: ['docs:check'] },
   { name: 'sherif', command: 'pnpm', args: ['sherif'] },
   { name: 'openapi', command: 'pnpm', args: ['--filter', '@repo/contracts', 'openapi:check'] },

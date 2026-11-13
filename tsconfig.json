@@ -3,5 +3,5 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["tools/**/*.ts", ".claude/hooks/**/*.ts"]
+  "include": ["tools/**/*.ts", ".claude/hooks/**/*.ts", "vitest.config.ts"]
 }
