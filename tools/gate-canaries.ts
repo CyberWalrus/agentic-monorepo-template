@@ -182,10 +182,10 @@ export const CANARIES: GateCanary[] = [
     failedStep: 'bundle',
     expect: /бюджет|budget/i,
     apply: (root) => {
-      // Side-effect (console.log) на верхнем уровне в __root: orphan-модуль без
-      // импорта tree-shaken, раздуваем существующий entry-чанк; типобезопасно —
-      // иначе в worktree падает typecheck, а не bundle.
-      const path = join(root, 'apps/web/src/routes/__root.tsx');
+      // Клиентский модуль в самом большом чанке (import-graph index-роута):
+      // __root/router живут в server-бандле, orphan-модули tree-shaken.
+      // slice(0, 16) минификатор не сворачивает — литерал остаётся в чанке.
+      const path = join(root, 'apps/web/src/features/tasks/use-tasks.ts');
       const source = readFileSync(path, 'utf8');
       const content = `${source}\nconst evilBloatProbe = '${BLOAT}';\nconsole.log(evilBloatProbe.slice(0, 16));\n`;
       writeFileSync(path, content);
