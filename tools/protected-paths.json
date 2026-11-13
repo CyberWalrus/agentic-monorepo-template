@@ -12,6 +12,7 @@
     "**/vitest.config.ts",
     "**/stryker.config.json",
     "e2e/playwright.config.ts",
+    "verify-budgets.json",
     ".github/**",
     ".claude/settings.json",
     ".claude/settings.local.json",

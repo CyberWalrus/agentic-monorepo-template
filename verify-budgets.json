@@ -1,0 +1,29 @@
+{
+  "$comment": "Защищённый файл (З6): пороги времени шагов verify, enforce — только в nightly (job verify-budgets), локально и в PR — предупреждение. Числа откалиброваны по ubuntu-latest (CI) с запасом ~2x; локальные машины быстрее — предупреждения там нормальны. Почему не perf-budgets.json: тот лежит в globalDependencies turbo.json — правка калибровки обвалила бы кэш всех задач. Порог поднимает только человек отдельным PR (З7).",
+  "fast": {
+    "format": 5,
+    "lint": 10,
+    "typecheck": 20,
+    "typecheck:tools": 10,
+    "test": 90,
+    "boundaries": 10,
+    "knip": 15,
+    "test-integrity": 5,
+    "test:hooks": 45,
+    "sandbox": 5,
+    "docs": 10,
+    "sherif": 10,
+    "openapi": 15,
+    "test-report": 10,
+    "test-count": 5
+  },
+  "slow": {
+    "build": 60,
+    "bundle": 10,
+    "e2e": 150,
+    "e2e-report": 15,
+    "perf": 240
+  },
+  "totalFast": 180,
+  "totalSlow": 480
+}
