@@ -31,6 +31,8 @@ export const fast: Step[] = [
   { name: 'sandbox', command: 'pnpm', args: ['sandbox:check'] },
   { name: 'docs', command: 'pnpm', args: ['docs:check'] },
   { name: 'sherif', command: 'pnpm', args: ['sherif'] },
+  // Версия Docker-образа Playwright == каталог @playwright/test (З4/A8).
+  { name: 'visual-image', command: 'pnpm', args: ['visual-image:check'] },
   { name: 'openapi', command: 'pnpm', args: ['--filter', '@repo/contracts', 'openapi:check'] },
 ];
 

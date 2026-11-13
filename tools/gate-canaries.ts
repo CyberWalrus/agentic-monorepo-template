@@ -299,7 +299,7 @@ export const CANARIES: GateCanary[] = [
   {
     // Детерминизм сборки (ADR 0005): запечённый адрес в клиентском бандле
     // ловит скан шага bundle. atob(btoa()) не сворачивается минификатором
-    // (урок B1), литерал остаётся в чанке.
+    // (урок B1), литерал останется в чанке.
     name: 'адрес API запечён в бандл',
     steps: 'build,bundle',
     full: true,
@@ -310,6 +310,78 @@ export const CANARIES: GateCanary[] = [
       const source = readFileSync(path, 'utf8');
       const content = `${source}\nconst evilBakedProbe = 'http://localhost:3001';\nconsole.log(atob(btoa(evilBakedProbe)));\n`;
       writeFileSync(path, content);
+    },
+  },
+  {
+    // Запуск visual-проекта вне Linux ловит guard в конфиге Playwright
+    // (З4, A8); живость guard'а держит wiring-тест в tools/test/visual-guard.
+    // Плохое изменение — guard удалён из конфига: тест краснеет, шаг test:hooks
+    // с ним падает. Якорь — заголовок wiring-теста (TAIL_LINES режет ассерты).
+    name: 'visual-гейт удалён из Playwright-конфига',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /guard до побочных эффектов/,
+    apply: (root) => {
+      const path = join(root, 'e2e/playwright.config.ts');
+      const source = readFileSync(path, 'utf8');
+      const stripped = source
+        .replaceAll(
+          "import { assertVisualRunAllowed, snapshotsUpdateMode } from '../tools/visual-guard.ts';",
+          "import { snapshotsUpdateMode } from '../tools/visual-guard.ts';",
+        )
+        .replace(
+          `\nassertVisualRunAllowed({\n  argv: process.argv,\n  platform: process.platform,\n  allowEnv: process.env['ALLOW_HOST_SCREENSHOTS'],\n});\n`,
+          '\n',
+        );
+      if (stripped === source) {
+        throw new Error('canary anchor not found: e2e/playwright.config.ts has no visual guard');
+      }
+      writeFileSync(path, stripped);
+    },
+  },
+  {
+    // Запись базлайнов вне VISUAL_UPDATE=1 запрещена snapshotsUpdateMode (A8):
+    // откат к тернарнику по CI разрешал бы «missing» на хосте. Тот же wiring-
+    // тест краснеет — якорь тот же.
+    name: 'updateSnapshots вернулся к флагу CI',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /guard до побочных эффектов/,
+    apply: (root) => {
+      const path = join(root, 'e2e/playwright.config.ts');
+      const source = readFileSync(path, 'utf8');
+      const reverted = source.replaceAll(
+        'updateSnapshots: snapshotsUpdateMode(process.env),',
+        "updateSnapshots: CI ? 'none' : 'missing',",
+      );
+      if (reverted === source) {
+        throw new Error('canary anchor not found: playwright.config.ts has no snapshotsUpdateMode');
+      }
+      writeFileSync(path, reverted);
+    },
+  },
+  {
+    // Версия Docker-образа Playwright в ci.yml равна каталогу @playwright/test
+    // (З4/A8, один чекер check-visual-image.ts). Плохое изменение — сдвиг версии
+    // образа внутри noble-формы: чекер краснеет сообщением с обеими версиями.
+    // Якорь по префиксу, не по номеру: Renovate обновляет версию, якорь не
+    // должен за ней следить. Тег остаётся валидным (-noble): выход из формы
+    // ловил бы fail-closed «no image» вместо целевого «diverge».
+    name: 'версия образа разошлась с каталогом',
+    steps: 'visual-image',
+    failedStep: 'visual-image',
+    expect: /v0\.0\.0-noble/,
+    apply: (root) => {
+      const path = join(root, '.github/workflows/ci.yml');
+      const source = readFileSync(path, 'utf8');
+      const drifted = source.replace(
+        /image:\s*mcr\.microsoft\.com\/playwright:v[\d.]+-noble/,
+        'image: mcr.microsoft.com/playwright:v0.0.0-noble',
+      );
+      if (drifted === source) {
+        throw new Error('canary anchor not found: ci.yml has no Playwright image line');
+      }
+      writeFileSync(path, drifted);
     },
   },
 ];

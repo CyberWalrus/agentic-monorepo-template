@@ -48,6 +48,7 @@ jobs:
       - run: pnpm boundaries
       - run: pnpm knip
       - run: pnpm sherif
+      - run: pnpm visual-image:check
       - run: pnpm test:integrity
       - run: pnpm test:hooks
       # Корневой vitest вне turbo: его отчёт проверяется здесь явным --only (A3).

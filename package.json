@@ -30,7 +30,8 @@
     "test:count": "node tools/check-test-count.ts",
     "test:count:update": "node tools/check-test-count.ts --update",
     "sandbox:check": "node tools/check-sandbox-paths.ts",
-    "docs:check": "node tools/check-docs.ts"
+    "docs:check": "node tools/check-docs.ts",
+    "visual-image:check": "node tools/check-visual-image.ts"
   },
   "devDependencies": {
     "@types/node": "catalog:",

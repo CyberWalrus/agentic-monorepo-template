@@ -18,7 +18,8 @@
       "dependsOn": ["transit"],
       "outputs": [],
       // ALLOW_HOST_SCREENSHOTS разрешает скриншоты вне Linux-образа (packages/ui/vitest.config.ts).
-      "env": ["ALLOW_HOST_SCREENSHOTS"]
+      // VISUAL_UPDATE=1 — запись базлайнов (A8, только человек внутри образа).
+      "env": ["ALLOW_HOST_SCREENSHOTS", "VISUAL_UPDATE"]
     },
     "build": {
       "dependsOn": ["transit", "^build"],
