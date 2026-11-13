@@ -63,9 +63,19 @@ jobs:
             e2e/reports/perf.json
           retention-days: 90
 
+  gate-canaries:
+    name: gate canaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm canaries
+
   report:
     name: report failure
-    needs: [flake-hunt, mutation-full, perf-trend]
+    needs: [flake-hunt, mutation-full, perf-trend, gate-canaries]
     if: failure()
     runs-on: ubuntu-latest
     steps:

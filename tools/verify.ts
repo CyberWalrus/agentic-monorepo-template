@@ -1,19 +1,18 @@
 /**
  * Локальный аналог CI-гейтов. Одна команда для человека и агента.
  *
- *   pnpm verify           статика + unit (быстро, кэш turbo)
- *   pnpm verify --full    + сборка, бюджет бандла, E2E, перф-бюджеты
- *   pnpm verify --json    машиночитаемый результат (для агентов и хуков)
+ *   pnpm verify                    статика + unit (быстро, кэш turbo)
+ *   pnpm verify --full             + сборка, бюджет бандла, E2E, перф-бюджеты
+ *   pnpm verify --json             машиночитаемый результат (для агентов и хуков)
+ *   pnpm verify --only lint,knip   подмножество шагов (для канареек гейтов и отладки;
+ *                                  зависимости шагов не тянутся — test-report без test
+ *                                  читает отчёты прошлого прогона; slow-шаги требуют --full;
+ *                                  хуки и CI передавать --only не имеют права — З5)
  *
  * Визуальные тесты сюда не входят: они идут только в Docker (`pnpm visual`).
  */
 import { spawn } from 'node:child_process';
-
-interface Step {
-  name: string;
-  command: string;
-  args: string[];
-}
+import { allStepNames, fast, post, slow, type Step } from './verify-steps.ts';
 
 interface StepResult {
   name: string;
@@ -27,58 +26,23 @@ const json = process.argv.includes('--json');
 const full = process.argv.includes('--full');
 const TAIL_LINES = 60;
 
-const turbo = (task: string): Step => ({
-  name: task,
-  command: 'pnpm',
-  args: ['turbo', 'run', task, '--output-logs=errors-only'],
-});
-
-const fast: Step[] = [
-  { name: 'format', command: 'pnpm', args: ['format:check'] },
-  { name: 'lint', command: 'pnpm', args: ['lint', '--format', 'agent'] },
-  turbo('typecheck'),
-  { name: 'typecheck:tools', command: 'pnpm', args: ['typecheck:tools'] },
-  turbo('test'),
-  { name: 'boundaries', command: 'pnpm', args: ['boundaries'] },
-  { name: 'knip', command: 'pnpm', args: ['knip'] },
-  { name: 'test-integrity', command: 'pnpm', args: ['test:integrity'] },
-  { name: 'test:hooks', command: 'pnpm', args: ['test:hooks'] },
-  { name: 'sandbox', command: 'pnpm', args: ['sandbox:check'] },
-  { name: 'docs', command: 'pnpm', args: ['docs:check'] },
-  { name: 'sherif', command: 'pnpm', args: ['sherif'] },
-  { name: 'openapi', command: 'pnpm', args: ['--filter', '@repo/contracts', 'openapi:check'] },
-];
-
-// Гейт по отчёту раннера (З3, A3) идёт после тестов: отчёты существуют, только
-// если тесты отработали, — иначе он проверял бы протухший кэш turbo. Корневой
-// vitest (test:hooks) вне turbo, поэтому его отчёт добавляется явным --only.
-const testReport: Step = {
-  name: 'test-report',
-  command: 'pnpm',
-  args: ['test:report', '--from-turbo', 'test', '--only', 'reports/vitest-hooks.json'],
-};
-
-// Храповик числа тестов (З7, A3): warning-only, читает те же отчёты.
-const testCount: Step = {
-  name: 'test-count',
-  command: 'pnpm',
-  args: ['test:count'],
-};
-
-// E2E и перф делят порты 3000/3001, поэтому идут последовательно после быстрых шагов.
-// Порядок e2e → e2e-report → perf — контракт: отчёт e2e/reports/e2e.json пишет
-// любой запуск Playwright, perf его перезапишет; переставлять шаги нельзя.
-const slow: Step[] = [
-  turbo('build'),
-  { name: 'bundle', command: 'pnpm', args: ['bundle'] },
-  turbo('e2e'),
-  {
-    name: 'e2e-report',
-    command: 'pnpm',
-    args: ['test:report', '--from-turbo', 'e2e', '--expect-project', 'functional'],
-  },
-  turbo('perf'),
-];
+const onlyFlag = process.argv.indexOf('--only');
+const only =
+  onlyFlag >= 0
+    ? (process.argv[onlyFlag + 1]?.split(',') ?? []).map((name) => name.trim())
+    : undefined;
+if (only !== undefined) {
+  const unknown = only.filter((name) => !allStepNames.includes(name));
+  if (unknown.length > 0) {
+    console.error(`verify --only: unknown step(s): ${unknown.join(', ')}`);
+    console.error(`known steps: ${allStepNames.join(', ')}`);
+    process.exit(1);
+  }
+  const selected = (steps: Step[]): Step[] => steps.filter((step) => only.includes(step.name));
+  fast.splice(0, fast.length, ...selected(fast));
+  post.splice(0, post.length, ...selected(post));
+  slow.splice(0, slow.length, ...selected(slow));
+}
 
 function run(step: Step): Promise<StepResult> {
   const started = performance.now();
@@ -105,8 +69,9 @@ function run(step: Step): Promise<StepResult> {
 const started = performance.now();
 const results = await Promise.all(fast.map(run));
 if (results.every((result) => result.ok)) {
-  results.push(await run(testReport));
-  results.push(await run(testCount));
+  for (const step of post) {
+    results.push(await run(step));
+  }
 }
 if (full && results.every((result) => result.ok)) {
   for (const step of slow) {
@@ -122,7 +87,17 @@ const totalMs = Math.round(performance.now() - started);
 
 if (json) {
   console.log(
-    JSON.stringify({ ok, totalMs, mode: full ? 'full' : 'fast', steps: results }, null, 2),
+    JSON.stringify(
+      {
+        ok,
+        totalMs,
+        mode: full ? 'full' : 'fast',
+        ...(only !== undefined ? { only } : {}),
+        steps: results,
+      },
+      null,
+      2,
+    ),
   );
 } else {
   for (const result of results.filter((r) => !r.ok)) {

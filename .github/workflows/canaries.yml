@@ -1,0 +1,51 @@
+# Канарейки гейтов (З6, B1): плохие изменения в worktree обязаны ронять свои шаги verify.
+# Гоняются при изменении гейтов и их конфигов и в nightly — в каждом PR не нужны
+# (docs/roadmap.md B1), поэтому отдельный workflow, не входящий в `gate`.
+name: Gate canaries
+
+on:
+  pull_request:
+    paths:
+      - tools/**
+      - .claude/**
+      - .github/actions/**
+      - turbo.json
+      - pnpm-workspace.yaml
+      - package.json
+      - pnpm-lock.yaml
+      - .oxlintrc.json
+      - .oxfmtrc.json
+      - .dependency-cruiser.cjs
+      - knip.json
+      - lefthook.yml
+      - tsconfig.base.json
+      - tsconfig.json
+      - '**/vitest.config.ts'
+      - e2e/playwright.config.ts
+      - '**/stryker.config.json'
+      - .nvmrc
+  workflow_dispatch:
+
+concurrency:
+  group: canaries-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  TURBO_TELEMETRY_DISABLED: 1
+
+jobs:
+  canaries:
+    name: canaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        # Worktree канареек создаётся от HEAD в tmp: история не нужна.
+      - uses: ./.github/actions/setup
+      # Установка в корневом чекауте греет pnpm store — install в worktree
+      # линкуется из него, а не качает с нуля.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm canaries
