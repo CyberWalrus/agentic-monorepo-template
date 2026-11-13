@@ -17,11 +17,11 @@ import { afterAll, expect, it } from 'vitest';
 const repoDir = resolve(import.meta.dirname, '..', '..');
 const checker = join(repoDir, 'tools', 'check-test-integrity.ts');
 
-let tmp = '';
+const tmpDirs: string[] = [];
 
 afterAll(() => {
-  if (tmp !== '') {
-    rmSync(tmp, { recursive: true, force: true });
+  for (const dir of tmpDirs) {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -37,13 +37,28 @@ const V8 = ['v', '8'].join('');
 const ISTANBUL = ['istan', 'bul'].join('');
 const C8 = ['c', '8'].join('');
 
-/** source, ожидаемая подстрока находки (или null — находки быть не должно). */
+/**
+ * source, ожидаемая подстрока находки (или null — находки быть не должно).
+ * Источники не исполняются — гейт читает только текст; синтаксис может быть
+ * невалидным для раннера (todo с функцией, пропуск импортов).
+ */
 const MODIFIER_CASES: Array<[string, string | null]> = [
   [`it.${FAILS}('hides a bug', () => { expect(1).toBe(2); });`, `.${FAILS}(`],
   [`test.${FAIL}('playwright expected failure', () => {});`, `.${FAIL}(`],
   [`it.${FAILS}.each([1])('each expected failure', () => {});`, `.${FAILS}.each(`],
+  [
+    `it.${FAILS}.${SKIP}If(true)('conditional expected failure', () => { expect(1).toBe(2); });`,
+    `.${FAILS}.${SKIP}If(`,
+  ],
+  [
+    `describe.serial.${FAILS}('serial expected failure', () => { expect(1).toBe(2); });`,
+    `.${FAILS}(`,
+  ],
+  [`test.describe.${ONLY}('focused via prefix', () => {});`, `.${ONLY}(`],
   [`describe.${ONLY}('focused suite', () => {});`, `.${ONLY}(`],
   [`it.${SKIP}('skipped', () => {});`, `.${SKIP}(`],
+  [`it.concurrent.${SKIP}('concurrent skipped', () => {});`, `.${SKIP}(`],
+  [`it.${SKIP}.each([1])('skipped each', () => {});`, `.${SKIP}.each(`],
   [`test.${FIXME}('fixme', () => {});`, `.${FIXME}(`],
   [`it.${TODO}('todo', () => {});`, `.${TODO}(`],
   // skipIf/runIf исполняются и видны отчёту: regex их не флагует (З3 — не дублировать).
@@ -61,7 +76,7 @@ function runChecker(cwd: string): { status: number | null; output: string } {
 
 it('модификаторы, невидимые отчёту, флагуются с файлом и строкой; skipIf/runIf — нет', () => {
   const dir = mkdtempSync(join(tmpdir(), 'a3-integrity-'));
-  tmp = dir;
+  tmpDirs.push(dir);
   const lines = ["import { describe, it, test } from 'vitest';", ''].concat(
     MODIFIER_CASES.map(([source]) => source),
   );
@@ -76,20 +91,23 @@ it('модификаторы, невидимые отчёту, флагуютс�
       continue;
     }
     expect(result.output).toContain(expected);
-    expect(result.output).toContain('sample.test.ts');
   }
-  // Строка с skipIf/runIf числится в файле — но находки для неё нет.
+  // Точное множество находок: каждый позитив — своя строка, негативы
+  // (skipIf/runIf) и лишних находок нет.
   const flaggedLines = result.output
     .split('\n')
     .filter((line) => line.includes('sample.test.ts:'))
-    .map((line) => Number(line.split(':')[1]));
-  const skipIfLine = lines.findIndex((line) => line.includes('If(true)')) + 1;
-  expect(flaggedLines).not.toContain(skipIfLine);
+    .map((line) => Number(line.split(':')[1]))
+    .toSorted((left, right) => left - right);
+  const expectedLines = MODIFIER_CASES.map(([, expected], index) =>
+    expected === null ? null : index + 3,
+  ).filter((line) => line !== null);
+  expect(flaggedLines).toEqual(expectedLines);
 });
 
 it('подавляющие комментарии мутаций и покрытия флагуются с подсказкой', () => {
   const dir = mkdtempSync(join(tmpdir(), 'a3-integrity-'));
-  tmp = dir;
+  tmpDirs.push(dir);
   const sources = [
     `// ${STRYKER} disable all`,
     `// ${STRYKER} disable next-line all`,
@@ -113,13 +131,13 @@ it('подавляющие комментарии мутаций и покрыт
 
 it('честный файл проходит зелёным', () => {
   const dir = mkdtempSync(join(tmpdir(), 'a3-integrity-'));
-  tmp = dir;
+  tmpDirs.push(dir);
   const sources = [
     "import { describe, expect, it } from 'vitest';",
     `describe('honest suite', () => {`,
     `  it('passes', () => { expect(1).toBe(1); });`,
     `  it('mentions modifiers in a string without calling them', () => {`,
-    `    expect(['.${SKIP} ', '.${ONLY} '].join('')).toHaveLength(10);`,
+    `    expect(['.${SKIP} ', '.${ONLY} '].join('')).toHaveLength(12);`,
     `  });`,
     `});`,
   ];

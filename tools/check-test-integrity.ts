@@ -8,12 +8,15 @@
  * describe.only/skip, it.todo и комментарии Stryker disable / v8 / istanbul / c8
  * ignore — выключенные мутации и покрытие видит только их текст. Пропуски
  * skipIf/runIf здесь не флагуются: они исполняются и видны отчёту.
+ * Ограничение подсказки: скан построчный, перенос строки внутри конструкции
+ * (`it` и `.fails(` на разных строках) ускользает и от отчёта (fails невидим
+ * ему) — против намеренного обхода работают мутационный гейт и ревью.
  */
 import { glob, readFile } from 'node:fs/promises';
 
 const FORBIDDEN =
-  /\b(?:test|it|describe)(?:\.(?:describe|serial|parallel))?\.(only|skip|fixme|todo|fails?)(\.(?:each|skipIf|runIf))?\s*\(/g;
-const SUPPRESSION = /(?:Stryker\s+disable|v8\s+ignore|istanbul\s+ignore|c8\s+ignore)/g;
+  /\b(?:test|it|describe)(?:\.(?:describe|serial|parallel|concurrent))?\.(only|skip|fixme|todo|fails?)(\.(?:each|skipIf|runIf))?\s*\(/g;
+const SUPPRESSION = /(?:\bStryker\s+disable|\bv8\s+ignore|\bistanbul\s+ignore|\bc8\s+ignore)/g;
 const IGNORE = /(^|\/)(node_modules|dist|\.output|reports|test-results)\//;
 
 const findings: string[] = [];
