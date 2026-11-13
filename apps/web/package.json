@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite dev",
+    "dev": "API_URL=${API_URL:-http://localhost:3001} vite dev",
     "build": "vite build",
-    "start": "vite preview",
+    "start": "API_URL=${API_URL:-http://localhost:3001} vite preview",
     "typecheck": "tsc",
     "test": "vitest run --reporter=json --reporter=default --outputFile=reports/vitest.json"
   },

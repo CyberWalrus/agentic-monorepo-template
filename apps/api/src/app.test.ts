@@ -7,7 +7,6 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from './app.ts';
 import { InMemoryTaskRepository } from './tasks/repository.ts';
 
-const WEB_ORIGIN = 'http://localhost:3000';
 const UNKNOWN_ID = '00000000-0000-4000-8000-999999999999';
 
 function setup({
@@ -16,7 +15,6 @@ function setup({
 }: { enableTestApi?: boolean; instanceId?: string } = {}) {
   const app = createApp({
     tasks: new InMemoryTaskRepository(),
-    webOrigin: WEB_ORIGIN,
     enableTestApi,
     // exactOptionalPropertyTypes: undefined нельзя передавать явно.
     ...(instanceId === undefined ? {} : { instanceId }),
@@ -109,14 +107,14 @@ describe('HTTP concerns', () => {
     expect(await response.json()).toEqual({ status: 'ok', instance: 'run-token' });
   });
 
-  it('allows CORS only for the web origin', async () => {
+  it('sends no CORS headers to any origin: browsers use the same-origin proxy (ADR 0005)', async () => {
     const { app } = setup();
 
-    const allowed = await app.request('/health', { headers: { origin: WEB_ORIGIN } });
-    const denied = await app.request('/health', { headers: { origin: 'https://evil.example' } });
+    const web = await app.request('/health', { headers: { origin: 'http://localhost:3000' } });
+    const foreign = await app.request('/health', { headers: { origin: 'https://evil.example' } });
 
-    expect(allowed.headers.get('access-control-allow-origin')).toBe(WEB_ORIGIN);
-    expect(denied.headers.get('access-control-allow-origin')).toBeNull();
+    expect(web.headers.get('access-control-allow-origin')).toBeNull();
+    expect(foreign.headers.get('access-control-allow-origin')).toBeNull();
   });
 });
 
@@ -129,7 +127,7 @@ describe('test API', () => {
   };
 
   it('is not exposed unless explicitly enabled', async () => {
-    const app = createApp({ tasks: new InMemoryTaskRepository(), webOrigin: WEB_ORIGIN });
+    const app = createApp({ tasks: new InMemoryTaskRepository() });
 
     const response = await app.request('/__test__/reset', { method: 'POST', body: '{"tasks":[]}' });
 

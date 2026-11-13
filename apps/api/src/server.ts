@@ -4,7 +4,6 @@ import { createApp } from './app.ts';
 import { InMemoryTaskRepository } from './tasks/repository.ts';
 
 const port = Number(process.env['PORT'] ?? 3001);
-const webOrigin = process.env['WEB_ORIGIN'] ?? 'http://localhost:3000';
 const enableTestApi = process.env['ENABLE_TEST_API'] === '1';
 // Идентификатор прогона e2e (З9, A5): без него /health отвечает instance: null,
 // и global setup Playwright не пустит тесты против этого процесса.
@@ -16,7 +15,6 @@ if (enableTestApi && process.env['NODE_ENV'] === 'production') {
 
 const app = createApp({
   tasks: new InMemoryTaskRepository(),
-  webOrigin,
   enableTestApi,
   // exactOptionalPropertyTypes: undefined нельзя передавать явно.
   ...(instanceId === undefined ? {} : { instanceId }),

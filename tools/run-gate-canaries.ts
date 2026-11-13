@@ -18,6 +18,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { CANARIES } from './gate-canaries.ts';
+// Список slow-шагов — из того же источника, что у verify: негатив-контроль
+// не должен дрейфовать от определения шагов (см. verify-steps.ts).
+import { slow as slowSteps } from './verify-steps.ts';
 
 const repoDir = resolve(import.meta.dirname);
 const worktreeDir = mkdtempSync(join(tmpdir(), 'b1-canaries-'));
@@ -38,6 +41,12 @@ function run(command: string[], cwd: string, timeoutMs = 600_000): SpawnResult {
     encoding: 'utf8',
     cwd,
     timeout: timeoutMs,
+    // Канарейки — гейт-контекст: CI=1 выключает reuseExistingServer (по A5
+    // reuse:false и так станет безусловным в PR-3). Иначе локальный ручной
+    // сервер на фиксированных портах 3000/3001 молча подменяет сервер
+    // канарейки, и e2e-канарейки стреляют по чужому процессу (наблюдалось:
+    // leftover `pnpm dev` без INSTANCE_ID — global setup его отверг).
+    env: { ...process.env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' },
   });
   if (result.error !== undefined) {
     return { status: -1, output: String(result.error), stdout: '' };
@@ -89,6 +98,32 @@ function verifyInWorktree(
   }
 }
 
+const SIGNAL_KILL = /signal SIG(?:TERM|KILL)/;
+
+/**
+ * Среда изредка убивает vitest сигналом под нагрузкой (наблюдается на macOS,
+ * три случая 2026-11-13; тесты при этом успевают пройти). Сигнал — не вердикт
+ * гейта: шаг, умерший от сигнала, не может ни подтвердить, ни опровергнуть
+ * канарейку. Повторяем такой прогон один раз; повторная смерть остаётся громкой.
+ */
+function verifyInWorktreeWithSignalRetry(
+  steps: string,
+  full: boolean,
+): { json: ResultJson | null; output: string } {
+  const first = verifyInWorktree(steps, full);
+  const killedBySignal =
+    first.json === null
+      ? SIGNAL_KILL.test(first.output)
+      : first.json.steps.some((step) => !step.ok && SIGNAL_KILL.test(step.output));
+  if (!killedBySignal) {
+    return first;
+  }
+  console.error(
+    `verify (${steps}) was killed by a signal — environment, not the gate; retrying once`,
+  );
+  return verifyInWorktree(steps, full);
+}
+
 let failures = 0;
 const rows: string[] = [];
 
@@ -106,29 +141,32 @@ try {
   }
 
   // Негатив-контроль: на чистом worktree все шаги набора зелёные — иначе
-  // канарейки «пролетают» на уже красной базе.
-  const union = [...new Set(CANARIES.flatMap((canary) => canary.steps.split(',')))]
-    .filter((step) => step !== 'build' && step !== 'bundle')
-    .join(',');
-  const control = verifyInWorktree(union, false);
+  // канарейки «пролетают» на уже красной базе. Slow-шаги вне быстрого контроля:
+  // `verify --only` с slow-шагом без --full сам выходит с ошибкой.
+  const slowNames = new Set(slowSteps.map((step) => step.name));
+  const allCovered = [...new Set(CANARIES.flatMap((canary) => canary.steps.split(',')))];
+  const union = allCovered.filter((step) => !slowNames.has(step)).join(',');
+  const control = verifyInWorktreeWithSignalRetry(union, false);
   if (control.json === null || !control.json.ok) {
     throw new Error(
       `negative control failed — worktree is red before any bad change:\n${control.output.slice(-3000)}`,
     );
   }
   console.log(`negative control: ${union} — ok`);
-  // Отдельный контроль slow-пары: budget-канарейка не должна стрелять вакуумно.
-  const bundleControl = verifyInWorktree('build,bundle', true);
-  if (bundleControl.json === null || !bundleControl.json.ok) {
+  // Отдельный контроль slow-шагов, покрытых канарейками (build,bundle,e2e):
+  // slow-канарейки не должны стрелять вакуумно на красной базе.
+  const slowUnion = [...new Set(allCovered.filter((step) => slowNames.has(step)))].join(',');
+  const slowControl = verifyInWorktreeWithSignalRetry(slowUnion, true);
+  if (slowControl.json === null || !slowControl.json.ok) {
     throw new Error(
-      `negative control (build,bundle) failed — bundle gate is already red on the clean base:\n${bundleControl.output.slice(-2000)}`,
+      `negative control (${slowUnion}) failed — a slow gate is already red on the clean base:\n${slowControl.output.slice(-2000)}`,
     );
   }
-  console.log('negative control: build,bundle — ok');
+  console.log(`negative control: ${slowUnion} — ok`);
 
   for (const canary of CANARIES) {
     canary.apply(worktreeDir);
-    const { json } = verifyInWorktree(canary.steps, canary.full ?? false);
+    const { json } = verifyInWorktreeWithSignalRetry(canary.steps, canary.full ?? false);
     const step = json?.steps.find((item) => item.name === canary.failedStep);
     // Отчёт verify парсится, целевой шаг красный и ругается ожидаемой причиной.
     const tripped =

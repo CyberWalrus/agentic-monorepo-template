@@ -28,12 +28,13 @@
       "dependsOn": ["transit", "^build"],
       "outputs": ["playwright-report/**", "test-results/**", "reports/**"],
       // VIDEO=on — видео прогона как доказательство для PR; без env Turborepo не передаст его и не учтёт в хеше.
-      "env": ["CI", "VIDEO"]
+      // API_URL — цель прокси /rpc (ADR 0005): её читает процесс preview, который запускает Playwright.
+      "env": ["CI", "VIDEO", "API_URL"]
     },
     "perf": {
       "dependsOn": ["transit", "^build"],
       "outputs": ["reports/**"],
-      "env": ["CI"]
+      "env": ["CI", "API_URL"]
     },
     "mutation": {
       "dependsOn": ["transit"],
@@ -41,8 +42,9 @@
       "cache": false
     },
     "dev": {
-      // PORT/WEB_ORIGIN/ENABLE_TEST_API читает apps/api/src/server.ts, VITE_API_URL — клиент web.
-      "env": ["PORT", "WEB_ORIGIN", "ENABLE_TEST_API", "VITE_API_URL"],
+      // PORT/ENABLE_TEST_API/INSTANCE_ID читает apps/api/src/server.ts; API_URL —
+      // SSR-клиент web и цель прокси /rpc (ADR 0005).
+      "env": ["PORT", "ENABLE_TEST_API", "INSTANCE_ID", "API_URL"],
       "cache": false,
       "persistent": true
     }
