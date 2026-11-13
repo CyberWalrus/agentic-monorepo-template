@@ -229,7 +229,7 @@ it('playwright: обязательный проект отсутствует —
   expect(present.status).toBe(0);
 });
 
-it('отсутствующий и битый отчёт — красные с именем файла', () => {
+it('отсутствующий, битый и нечитаемый отчёт — красные с именем файла', () => {
   const missing = runChecker(['--only', join(nextDir('missing'), 'report.json')]);
   expect(missing.status).toBe(1);
   expect(missing.output).toMatch(/missing/);
@@ -237,12 +237,68 @@ it('отсутствующий и битый отчёт — красные с и
   const corrupt = runChecker(['--only', syntheticReport('corrupt', '{nope')]);
   expect(corrupt.status).toBe(1);
   expect(corrupt.output).toMatch(/not valid JSON/);
+
+  // Каталог вместо файла: ошибка чтения не должна маскироваться под битый JSON.
+  const dirAsReport = nextDir('is-a-dir');
+  const unreadable = runChecker(['--only', dirAsReport]);
+  expect(unreadable.status).toBe(1);
+  expect(unreadable.output).toMatch(/not readable/);
 });
 
 it('невалидная форма отчёта — красная (fail-closed)', () => {
   const shapeless = runChecker(['--only', syntheticReport('shapeless', '{}')]);
   expect(shapeless.status).toBe(1);
   expect(shapeless.output).toMatch(/numTotalTests/);
+});
+
+it('неизвестный статус раннера не считается зелёным (vitest и playwright)', () => {
+  const flaky = syntheticReport('unknown-vitest', {
+    numTotalTests: 1,
+    testResults: [
+      {
+        name: '/repo/apps/api/src/x.test.ts',
+        status: 'passed',
+        assertionResults: [{ fullName: 'mystery', status: 'runTodoFlaky', title: 'mystery' }],
+      },
+    ],
+  });
+  const vitestResult = runChecker(['--only', flaky]);
+  expect(vitestResult.status).toBe(1);
+  expect(vitestResult.output).toMatch(/unknown test status/);
+
+  const noStatus = syntheticReport('no-expected-status', {
+    suites: [
+      {
+        title: 'features/x.spec.ts',
+        file: 'features/x.spec.ts',
+        suites: [],
+        specs: [{ title: 'no status', file: 'features/x.spec.ts', tests: [{ results: [] }] }],
+      },
+    ],
+  });
+  const noStatusResult = runChecker(['--only', noStatus]);
+  expect(noStatusResult.status).toBe(1);
+  expect(noStatusResult.output).toMatch(/without expectedStatus/);
+
+  const weird = syntheticReport('weird-expected-status', {
+    suites: [
+      {
+        title: 'features/x.spec.ts',
+        file: 'features/x.spec.ts',
+        suites: [],
+        specs: [
+          {
+            title: 'timed out expectation',
+            file: 'features/x.spec.ts',
+            tests: [{ expectedStatus: 'timedOut', projectName: 'functional', results: [] }],
+          },
+        ],
+      },
+    ],
+  });
+  const weirdResult = runChecker(['--only', weird]);
+  expect(weirdResult.status).toBe(1);
+  expect(weirdResult.output).toMatch(/unexpected expectedStatus/);
 });
 
 it('чистые отчёты проходят', () => {
@@ -256,6 +312,43 @@ it('чистые отчёты проходят', () => {
   ]);
   expect(result.status).toBe(0);
   expect(result.output).toMatch(/ok/);
+});
+
+it('граф turbo: путь отчёта берётся из literal-записи outputs', () => {
+  const dir = nextDir('outputs-literal');
+  const graph = join(dir, 'dry.json');
+  writeFileSync(
+    graph,
+    JSON.stringify({
+      tasks: [
+        {
+          taskId: '@repo/api#test',
+          directory: 'apps/api',
+          command: 'vitest run',
+          outputs: ['coverage/**', 'reports/custom.json'],
+        },
+      ],
+    }),
+  );
+  // literal отличается от конвенции — только так видно, что именно outputs
+  // называет путь (в проде это reports/vitest.json из turbo.json).
+  const missing = runChecker(['--from-turbo', 'test', '--graph', graph, '--cwd', dir]);
+  expect(missing.status).toBe(1);
+  expect(missing.output).toContain('apps/api/reports/custom.json');
+  expect(missing.output).not.toContain('apps/api/reports/vitest.json');
+});
+
+it('пустой affected-граф — зелёный пустой прогон (docs-only PR)', () => {
+  const dir = nextDir('affected-empty');
+  const graph = join(dir, 'dry.json');
+  writeFileSync(graph, JSON.stringify({ tasks: [] }));
+  const empty = runChecker(['--from-turbo', 'test', '--affected', '--graph', graph]);
+  expect(empty.status).toBe(0);
+  expect(empty.output).toMatch(/nothing to check/);
+  // Без --affected пустой набор — красный: опечатка в имени задачи должна быть громкой.
+  const withoutAffected = runChecker(['--from-turbo', 'test', '--graph', graph]);
+  expect(withoutAffected.status).toBe(1);
+  expect(withoutAffected.output).toMatch(/no reports to check/);
 });
 
 it('граф turbo: задачи с командой требуют отчёты, <NONEXISTENT> — нет', () => {

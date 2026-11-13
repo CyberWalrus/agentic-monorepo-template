@@ -62,8 +62,9 @@ jobs:
         with: { playwright: 'true' }
       - run: pnpm turbo run test $AFFECTED --output-logs=errors-only
       # Гейт по отчёту раннера (З3, A3): ожидания выводятся из dry-графа turbo,
-      # поэтому при --affected требуются отчёты ровно гонявшихся задач.
-      - run: pnpm test:report --from-turbo test --affected
+      # поэтому требуются отчёты ровно гонявшихся задач. Тот же $AFFECTED, что
+      # у прогона выше: на merge_group и push оба без --affected.
+      - run: pnpm test:report --from-turbo test $AFFECTED
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -106,8 +107,8 @@ jobs:
         with: { playwright: 'true' }
       - run: pnpm turbo run e2e $AFFECTED --output-logs=errors-only
       # Проект functional с default:false не запускается без явного --project —
-      # гейт требует его присутствия в отчёте (A3).
-      - run: pnpm test:report --from-turbo e2e --affected --expect-project functional
+      # гейт требует его присутствия в отчёте (A3). $AFFECTED — как у прогона.
+      - run: pnpm test:report --from-turbo e2e $AFFECTED --expect-project functional
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

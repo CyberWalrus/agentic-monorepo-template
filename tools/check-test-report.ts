@@ -18,9 +18,18 @@
  * e2e → reports/e2e.json).
  *
  * Отсутствующий, нечитаемый, пустой отчёт и невалидная форма — красные
- * (З4, fail-closed). Нюанс (эмпирика 2026-11-13): it.fails в Vitest-отчёте
- * неотличим от честного теста — его и подавляющие комментарии ловит
- * regex-гейт check-test-integrity.ts, а не этот.
+ * (З4, fail-closed). Пустой dry-граф при --affected — зелёный: ни одна задача
+ * не гонялась, требовать нечего (docs-only PR); без --affected пустой набор —
+ * красный (опечатка в имени задачи должна быть громкой).
+ *
+ * Нюанс (эмпирика 2026-11-13): it.fails в Vitest-отчёте неотличим от честного
+ * теста — его и подавляющие комментарии ловит regex-гейт
+ * check-test-integrity.ts, а не этот.
+ *
+ * Остаточный риск: содержимое отчёта производит код PR (суффикс в test-скрипте
+ * package.json или запись в reports/ из теста может подсунуть чистый отчёт).
+ * Гейт дополняет реальный прогон тестов в том же job, reports/ вне git; против
+ * активной подделки — ревью правок тест-скриптов и мутационное тестирование.
  *
  * Аргументы: [--from-turbo <task>] [--affected] [--graph <dry.json>]
  * [--only <path>]... [--expect-project <name>]... [--cwd <dir>].
@@ -35,6 +44,22 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 const BOOLEAN_FLAGS = new Set(['affected']);
 
 const problems: string[] = [];
+
+// Поля отчёта приходят из недоверенного входа: перевод строки подделает
+// строчки лога шага (log injection), управляющие символы — замусорят его.
+// Без regex: oxlint запрещает управляющие символы в регулярных выражениях.
+function clean(value: string): string {
+  let result = '';
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code < 0x20 || code === 0x7f) {
+      result += code === 10 ? '\\n' : code === 9 ? '\\t' : `\\x${code.toString(16)}`;
+    } else {
+      result += char;
+    }
+  }
+  return result;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -183,8 +208,8 @@ function checkVitestReport(report: Record<string, unknown>, label: string, root:
         problems.push(`${file}: assertion without status`);
         continue;
       }
-      const fullName = typeof raw['fullName'] === 'string' ? raw['fullName'] : '(unnamed)';
-      const { status } = raw;
+      const fullName = typeof raw['fullName'] === 'string' ? clean(raw['fullName']) : '(unnamed)';
+      const status = clean(raw['status']);
       if (status === 'skipped' || status === 'todo' || status === 'pending') {
         problems.push(`${file}: ${status} test "${fullName}"`);
       } else if (status !== 'passed' && status !== 'failed') {
@@ -217,15 +242,15 @@ function checkPlaywrightSuites(suites: unknown, label: string, seenProjects: Set
       if (!isRecord(spec) || !Array.isArray(spec['tests'])) {
         continue;
       }
-      const file = typeof spec['file'] === 'string' ? spec['file'] : '(unknown file)';
-      const title = typeof spec['title'] === 'string' ? spec['title'] : '(unnamed)';
+      const file = typeof spec['file'] === 'string' ? clean(spec['file']) : '(unknown file)';
+      const title = typeof spec['title'] === 'string' ? clean(spec['title']) : '(unnamed)';
       for (const test of spec['tests']) {
         testCount += 1;
         if (!isRecord(test) || typeof test['expectedStatus'] !== 'string') {
           problems.push(`${file}: test without expectedStatus`);
           continue;
         }
-        const { expectedStatus } = test;
+        const expectedStatus = clean(test['expectedStatus']);
         if (expectedStatus === 'skipped' || expectedStatus === 'failed') {
           problems.push(`${file}: expectedStatus "${expectedStatus}" for "${title}"`);
         } else if (expectedStatus !== 'passed') {
@@ -264,6 +289,7 @@ function checkPlaywrightReport(
 }
 
 const argv = parseArgs(process.argv.slice(2));
+const affected = argv['affected'] !== undefined;
 const root = resolve(argv['cwd']?.[0] ?? process.cwd());
 
 const expected: ExpectedReport[] = [];
@@ -284,13 +310,24 @@ if (fromTurbo !== undefined) {
       );
     }
   } else {
-    graph = turboGraph(fromTurbo, argv['affected'] !== undefined, root);
+    graph = turboGraph(fromTurbo, affected, root);
   }
   if (graph !== null) {
     expected.push(...expectedFromGraph(graph, fromTurbo, root));
   }
 }
 const requiredProjects = argv['expect-project'] ?? [];
+
+// docs-only PR: --affected оставляет ноль runnable-задач — проверять нечего,
+// это зелёный пустой прогон, а не ошибка. Без --affected пустой набор означает
+// опечатку в имени задачи или сломанный граф — красный (З4).
+if (expected.length === 0 && affected && problems.length === 0 && fromTurbo !== undefined) {
+  console.log(`test report: ok (0 affected ${fromTurbo} tasks — nothing to check)`);
+  process.exit(0);
+}
+if (expected.length === 0 && problems.length === 0) {
+  problems.push('no reports to check: pass --only or --from-turbo');
+}
 
 let checked = 0;
 for (const { path, fromTask } of expected) {
@@ -299,9 +336,18 @@ for (const { path, fromTask } of expected) {
     problems.push(`${label}: report is missing — run the tests that produce it`);
     continue;
   }
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    problems.push(
+      `${label}: not readable (${error instanceof Error ? error.message : String(error)})`,
+    );
+    continue;
+  }
   let report: unknown;
   try {
-    report = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    report = JSON.parse(text) as unknown;
   } catch (error) {
     problems.push(
       `${label}: not valid JSON (${error instanceof Error ? error.message : String(error)})`,
@@ -318,9 +364,6 @@ for (const { path, fromTask } of expected) {
   } else {
     checkVitestReport(report, label, root);
   }
-}
-if (expected.length === 0 && problems.length === 0) {
-  problems.push('no reports to check: pass --only or --from-turbo');
 }
 
 if (problems.length > 0) {
