@@ -181,8 +181,15 @@ export const CANARIES: GateCanary[] = [
     full: true,
     failedStep: 'bundle',
     expect: /бюджет|budget/i,
-    apply: (root) =>
-      write(root, 'apps/web/src/evil-bloat.ts', `export const evilBloat = '${BLOAT}';\n`),
+    apply: (root) => {
+      // Side-effect (console.log) на верхнем уровне в __root: orphan-модуль без
+      // импорта tree-shaken, раздуваем существующий entry-чанк; типобезопасно —
+      // иначе в worktree падает typecheck, а не bundle.
+      const path = join(root, 'apps/web/src/routes/__root.tsx');
+      const source = readFileSync(path, 'utf8');
+      const content = `${source}\nconst evilBloatProbe = '${BLOAT}';\nconsole.log(evilBloatProbe.length);\n`;
+      writeFileSync(path, content);
+    },
   },
   {
     name: 'незакрытая ссылка в docs',
