@@ -7,6 +7,7 @@ export interface HookInput {
   tool_input?: Record<string, unknown>;
   cwd?: string;
   stop_hook_active?: boolean;
+  source?: string;
 }
 
 export const projectDir = process.env['CLAUDE_PROJECT_DIR'] ?? process.cwd();
@@ -52,6 +53,9 @@ export async function readHookInput(): Promise<HookInput> {
   }
   if (typeof parsed['stop_hook_active'] === 'boolean') {
     input.stop_hook_active = parsed['stop_hook_active'];
+  }
+  if (typeof parsed['source'] === 'string') {
+    input.source = parsed['source'];
   }
   return input;
 }

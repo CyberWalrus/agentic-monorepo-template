@@ -43,7 +43,13 @@ function localChain(entry: string): { files: string[]; external: string[] } {
 // stop-verify.ts пока не в списке: он всё ещё читает отчёт verify через zod,
 // его fail-closed закрытие входит в roadmap A2 пункт 2 (PR по merge-base).
 describe('hooks are dependency-free', () => {
-  for (const name of ['lib.ts', 'guard-bash.ts', 'protect-paths.ts', 'session-start.ts']) {
+  for (const name of [
+    'lib.ts',
+    'guard-bash.ts',
+    'protect-paths.ts',
+    'protect-result.ts',
+    'session-start.ts',
+  ]) {
     it(`${name} imports nothing from node_modules`, () => {
       const { files, external } = localChain(resolve(HOOKS_DIR, name));
       expect(files.length, 'import chain is discovered').toBeGreaterThanOrEqual(1);
