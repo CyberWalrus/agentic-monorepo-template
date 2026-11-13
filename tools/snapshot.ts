@@ -101,8 +101,9 @@ export function stateDir(projectDir: string, sessionId: string): string {
 /**
  * Корень state доступен на запись только владельцу. На Linux /tmp общий: чужой
  * заранее созданный каталог с записью для всех позволил бы подменять копии.
+ * Экспортируется и для state других хуков (отпечаток stop-verify).
  */
-function ensureStateRoot(): void {
+export function ensureStateRoot(): void {
   let existing;
   try {
     existing = statSync(STATE_ROOT);
