@@ -47,6 +47,9 @@ jobs:
       - run: pnpm test:hooks
       # Корневой vitest вне turbo: его отчёт проверяется здесь явным --only (A3).
       - run: pnpm test:report --only reports/vitest-hooks.json
+      # Храповик здесь сравнит только hooks-строку базлайна (остальные отчёты
+      # пишет job unit): корневые хуки не остаются без проверки числа тестов.
+      - run: pnpm test:count
       - run: pnpm sandbox:check
       - run: pnpm docs:check
       - run: pnpm --filter @repo/contracts openapi:check
@@ -66,7 +69,8 @@ jobs:
       # у прогона выше: на merge_group и push оба без --affected.
       - run: pnpm test:report --from-turbo test $AFFECTED
       # Храповик числа тестов (З7, A3): warning-only, предупреждение идёт в сводку PR.
-      - run: pnpm test:count | tee "$GITHUB_STEP_SUMMARY"
+      # pipefail: краш чекера не должен маскироваться exit-кодом tee.
+      - run: set -o pipefail && pnpm test:count | tee "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

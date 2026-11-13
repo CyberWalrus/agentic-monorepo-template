@@ -7,21 +7,27 @@
  * не должен молча ослепнуть.
  *
  * Базлайн — map «путь отчёта → число тестов», он же перечисляет, что храповик
- * смотрит (те же JSON-отчёты, что пишет гейт test-report). Отчёт, которого
- * нет (turbo --affected не гонял пакет), молча пропускается: сравнивается
- * только реально гонявшееся. База для сравнения базлайна: --merge-base <ref>,
- * иначе env TURBO_SCM_BASE, иначе origin/main → main → HEAD.
+ * смотрит: vitest-отчёты гейт-пакетов и корневых хуков. Playwright-отчёты
+ * (e2e/perf) не считаются — удаление e2e-теста сейчас не видит ни один гейт.
+ * Отчёт, которого нет (turbo --affected не гонял пакет), молча пропускается:
+ * сравнивается только реально гонявшееся. База для сравнения базлайна:
+ * --merge-base <ref>, иначе env TURBO_SCM_BASE, иначе origin/main → main → HEAD.
  *
  * `pnpm test:count:update` (--update) поднимает числа и добавляет новые
  * отчёты; понижать и удалять не умеет — ослабить храповик им нельзя (З7).
  * Автоматически порог может только ужесточаться; когда человек решит сделать
  * гейт блокирующим, файл базлайна уходит в protected-paths.
  *
+ * Остаточные риски: гейт вызывается через скрипт в package.json, который не
+ * защищён — агент может перепривязать `test:count` или подсунуть --baseline
+ * на собственный файл без предупреждений (против этого — ревью правок
+ * тест-скриптов; то же задокументировано в check-test-report.ts).
+ *
  * Аргументы: [--cwd <dir>] [--baseline <path>] [--merge-base <ref>] [--update].
  * --cwd/--baseline/--merge-base — для тестов.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { glob } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -34,6 +40,21 @@ const REPORT_PATTERNS = [
 
 const warnings: string[] = [];
 const hints: string[] = [];
+
+// Ключи базлайна и ref из окружения попадают в вывод и в сводку PR
+// (log/markdown injection) — управляющие символы экранируются.
+function clean(value: string): string {
+  let result = '';
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code < 0x20 || code === 0x7f) {
+      result += code === 10 ? '\\n' : code === 9 ? '\\t' : `\\x${code.toString(16)}`;
+    } else {
+      result += char;
+    }
+  }
+  return result;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -71,7 +92,7 @@ function readReportTotal(path: string): number | null {
     const report = JSON.parse(readFileSync(path, 'utf8')) as unknown;
     const total = isRecord(report) ? report['numTotalTests'] : undefined;
     if (typeof total !== 'number') {
-      warnings.push(`${path}: report unreadable ("numTotalTests" is not a number)`);
+      warnings.push(`${clean(path)}: report unreadable ("numTotalTests" is not a number)`);
       return null;
     }
     return total;
@@ -164,7 +185,10 @@ if (argv['update'] !== undefined) {
   const sorted = Object.fromEntries(
     Object.entries(baseline).toSorted(([a], [b]) => a.localeCompare(b)),
   );
-  writeFileSync(baselinePath, `${JSON.stringify(sorted, null, 2)}\n`);
+  // temp+rename: обрыв записи не оставляет усечённый базлайн.
+  const tempPath = `${baselinePath}.tmp`;
+  writeFileSync(tempPath, `${JSON.stringify(sorted, null, 2)}\n`);
+  renameSync(tempPath, baselinePath);
   if (lowered > 0) {
     console.log(`test count: updated with ${raised} raise(s); ${lowered} decrease(s) refused`);
   } else {
@@ -173,28 +197,35 @@ if (argv['update'] !== undefined) {
   process.exit(0);
 }
 
-// Понижение базлайна против merge-base: ослабление храповика видно в PR
-// наравне с падением числа тестов.
+// Понижение и удаление записей базлайна против merge-base: ослабление
+// храповика видно в PR наравне с падением числа тестов. Сравнение по
+// объединению ключей — удалённый ключ иначе обходит проверку молча.
 const baseRef = resolveBaseRef(root, argv['merge-base']?.[0]);
 if (baseline !== null && baseRef !== null) {
   const baseText = git(['show', `${baseRef}:test-count-baseline.json`], root);
   if (baseText !== null) {
     try {
-      const parsed = JSON.parse(baseText) as unknown;
-      if (isRecord(parsed) && Object.values(parsed).every((value) => typeof value === 'number')) {
-        const baseBaseline = parsed;
-        for (const key of Object.keys(baseline).toSorted()) {
-          const baseValue = baseBaseline[key];
-          const currentValue = baseline[key];
-          if (
-            typeof baseValue === 'number' &&
-            currentValue !== undefined &&
-            currentValue < baseValue
-          ) {
-            warnings.push(
-              `test-count-baseline.json: baseline for "${key}" lowered vs ${baseRef}: ${baseValue} → ${currentValue} — a ratchet must only tighten; justify in the PR description`,
-            );
+      const parsed: Record<string, number> = {};
+      const raw: unknown = JSON.parse(baseText);
+      if (isRecord(raw)) {
+        for (const [key, value] of Object.entries(raw)) {
+          if (typeof value === 'number') {
+            parsed[key] = value;
           }
+        }
+      }
+      const keys = [...new Set([...Object.keys(parsed), ...Object.keys(baseline)])].toSorted();
+      for (const key of keys) {
+        const baseValue = parsed[key];
+        const currentValue = baseline[key];
+        if (currentValue === undefined) {
+          warnings.push(
+            `test-count-baseline.json: baseline entry "${clean(key)}" removed vs ${clean(baseRef)} (was ${baseValue}) — a ratchet must only tighten; justify in the PR description`,
+          );
+        } else if (baseValue !== undefined && currentValue < baseValue) {
+          warnings.push(
+            `test-count-baseline.json: baseline for "${clean(key)}" lowered vs ${clean(baseRef)}: ${baseValue} → ${currentValue} — a ratchet must only tighten; justify in the PR description`,
+          );
         }
       }
     } catch {
@@ -220,11 +251,11 @@ if (baseline !== null) {
     compared += 1;
     if (total < expected) {
       warnings.push(
-        `${key}: test count decreased: ${expected} → ${total} — skipped or deleted tests hide regressions; justify in the PR description`,
+        `${clean(key)}: test count decreased: ${expected} → ${total} — skipped or deleted tests hide regressions; justify in the PR description`,
       );
     } else if (total > expected) {
       hints.push(
-        `${key}: tests grew ${expected} → ${total} — run pnpm test:count:update to raise the baseline`,
+        `${clean(key)}: tests grew ${expected} → ${total} — run pnpm test:count:update to raise the baseline`,
       );
     }
   }

@@ -64,12 +64,15 @@ function gitFixture(baselineAtBase: string, baselineAtHead: string): string {
   git(['init', '-q']);
   git(['config', 'user.email', 'canary@example.com']);
   git(['config', 'user.name', 'canary']);
+  // Глобальный git-конфиг машины (gpgsign, hooksPath) не должен ломать fixture.
+  const neutral = ['-c', 'commit.gpgsign=false', '-c', `core.hooksPath=${join(dir, '.nohooks')}`];
+  mkdirSync(join(dir, '.nohooks'), { recursive: true });
   writeFileSync(join(dir, 'test-count-baseline.json'), baselineAtBase);
   git(['add', '.']);
-  git(['commit', '-qm', 'base']);
+  git([...neutral, 'commit', '-qm', 'base']);
   writeFileSync(join(dir, 'test-count-baseline.json'), baselineAtHead);
   git(['add', '.']);
-  git(['commit', '-qm', 'head']);
+  git([...neutral, 'commit', '-qm', 'head']);
   return dir;
 }
 
@@ -109,7 +112,7 @@ it('отсутствующий отчёт (не затронут в --affected) 
   expect(result.output).not.toMatch(/ui/);
 });
 
-it('понижение базлайна против merge-base — WARNING с именем файла', () => {
+it('понижение базлайна против merge-base — WARNING с именем файла и обоими числами', () => {
   const dir = gitFixture(
     JSON.stringify({ 'apps/api/reports/vitest.json': 18 }),
     JSON.stringify({ 'apps/api/reports/vitest.json': 10 }),
@@ -120,8 +123,48 @@ it('понижение базлайна против merge-base — WARNING с �
   const result = runChecker(dir, ['--merge-base', 'HEAD~1']);
   expect(result.status).toBe(0);
   expect(result.output).toMatch(/WARNING/);
-  expect(result.output).toMatch(/baseline.*lowered|lowered.*baseline|понижен/i);
+  expect(result.output).toMatch(/lowered/);
   expect(result.output).toContain('test-count-baseline.json');
+  expect(result.output).toContain('apps/api/reports/vitest.json');
+  expect(result.output).toContain('18');
+  expect(result.output).toContain('10');
+});
+
+it('удаление записи базлайна против merge-base — WARNING (иначе обход молча)', () => {
+  const dir = gitFixture(
+    JSON.stringify({ 'apps/api/reports/vitest.json': 18, 'reports/vitest-hooks.json': 5 }),
+    JSON.stringify({ 'apps/api/reports/vitest.json': 18 }),
+  );
+  const result = runChecker(dir, ['--merge-base', 'HEAD~1']);
+  expect(result.status).toBe(0);
+  expect(result.output).toMatch(/WARNING/);
+  expect(result.output).toContain('removed');
+  expect(result.output).toContain('reports/vitest-hooks.json');
+  expect(result.output).toContain('test-count-baseline.json');
+});
+
+it('нечитаемый отчёт при валидном базлайне — WARNING на файл', () => {
+  const f = fixture();
+  f.write(BASELINE, {});
+  mkdirSync(join(f.dir, 'apps/api/reports'), { recursive: true });
+  writeFileSync(join(f.dir, 'apps/api/reports/vitest.json'), '{broken json');
+  const result = runChecker(f.dir);
+  expect(result.status).toBe(0);
+  const warnings = result.output.split('\n').filter((line) => line.startsWith('WARNING:'));
+  expect(warnings).toHaveLength(1);
+  expect(result.output).toMatch(/report unreadable/);
+  expect(result.output).toContain('apps/api/reports/vitest.json');
+});
+
+it('не-число в базлайне — весь базлайн нечитаем (WARNING, exit 0)', () => {
+  const f = fixture();
+  f.write({ 'apps/api/reports/vitest.json': 18, 'reports/vitest-hooks.json': 'not-a-number' }, {});
+  const result = runChecker(f.dir);
+  expect(result.status).toBe(0);
+  const warnings = result.output.split('\n').filter((line) => line.startsWith('WARNING:'));
+  expect(warnings).toHaveLength(1);
+  expect(result.output).toMatch(/baseline is unreadable/);
+  expect(result.output).toContain('reports/vitest-hooks.json');
 });
 
 it('битый и отсутствующий базлайн — WARNING, не красный (гейт warning-only)', () => {
