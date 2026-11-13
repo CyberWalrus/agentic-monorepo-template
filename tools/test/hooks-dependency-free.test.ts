@@ -40,8 +40,8 @@ function localChain(entry: string): { files: string[]; external: string[] } {
   return { files, external };
 }
 
-// stop-verify.ts пока не в списке: он всё ещё читает отчёт verify через zod,
-// его fail-closed закрытие входит в roadmap A2 пункт 2 (PR по merge-base).
+// stop-verify.ts в списке с 2026-11-13: zod убран, отчёт verify валидируется
+// вручную, неожиданная ошибка закрывается обёрткой (exit 2).
 describe('hooks are dependency-free', () => {
   for (const name of [
     'lib.ts',
@@ -49,6 +49,7 @@ describe('hooks are dependency-free', () => {
     'protect-paths.ts',
     'protect-result.ts',
     'session-start.ts',
+    'stop-verify.ts',
   ]) {
     it(`${name} imports nothing from node_modules`, () => {
       const { files, external } = localChain(resolve(HOOKS_DIR, name));
