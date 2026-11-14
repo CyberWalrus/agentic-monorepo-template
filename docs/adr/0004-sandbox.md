@@ -2,7 +2,7 @@
 
 - Статус: принято (внедрено 2026-11-13, roadmap A2 пункт 4 — последняя закрытая часть A2)
 - Дата: 2026-11-13
-- Контекст: [architecture.md](../architecture.md) (З4, З10), [roadmap.md](../roadmap.md) (задача A2, «Порядок работ»), [ADR 0003](0003-result-based-protection.md)
+- Контекст: [architecture.md](../architecture.md) (З4, З10), задача A2, [ADR 0003](0003-result-based-protection.md)
 
 ## Проблема
 

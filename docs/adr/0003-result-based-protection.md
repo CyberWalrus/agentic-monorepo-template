@@ -2,7 +2,7 @@
 
 - Статус: принято (внедрено 2026-11-13, roadmap A2 пункт 1)
 - Дата: 2026-11-13
-- Контекст: [architecture.md](../architecture.md) (З3, З4), [roadmap.md](../roadmap.md) (задача A2), [ADR 0002](0002-gate-integrity.md)
+- Контекст: [architecture.md](../architecture.md) (З3, З4), задача A2, [ADR 0002](0002-gate-integrity.md)
 
 ## Проблема
 
