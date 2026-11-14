@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "prepare": "if [ -d .git ]; then lefthook install; fi",
+    "prepare": "if [ -e .git ]; then lefthook install; fi",
     "dev": "node tools/dev.ts",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
