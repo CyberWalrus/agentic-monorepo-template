@@ -8,6 +8,8 @@ import {
 
 import { orpc } from '../../lib/api-client.ts';
 
+import { applyTaskToggle, rollbackTaskToggle } from './task-cache.ts';
+
 const listKey = orpc.tasks.list.queryKey();
 
 export const tasksListQuery = orpc.tasks.list.queryOptions();
@@ -50,17 +52,17 @@ export function useToggleTask() {
   return async (id: string) => {
     // Оптимистичное обновление синхронно в обработчике клика: управляемый чекбокс
     // не откатывается ни на кадр. Кэш — единственный источник правды, без оверлеев.
+    // Логика над данными кэша — в task-cache.ts, здесь только применение к query-кэшу.
     const previous = queryClient.getQueryData<Task[]>(listKey);
-    queryClient.setQueryData<Task[]>(listKey, (tasks) =>
-      tasks?.map((task) => (task.id === id ? { ...task, completed: !task.completed } : task)),
-    );
+    queryClient.setQueryData<Task[]>(listKey, (tasks) => applyTaskToggle(tasks, id));
     // Устаревший refetch в полёте не должен затереть оптимистичные данные.
     await queryClient.cancelQueries({ queryKey: listKey }, { revert: false });
     try {
       await mutation.mutateAsync({ id });
     } catch (error) {
-      if (previous) {
-        queryClient.setQueryData(listKey, previous);
+      const restored = rollbackTaskToggle(previous);
+      if (restored) {
+        queryClient.setQueryData(listKey, restored);
       }
       throw error;
     }
