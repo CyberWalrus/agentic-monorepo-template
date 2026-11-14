@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
+import { collectA11yViolations } from '../testing/a11y.ts';
 import { TaskItem } from './TaskItem.tsx';
 
 const task = { id: 'task-1', title: 'Write the docs', completed: false };
@@ -39,5 +40,16 @@ describe('TaskItem', () => {
     await screen.getByRole('checkbox').click({ force: true });
 
     expect(onToggle).not.toHaveBeenCalled();
+  });
+
+  it('is accessible in both states', async () => {
+    const screen = await render(
+      <ul>
+        <TaskItem task={task} onToggle={() => {}} />
+        <TaskItem task={{ ...task, completed: true }} onToggle={() => {}} />
+      </ul>,
+    );
+
+    expect(await collectA11yViolations(screen.container), 'accessibility violations').toEqual([]);
   });
 });

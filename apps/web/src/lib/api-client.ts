@@ -8,9 +8,11 @@ import type { Contract } from '@repo/contracts';
  * Один origin (ADR 0005): браузер ходит в `/rpc` своего web-сервера (прокси на
  * API собирается при старте из env), SSR — напрямую в API. Адрес API никогда
  * не запекается в сборку: инвариант «в клиентском бандле нет localhost-адресов»
- * сканирует шаг `bundle` (tools/check-bundle.ts).
+ * сканирует шаг `bundle` (tools/check-bundle.ts). URL вычисляется на запрос,
+ * а не при импорте: node-тесты (router-gate.test.ts) импортируют эту цепочку
+ * без окружения SSR-процесса, и `location`/`API_URL` им не нужны.
  */
-const rpcUrl = import.meta.env.SSR ? `${serverApiUrl()}/rpc` : `${location.origin}/rpc`;
+const rpcUrl = () => (import.meta.env.SSR ? `${serverApiUrl()}/rpc` : `${location.origin}/rpc`);
 
 /** `API_URL` обязателен только в серверном процессе: без него SSR не отрендерит данные. */
 function serverApiUrl(): string {
