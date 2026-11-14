@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-react';
 
+import { collectA11yViolations } from '../testing/a11y.ts';
 import { TextField } from './TextField.tsx';
 
 describe('TextField', () => {
@@ -24,5 +25,12 @@ describe('TextField', () => {
     await expect.element(input).toHaveAttribute('aria-invalid', 'true');
     await expect.element(input).toHaveAccessibleDescription('Title is required');
     await expect.element(screen.getByRole('alert')).toHaveTextContent('Title is required');
+    expect(await collectA11yViolations(screen.container), 'accessibility violations').toEqual([]);
+  });
+
+  it('is accessible without an error', async () => {
+    const screen = await render(<TextField label="Title" placeholder="What needs to be done?" />);
+
+    expect(await collectA11yViolations(screen.container), 'accessibility violations').toEqual([]);
   });
 });

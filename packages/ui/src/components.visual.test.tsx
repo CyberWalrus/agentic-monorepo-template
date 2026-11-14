@@ -8,6 +8,9 @@ import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-react';
 
 import { Button } from './button/Button.tsx';
+import { ErrorState } from './error-state/ErrorState.tsx';
+import { NotFoundState } from './not-found-state/NotFoundState.tsx';
+import { PendingState } from './pending-state/PendingState.tsx';
 import { TaskItem } from './task-item/TaskItem.tsx';
 import { TextField } from './text-field/TextField.tsx';
 import './tokens.css';
@@ -68,5 +71,19 @@ describe('visual', () => {
     );
 
     await expect.element(screen.getByTestId('frame')).toMatchScreenshot('task-item-states');
+  });
+
+  it('Route states', async () => {
+    const screen = await render(
+      <Frame>
+        <div style={{ display: 'grid', gap: 16, width: '100%' }}>
+          <ErrorState onRetry={() => {}} />
+          <NotFoundState homeHref="/" homeLabel="Back to tasks" />
+          <PendingState />
+        </div>
+      </Frame>,
+    );
+
+    await expect.element(screen.getByTestId('frame')).toMatchScreenshot('route-states');
   });
 });

@@ -10,6 +10,7 @@
     "typecheck": "tsc"
   },
   "devDependencies": {
+    "@axe-core/playwright": "catalog:",
     "@playwright/test": "catalog:",
     "@repo/api": "workspace:*",
     "@repo/web": "workspace:*",

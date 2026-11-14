@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
+import { collectA11yViolations } from '../testing/a11y.ts';
 import { Button } from './Button.tsx';
 
 describe('Button', () => {
@@ -37,5 +38,17 @@ describe('Button', () => {
 
     expect(onClick).not.toHaveBeenCalled();
     await expect.element(screen.getByRole('button')).toBeDisabled();
+  });
+
+  it('is accessible in all variants', async () => {
+    const screen = await render(
+      <>
+        <Button>Primary</Button>
+        <Button variant="secondary">Secondary</Button>
+        <Button disabled>Disabled</Button>
+      </>,
+    );
+
+    expect(await collectA11yViolations(screen.container), 'accessibility violations').toEqual([]);
   });
 });
