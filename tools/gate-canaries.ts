@@ -361,6 +361,31 @@ export const CANARIES: GateCanary[] = [
     },
   },
   {
+    // Детерминированная метрика «число /rpc-запросов на сценарий» (З8, A6 PR-1):
+    // лишний запрос к API в сценарии роняет шаг perf своим порогом
+    // maxApiRequests. Плохое изменение — второй фетч списка на каждый create:
+    // оптимистичный UI не ломается, но счётчик запросов растёт.
+    name: 'лишний запрос к API',
+    steps: 'perf',
+    full: true,
+    failedStep: 'perf',
+    expect: /create-task/,
+    apply: (root) => {
+      const path = join(root, 'apps/web/src/features/tasks/use-tasks.ts');
+      const source = readFileSync(path, 'utf8');
+      // Сырой POST мимо React Query: fetchQuery вернул бы свежий кэш без сети
+      // (staleTime orpc), а здесь лишний запрос на проводе гарантирован.
+      const patched = source.replace(
+        '  return async (title: string) => {\n    await mutation.mutateAsync({ title });',
+        "  return async (title: string) => {\n    void fetch('/rpc/__canary__', { method: 'POST' });\n    await mutation.mutateAsync({ title });",
+      );
+      if (patched === source) {
+        throw new Error('canary anchor not found: useCreateTask body in use-tasks.ts');
+      }
+      writeFileSync(path, patched);
+    },
+  },
+  {
     // Версия Docker-образа Playwright в ci.yml равна каталогу @playwright/test
     // (З4/A8, один чекер check-visual-image.ts). Плохое изменение — сдвиг версии
     // образа внутри noble-формы: чекер краснеет сообщением с обеими версиями.

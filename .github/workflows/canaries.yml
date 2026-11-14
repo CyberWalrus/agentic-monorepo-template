@@ -42,7 +42,8 @@ jobs:
   canaries:
     name: canaries
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 45 мин: slow-канарейки с perf (A6 PR-1) на холодном кэше раннера.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         # Worktree канареек создаётся от HEAD в tmp: история не нужна.

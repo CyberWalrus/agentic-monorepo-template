@@ -86,7 +86,8 @@ function verifyInWorktree(
   if (full) {
     args.push('--full');
   }
-  const result = run(['pnpm', ...args], worktreeDir, full ? 600_000 : 300_000);
+  // full-кап 900 с: канарейка perf (A6 PR-1) на холодном кэше CI — сборка + ~3 мин перфа.
+  const result = run(['pnpm', ...args], worktreeDir, full ? 900_000 : 300_000);
   try {
     const parsed: unknown = JSON.parse(result.stdout);
     if (!isResultJson(parsed)) {
