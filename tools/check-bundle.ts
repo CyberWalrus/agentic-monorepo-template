@@ -53,6 +53,24 @@ if (bakedAddresses.length > 0) {
 
 const js = sizes.filter((s) => s.file.endsWith('.js'));
 const css = sizes.filter((s) => s.file.endsWith('.css'));
+
+// Turbo при cache-hit восстанавливает outputs, не подчищая чужие файлы: после
+// переключения источников рядом с актуальными чанками остаются чанки прошлой
+// сборки, и счётчик удваивается (наблюдалось 2026-11-14: 299.6/160 после
+// патча и отката). Признак смешанной сборки — больше одного entry-чанка.
+const entryChunks = js.filter((s) => /^index-.*\.js$/.test(s.file));
+if (entryChunks.length > 1) {
+  console.error(
+    [
+      `✗ Stale build output: ${entryChunks.length} entry chunks in ${assetsDir}:`,
+      ...entryChunks.map((s) => `  ${s.file} (${s.gzipKb.toFixed(1)} KB gzip)`),
+      '  Turbo cache restore does not prune files left by other builds.',
+      '  Rebuild clean: pnpm turbo run build --filter=@repo/web --force',
+    ].join('\n'),
+  );
+  process.exit(1);
+}
+
 const sum = (items: { gzipKb: number }[]) => items.reduce((total, item) => total + item.gzipKb, 0);
 
 const checks = [
