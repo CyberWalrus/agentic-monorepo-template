@@ -21,8 +21,10 @@ import { ensureStateRoot, stateDir } from '../../tools/snapshot.ts';
 
 const MAX_BLOCKS = 3;
 const VERIFY_TIMEOUT_MS = 280_000;
-/** Документация (*.md) verify не запускает; всё остальное — код. */
-const DOCS = /\.md$/;
+/** Документация (*.md) verify не запускает; всё остальное — код. Исключение —
+ * доска задач (backlog/**, ADR 0007): её проверяет docs:check, и правка задачи
+ * обязана довести verify до зелёного, как правка кода. */
+const DOCS = /^(?!backlog\/).*\.md$/;
 
 interface VerifyStep {
   name: string;
