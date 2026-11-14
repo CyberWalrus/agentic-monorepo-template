@@ -2,7 +2,7 @@
 
 - Статус: принято (внедрено 2026-11-12: PR#1 — workflow и инструменты, PR#2 — удаление исполнявшегося из PR job `protected-paths`; политика Actions id 13436, ruleset id 27137353)
 - Дата: 2026-11-12
-- Контекст: [architecture.md](../architecture.md) (З2, раздел 3.4–3.5), [roadmap.md](../roadmap.md) (задача A1 аудита 2026-11-12)
+- Контекст: [architecture.md](../architecture.md) (З2, раздел 3.4–3.5), задача A1 аудита 2026-11-12
 
 ## Проблема
 

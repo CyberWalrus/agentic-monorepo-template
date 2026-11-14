@@ -1,7 +1,10 @@
 import { API_URL, expect, test } from '../../fixtures.ts';
 
 test.describe('tasks', () => {
-  test('creates a task and shows it in the list @critical', async ({ page, uniqueTitle }) => {
+  test('creates a task and shows it in the list [AC-1] @critical', async ({
+    page,
+    uniqueTitle,
+  }) => {
     const title = uniqueTitle('Buy milk');
     await page.goto('/');
 
@@ -14,7 +17,7 @@ test.describe('tasks', () => {
     await expect(page.getByLabel('New task')).toHaveValue('');
   });
 
-  test('toggles a task and keeps the state after reload @critical', async ({
+  test('toggles a task and keeps the state after reload [AC-2] @critical', async ({
     page,
     uniqueTitle,
   }) => {
@@ -31,7 +34,7 @@ test.describe('tasks', () => {
     await expect(page.getByRole('checkbox', { name: title })).toBeChecked();
   });
 
-  test('shows a validation error for an empty title', async ({ page }) => {
+  test('shows a validation error for an empty title [AC-3]', async ({ page }) => {
     await page.goto('/');
 
     await page.getByRole('button', { name: 'Add task' }).click();
@@ -43,7 +46,11 @@ test.describe('tasks', () => {
   test.describe('without JavaScript', () => {
     test.use({ javaScriptEnabled: false });
 
-    test('server-renders existing tasks @critical', async ({ page, request, uniqueTitle }) => {
+    test('server-renders existing tasks [AC-4] @critical', async ({
+      page,
+      request,
+      uniqueTitle,
+    }) => {
       const title = uniqueTitle('Rendered on the server');
       const response = await request.post(`${API_URL}/api/tasks`, { data: { title } });
       expect(response.ok()).toBe(true);
