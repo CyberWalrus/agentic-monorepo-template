@@ -234,6 +234,24 @@ export const CANARIES: GateCanary[] = [
     apply: (root) => write(root, 'docs/evil-probe.md', '[ссылка в никуда](missing-file.md)\n'),
   },
   {
+    // Доска задач — инструкция, которой агент доверяет вслепую (ADR 0007, D3).
+    // Плохое изменение — ссылка depends_on на несуществующую задачу: шаг docs
+    // краснеет сообщением чекера доски в tools/check-docs.ts.
+    name: 'доска ссылается на несуществующую задачу',
+    steps: 'docs',
+    failedStep: 'docs',
+    expect: /depends_on/,
+    apply: (root) => {
+      const dir = join(root, 'backlog');
+      mkdirSync(dir, { recursive: true });
+      write(
+        root,
+        'backlog/evil-probe.md',
+        `---\ntitle: probe\ntype: change\npriority: low\ndepends_on: nonexistent-task\n---\n# probe\n\n## Журнал\n`,
+      );
+    },
+  },
+  {
     name: 'рассинхрон З10-пары',
     steps: 'sandbox',
     failedStep: 'sandbox',

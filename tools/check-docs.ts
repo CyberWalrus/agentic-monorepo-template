@@ -7,8 +7,12 @@
  * 2. Относительные markdown-ссылки ведут на существующие файлы, а якоря —
  *    на существующие заголовки или id (правила слагов как у GitHub, включая кириллицу).
  */
+import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { glob, readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
+
+import { dependencyCycles, invalidTouch, parseTask, type TaskFile } from './backlog-board.ts';
 
 const IGNORE =
   /(^|\/)(node_modules|dist|\.output|reports|test-results|playwright-report|coverage|\.turbo|\.git)(\/|$)/;
@@ -261,6 +265,102 @@ for await (const entry of glob('**/*.md', { withFileTypes: true })) {
     }
   }
 }
+
+// --- Часть 3: доска задач (ADR 0007, D3) ---------------------------------------
+
+// Доска — инструкция, которой агент доверяет вслепую, поэтому проверяется тем
+// же гейтом, что и остальная документация. Рабочее дерево совпадает с проверкой:
+// доску из main здесь не читаем — гейт гоняется в ветке задачи и обязан видеть
+// сам файл задачи.
+
+/**
+ * На ветке `task/<id>` среди существующих файлов доски меняется только свой:
+ * чужая задача или её блокирующие поля (depends_on, needs_human, touches)
+ * меняются только в PR (ADR 0007, «Проверка доски»). Правило проверяем только
+ * когда есть база для сравнения и каталог доски существует.
+ */
+function boardBranchRule(): void {
+  if (!existsSync('backlog')) {
+    return;
+  }
+  let branch = '';
+  let base = '';
+  try {
+    branch = execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim();
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', 'main'], { encoding: 'utf8' });
+    base = 'main';
+  } catch {
+    return;
+  }
+  if (!branch.startsWith('task/')) {
+    return;
+  }
+  const changed = execFileSync(
+    'git',
+    ['diff', '--name-only', '--no-renames', `${base}...HEAD`, '--', 'backlog/'],
+    { encoding: 'utf8' },
+  )
+    .split('\n')
+    .filter(Boolean);
+  const id = branch.slice('task/'.length);
+  const allowed = new Set([`backlog/${id}.md`, `backlog/done/${id}.md`]);
+  for (const file of changed) {
+    if (!allowed.has(file)) {
+      findings.push(
+        `${file}: на ветке task/${id} среди файлов доски меняется только свой файл; правки чужих задач идут отдельным PR`,
+      );
+    }
+  }
+}
+
+async function checkBoard(): Promise<void> {
+  if (!existsSync('backlog')) {
+    return;
+  }
+  const tasks: TaskFile[] = [];
+  const read = async (dir: string, done: boolean): Promise<void> => {
+    const entries = await readdir(dir).catch(() => []);
+    for (const name of entries.filter((entry) => entry.endsWith('.md'))) {
+      const id = path.basename(name, '.md');
+      const raw = await readFile(path.join(dir, name), 'utf8');
+      tasks.push(parseTask(id, raw, done));
+    }
+  };
+  await read('backlog', false);
+  await read('backlog/done', true);
+
+  const byId = new Map<string, TaskFile[]>();
+  for (const task of tasks) {
+    byId.set(task.id, [...(byId.get(task.id) ?? []), task]);
+  }
+  for (const [id, same] of byId) {
+    if (same.length > 1) {
+      findings.push(`backlog/: id «${id}» используется и в backlog/, и в backlog/done/ — дубль`);
+    }
+  }
+  for (const task of tasks) {
+    for (const dep of task.dependsOn) {
+      if (!byId.has(dep)) {
+        findings.push(
+          `backlog/${task.done ? 'done/' : ''}${task.id}.md: depends_on ссылается на несуществующую задачу «${dep}»`,
+        );
+      }
+    }
+    for (const touch of task.touches) {
+      const problem = invalidTouch(touch);
+      if (problem) {
+        findings.push(`backlog/${task.done ? 'done/' : ''}${task.id}.md: touches: ${problem}`);
+      }
+    }
+  }
+  const cycles = dependencyCycles(tasks);
+  if (cycles.length > 0) {
+    findings.push(`backlog/: цикл зависимостей depends_on: ${cycles.join(' → ')}`);
+  }
+  boardBranchRule();
+}
+
+await checkBoard();
 
 if (findings.length > 0) {
   console.error(findings.join('\n'));

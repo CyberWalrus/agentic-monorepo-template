@@ -27,6 +27,7 @@
     "CLAUDE.md",
     ".claude/agents/**",
     ".claude/skills/**",
-    "docs/adr/**"
+    "docs/adr/**",
+    "backlog/**"
   ]
 }
