@@ -12,6 +12,8 @@ test.describe('route states', () => {
     await page.getByRole('link', { name: 'Back to tasks' }).click();
 
     await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByRole('list', { name: 'Tasks' })).toBeVisible();
+    // Список может быть пуст: параллельные тесты не обязаны оставлять данные
+    // в общем API (З9). Заголовок есть при любом состоянии данных.
+    await expect(page.getByRole('heading', { name: 'Tasks' })).toBeVisible();
   });
 });

@@ -2,9 +2,15 @@ import { AxeBuilder } from '@axe-core/playwright';
 import { expect, test } from '../../fixtures.ts';
 
 test.describe('accessibility', () => {
-  // Скан после гидратации: страница уже отрисовала данные, DOM финальный.
-  test('home page has no accessibility violations', async ({ page }) => {
+  test('home page has no accessibility violations', async ({ page, uniqueTitle }) => {
     await page.goto('/');
+
+    // Своя задача (uniqueTitle): скан идёт по заполненной странице независимо
+    // от того, что параллельные тесты сделали с общими данными (З9). Форма
+    // активна только после гидратации — это и есть ожидание финального DOM.
+    const title = uniqueTitle('A11y probe');
+    await page.getByLabel('New task').fill(title);
+    await page.getByRole('button', { name: 'Add task' }).click();
 
     await expect(page.getByRole('list', { name: 'Tasks' })).toBeVisible();
 
