@@ -12,7 +12,13 @@ import { existsSync } from 'node:fs';
 import { glob, readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { dependencyCycles, invalidTouch, parseTask, type TaskFile } from './backlog-board.ts';
+import {
+  dependencyCycles,
+  ID_RE,
+  invalidTouch,
+  parseTask,
+  type TaskFile,
+} from './backlog-board.ts';
 
 const IGNORE =
   /(^|\/)(node_modules|dist|\.output|reports|test-results|playwright-report|coverage|\.turbo|\.git)(\/|$)/;
@@ -274,6 +280,31 @@ for await (const entry of glob('**/*.md', { withFileTypes: true })) {
 // сам файл задачи.
 
 /**
+ * id ветки задачи: авторитетна текущая ветка git (в worktree задачи она всегда
+ * настоящая — включая worktree канареек и тестов под CI, где GITHUB_HEAD_REF
+ * протекает из PR-контекста). GITHUB_HEAD_REF — только для detached HEAD,
+ * каким бывает checkout PR в Actions. id валидируется тем же ID_RE, что и
+ * файлы доски: недоверенный GITHUB_HEAD_REF не должен собрать путь вне
+ * backlog/ (defense-in-depth: дальше только existsSync).
+ */
+function taskBranchId(): string | null {
+  let branch = '';
+  try {
+    branch = execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim();
+  } catch {
+    branch = '';
+  }
+  if (branch === '' && process.env['GITHUB_HEAD_REF']) {
+    branch = process.env['GITHUB_HEAD_REF'];
+  }
+  if (!branch.startsWith('task/')) {
+    return null;
+  }
+  const id = branch.slice('task/'.length);
+  return ID_RE.test(id) ? id : null;
+}
+
+/**
  * На ветке `task/<id>` среди существующих файлов доски меняется только свой:
  * чужая задача или её блокирующие поля (depends_on, needs_human, touches)
  * меняются только в PR (ADR 0007, «Проверка доски»). Правило проверяем только
@@ -283,16 +314,15 @@ function boardBranchRule(): void {
   if (!existsSync('backlog')) {
     return;
   }
-  let branch = '';
+  const id = taskBranchId();
+  if (id === null) {
+    return;
+  }
   let base = '';
   try {
-    branch = execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim();
     execFileSync('git', ['rev-parse', '--verify', '--quiet', 'main'], { encoding: 'utf8' });
     base = 'main';
   } catch {
-    return;
-  }
-  if (!branch.startsWith('task/')) {
     return;
   }
   const changed = execFileSync(
@@ -302,7 +332,6 @@ function boardBranchRule(): void {
   )
     .split('\n')
     .filter(Boolean);
-  const id = branch.slice('task/'.length);
   const allowed = new Set([`backlog/${id}.md`, `backlog/done/${id}.md`]);
   for (const file of changed) {
     if (!allowed.has(file)) {
@@ -310,6 +339,28 @@ function boardBranchRule(): void {
         `${file}: на ветке task/${id} среди файлов доски меняется только свой файл; правки чужих задач идут отдельным PR`,
       );
     }
+  }
+}
+
+/**
+ * Замыкание задачи (ADR 0007, «Замыкание задачи»): на ветке task/<id> файл
+ * задачи обязан быть перенесён в backlog/done/. Перенос делается сразу после
+ * захвата, поэтому правило детерминированно краснеть и в середине работы
+ * (рабочее дерево), и на финальном PR (CI по GITHUB_HEAD_REF): «забыл
+ * перенести перед merge» становится невозможным состоянием.
+ */
+function closureRule(): void {
+  if (!existsSync('backlog')) {
+    return;
+  }
+  const id = taskBranchId();
+  if (id === null) {
+    return;
+  }
+  if (existsSync(path.join('backlog', `${id}.md`))) {
+    findings.push(
+      `backlog/${id}.md: на ветке task/${id} файл задачи всё ещё открыт — перенеси его в backlog/done/ тем же PR: git mv backlog/${id}.md backlog/done/${id}.md и дополни «Журнал» итогом (ADR 0007, «Замыкание задачи»)`,
+    );
   }
 }
 
@@ -358,6 +409,7 @@ async function checkBoard(): Promise<void> {
     findings.push(`backlog/: цикл зависимостей depends_on: ${cycles.join(' → ')}`);
   }
   boardBranchRule();
+  closureRule();
 }
 
 await checkBoard();

@@ -4,8 +4,10 @@
  *   pnpm backlog list            доска со статусами
  *   pnpm backlog next            следующая свободная задача (или состояние текущей)
  *   pnpm backlog start <id>      захват веткой task/<id> + рабочее место (worktree)
+ *   pnpm backlog close <id>      закрыть: git mv backlog/<id>.md backlog/done/ (ADR 0007, «Замыкание задачи»)
  *   pnpm backlog resume <id>     продолжить брошенную по поручению человека
  *   pnpm backlog release <id>    освободить задачу (только человек, интерактивный терминал)
+ *   pnpm backlog doctor          расхождения «смержена — доска не знает» (локально и nightly)
  *
  * Доска читается из ссылки main (а не из рабочего дерева): у каждого worktree
  * своё дерево, а ветка не должна снимать с себя блокировку (З2). Если ссылки
@@ -14,11 +16,12 @@
  * ссылки git общие для всех worktree клона, создание атомарно.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 import {
   dependencyCycles,
+  doctorFindings,
   parseTask,
   PRIORITIES,
   statusOf,
@@ -43,6 +46,19 @@ function git(...args: string[]): string {
 function tryGit(...args: string[]): string | null {
   try {
     return git(...args);
+  } catch {
+    return null;
+  }
+}
+
+/** Запуск внешней команды (gh): null при любой неудаче — вызывающий печатает причину (З11). */
+function tryRun(file: string, args: string[]): string | null {
+  try {
+    return execFileSync(file, args, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 10_000,
+    }).trim();
   } catch {
     return null;
   }
@@ -405,6 +421,115 @@ function commandRelease(id: string): void {
   );
 }
 
+// --- close / doctor -------------------------------------------------------------
+
+function commandClose(id: string, source: BoardSource): void {
+  const task = source.tasks.find((item) => item.id === id);
+  if (!task) {
+    die(`Задачи ${id} нет на доске (из ${source.ref ?? 'рабочего дерева'}).`);
+  }
+  if (task.done) {
+    die(`Задача ${id} уже закрыта (backlog/done/${id}.md в ${source.ref ?? 'рабочем дереве'}).`);
+  }
+  const current = git('branch', '--show-current');
+  if (current.startsWith('task/') && current !== `task/${id}`) {
+    die(
+      `На ветке ${current} закрывается только своя задача (${current.slice('task/'.length)}). Задачу ${id} закрывает её PR или отдельный PR гигиены.`,
+    );
+  }
+  const openPath = path.join(repoRoot(), 'backlog', `${id}.md`);
+  if (!existsSync(openPath)) {
+    die(
+      `backlog/${id}.md нет в рабочем дереве: перенос уже сделан или файл задачи ещё не в этой ветке. Ветка задачи обязана нести перенос (ADR 0007, «Замыкание задачи»).`,
+    );
+  }
+  mkdirSync(path.join(repoRoot(), 'backlog', 'done'), { recursive: true });
+  git('mv', `backlog/${id}.md`, `backlog/done/${id}.md`);
+  console.log(
+    `Задача ${id}: файл перенесён в backlog/done/${id}.md.\nДополни «Журнал» итогом (что смержено, что дальше) и включи перенос в свой PR — доска обновится после merge.`,
+  );
+}
+
+/** id веток task/*, попавших в main по GitHub API; null, если gh недоступен. */
+function mergedViaGh(): Set<string> | null {
+  const raw = tryRun('gh', [
+    'pr',
+    'list',
+    '--state',
+    'merged',
+    '--limit',
+    '300',
+    '--json',
+    'headRefName',
+    '--jq',
+    '.[].headRefName',
+  ]);
+  if (raw === null) {
+    return null;
+  }
+  return new Set(
+    raw
+      .split('\n')
+      .filter((branch) => branch.startsWith('task/'))
+      .map((branch) => branch.slice('task/'.length)),
+  );
+}
+
+/** Fallback без gh: git-предок. Сквош-merge такие ветки не видит — печатается причина (З11). */
+function mergedViaGit(ref: string, claims: string[]): Set<string> {
+  const merged = new Set<string>();
+  for (const id of claims) {
+    if (tryGit('merge-base', '--is-ancestor', `task/${id}`, ref) !== null) {
+      merged.add(id);
+    }
+  }
+  return merged;
+}
+
+function commandDoctor(source: BoardSource): void {
+  const claims = [...claimedIds()].toSorted();
+  const openIds = new Set(source.tasks.filter((task) => !task.done).map((task) => task.id));
+  const doneIds = new Set(source.tasks.filter((task) => task.done).map((task) => task.id));
+  let mergedIds = mergedViaGh();
+  if (mergedIds === null) {
+    console.error(
+      'gh недоступен: слияние определяю по предку в git — ветки после сквош-merge не увидены, сверка неполная.',
+    );
+    mergedIds = mergedViaGit(source.ref ?? 'main', claims);
+  }
+  const branchAgeHours = new Map<string, number>();
+  for (const id of claims) {
+    const timestamp = tryGit('log', '-1', '--format=%ct', `task/${id}`);
+    if (timestamp !== null && Number.isFinite(Number(timestamp))) {
+      branchAgeHours.set(id, Math.max(0, (Date.now() / 1000 - Number(timestamp)) / 3600));
+    }
+  }
+  const findings = doctorFindings({
+    openIds,
+    doneIds,
+    claimedIds: new Set(claims),
+    mergedIds,
+    branchAgeHours,
+  });
+  const blocking = findings.filter((finding) => finding.blocking);
+  const warnings = findings.filter((finding) => !finding.blocking);
+  if (blocking.length === 0 && warnings.length === 0) {
+    console.log('backlog doctor: расхождений нет.');
+    return;
+  }
+  for (const finding of blocking) {
+    console.error(finding.message);
+  }
+  for (const finding of warnings) {
+    console.error(`предупреждение: ${finding.message}`);
+  }
+  if (blocking.length > 0) {
+    die(
+      `${blocking.length} расхождений доски и веток. Чинить в PR гигиены: перенос файла или удаление ветки; doctor не ослаблять.`,
+    );
+  }
+}
+
 // --- Вход ------------------------------------------------------------------------
 
 const [command, id] = process.argv.slice(2);
@@ -414,9 +539,12 @@ if (cycles.length > 0) {
   die(`Доска содержит цикл зависимостей: ${cycles.join(' → ')}. Чинить в PR, не в ветке задачи.`);
 }
 
-if (command === undefined || !['list', 'next', 'start', 'resume', 'release'].includes(command)) {
+if (
+  command === undefined ||
+  !['list', 'next', 'start', 'close', 'resume', 'release', 'doctor'].includes(command)
+) {
   die(
-    'Команды доски (ADR 0007):\n  pnpm backlog list\n  pnpm backlog next\n  pnpm backlog start <id>\n  pnpm backlog resume <id>\n  pnpm backlog release <id>  — только человек',
+    'Команды доски (ADR 0007):\n  pnpm backlog list\n  pnpm backlog next\n  pnpm backlog start <id>\n  pnpm backlog close <id>    — закрыть: перенос файла в done/ тем же PR\n  pnpm backlog resume <id>\n  pnpm backlog release <id>  — только человек\n  pnpm backlog doctor        — расхождения «смержена — доска не знает»',
   );
 }
 
@@ -444,6 +572,15 @@ switch (command) {
       die('Укажи id: pnpm backlog start <id>');
     }
     commandStart(id, source);
+    break;
+  case 'close':
+    if (!id) {
+      die('Укажи id: pnpm backlog close <id>');
+    }
+    commandClose(id, source);
+    break;
+  case 'doctor':
+    commandDoctor(source);
     break;
   case 'resume':
     if (!id) {

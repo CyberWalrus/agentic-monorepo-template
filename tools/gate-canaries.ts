@@ -13,6 +13,7 @@
  * таковое ловят контуры L0 (хуки) и L3 (gate-integrity); локально канареечится
  * одностороннее ослабление З10-пары (канарейка sandbox).
  */
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -249,6 +250,35 @@ export const CANARIES: GateCanary[] = [
         'backlog/evil-probe.md',
         `---\ntitle: probe\ntype: change\npriority: low\ndepends_on: nonexistent-task\n---\n# probe\n\n## Журнал\n`,
       );
+    },
+  },
+  {
+    // Замыкание задачи (ADR 0007, «Замыкание задачи»): на ветке task/<id> файл
+    // задачи обязан лежать в backlog/done/. Плохое состояние — файл открыт на
+    // ветке задачи: шаг docs краснеет правилом closureRule в tools/check-docs.ts.
+    // Ветка создаётся прямо в worktree канарейки: правило смотрит на текущую
+    // ветку (или GITHUB_HEAD_REF в CI), а не на дифф. switch -C, а не -c: раннер
+    // между канарейками возвращает файлы (checkout+clean), но не ветки — ветка
+    // task/evil-probe остаётся от прошлого прогона и просто переуказывается.
+    // Сама ветка переживает прогон: git branch -d task/evil-probe, либо она
+    // переуказывается при следующем запуске.
+    name: 'файл задачи не перенесён в done/',
+    steps: 'docs',
+    failedStep: 'docs',
+    expect: /backlog\/done\//,
+    apply: (root) => {
+      write(
+        root,
+        'backlog/evil-probe.md',
+        `---\ntitle: probe\ntype: change\npriority: low\ndepends_on:\n---\n# probe\n\n## Журнал\n`,
+      );
+      const result = spawnSync('git', ['switch', '-C', 'task/evil-probe'], {
+        cwd: root,
+        encoding: 'utf8',
+      });
+      if (result.status !== 0) {
+        throw new Error(`canary setup failed: cannot create task/evil-probe: ${result.stderr}`);
+      }
     },
   },
   {

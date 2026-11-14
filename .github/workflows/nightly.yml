@@ -98,9 +98,25 @@ jobs:
           path: reports/verify-durations.json
           retention-days: 90
 
+  backlog-doctor:
+    name: backlog doctor
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # Полная история: doctor сверяет ветки task/* с доской (ADR 0007, «Замыкание задачи»).
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup
+      - run: pnpm backlog doctor
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   report:
     name: report failure
-    needs: [flake-hunt, mutation-full, perf-trend, gate-canaries, verify-budgets]
+    needs: [flake-hunt, mutation-full, perf-trend, gate-canaries, verify-budgets, backlog-doctor]
     if: failure()
     runs-on: ubuntu-latest
     steps:
