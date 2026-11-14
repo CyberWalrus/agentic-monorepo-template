@@ -12,7 +12,7 @@ description: Testing policy for this repo — which level to test at (unit, comp
 | Схемы, чистые функции, доменная логика      | unit                     | рядом с кодом, `*.test.ts`           | Vitest (node)                                               |
 | API: процедуры, ошибки, валидация, HTTP     | integration (in-process) | `apps/api/src/*.test.ts`             | Vitest + `app.request()` / oRPC-клиент с `fetch: app.fetch` |
 | Компонент: поведение, a11y, состояния       | component                | `*.test.tsx`                         | Vitest browser mode (реальный Chromium)                     |
-| Внешний вид компонента                      | visual                   | `components.visual.test.tsx`         | `toMatchScreenshot` (только в Docker)                       |
+| Внешний вид компонента                      | visual                   | `<Component>.visual.test.tsx`        | `toMatchScreenshot` (только в Docker)                       |
 | Пользовательский сценарий через всю систему | E2E                      | `e2e/features/<feature>/*.spec.ts`   | Playwright                                                  |
 | Внешний вид страницы                        | visual                   | `e2e/features/<feature>/*.visual.ts` | `toHaveScreenshot` (только в Docker)                        |
 | Скорость загрузки и сценариев               | perf                     | `e2e/perf/*.perf.ts`                 | Playwright + бюджеты                                        |
