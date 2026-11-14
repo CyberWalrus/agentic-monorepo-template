@@ -24,7 +24,7 @@ description: End-to-end workflow for building a feature or changing product beha
 
 ## 3. UI
 
-- Переиспользуемый визуальный элемент кладётся в `packages/ui/src/<component>/`: компонент, CSS module, `*.test.tsx` (поведение, a11y), сценарий в `components.visual.test.tsx`. Никакого домена и API.
+- Переиспользуемый визуальный элемент кладётся в `packages/ui/src/<component>/`: компонент, CSS module, `*.test.tsx` (поведение, a11y), сценарий в `<Component>.visual.test.tsx` рядом с компонентом. Никакого домена и API.
 - Экран и логика лежат в `apps/web/src/features/<feature>/`. Данные через TanStack Query (`orpc.<domain>.<proc>.queryOptions()`), мутации с инвалидацией после последней мутации (образец: `features/tasks/use-tasks.ts`).
 - До гидратации контролы `disabled` (`useHydrated` из `src/lib`).
 - Состояния: пусто / загрузка / ошибка / успех. Каждое видно пользователю и проверено тестом.
