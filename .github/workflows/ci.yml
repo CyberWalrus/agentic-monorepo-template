@@ -200,13 +200,14 @@ jobs:
           eval "$(node tools/ports.ts --env)"
           pnpm --filter @repo/api start &
           for _ in $(seq 1 30); do curl -sf "$API_URL/health" > /dev/null && break; sleep 1; done
-          k6 run e2e/perf/k6/api-smoke.js
+          k6 run --summary-export=reports/k6.json e2e/perf/k6/api-smoke.js
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: perf-report
           path: |
             reports/bundle.json
+            reports/k6.json
             e2e/reports/perf.json
             e2e/playwright-report/
           if-no-files-found: ignore

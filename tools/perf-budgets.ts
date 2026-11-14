@@ -6,6 +6,19 @@ const PageBudgetSchema = z.object({
   maxTtfbMs: z.number().positive(),
   maxLcpMs: z.number().positive(),
   maxCls: z.number().nonnegative(),
+  // Детерминированные метрики (A6 PR-1): запросы, wire-байты, LCP под Fast 3G.
+  maxRequests: z.number().int().nonnegative(),
+  maxApiRequests: z.number().int().nonnegative(),
+  maxJsWireKb: z.number().nonnegative(),
+  maxCssWireKb: z.number().nonnegative(),
+  maxLcpNetMs: z.number().positive(),
+});
+
+const ScenarioBudgetSchema = z.object({
+  maxMs: z.number().positive(),
+  // Число запросов к /rpc и long tasks (>50 мс) за сценарий (A6 PR-1).
+  maxApiRequests: z.number().int().nonnegative(),
+  maxLongTasks: z.number().int().nonnegative(),
 });
 
 export const PerfBudgetsSchema = z.object({
@@ -14,9 +27,11 @@ export const PerfBudgetsSchema = z.object({
       maxTotalJsGzipKb: z.number().positive(),
       maxLargestJsChunkGzipKb: z.number().positive(),
       maxTotalCssGzipKb: z.number().positive(),
+      // Дельта-гейт PR (A6 PR-2): рост total JS gzip от merge-base за один PR.
+      maxPrGrowthKb: z.number().positive(),
     }),
     pages: z.record(z.string(), PageBudgetSchema),
-    scenarios: z.record(z.string(), z.object({ maxMs: z.number().positive() })),
+    scenarios: z.record(z.string(), ScenarioBudgetSchema),
   }),
   api: z.object({
     maxP95Ms: z.number().positive(),

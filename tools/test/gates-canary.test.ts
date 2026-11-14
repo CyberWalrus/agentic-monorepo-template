@@ -15,10 +15,11 @@ import { allStepNames, fast, post, slow } from '../verify-steps.ts';
 const slowNames = new Set(slow.map((step) => step.name));
 
 // Шаги, которым канарейка по документированным причинам не нужна:
-// test-count — warning-only (exit 0 по контракту), e2e-report/perf —
-// тяжёлые, их время покрывают бюджеты nightly (architecture.md З6).
-// e2e канареечится с ADR 0005 (прокси /rpc) и в вайтлист больше не входит.
-const CANARY_EXEMPT_STEPS = new Set(['test-count', 'e2e-report', 'perf']);
+// test-count — warning-only (exit 0 по контракту), e2e-report — тяжёлый,
+// его время покрывают бюджеты nightly (architecture.md З6). e2e канареечится
+// с ADR 0005 (прокси /rpc), perf — с A6 PR-1 (лишний /rpc-запрос), в вайтлист
+// больше не входят.
+const CANARY_EXEMPT_STEPS = new Set(['test-count', 'e2e-report']);
 
 describe('таблица канареек гейтов', () => {
   const known = new Set(allStepNames);

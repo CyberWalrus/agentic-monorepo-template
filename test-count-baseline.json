@@ -3,5 +3,5 @@
   "apps/web/reports/vitest.json": 14,
   "packages/contracts/reports/vitest.json": 7,
   "packages/ui/reports/vitest.json": 11,
-  "reports/vitest-hooks.json": 256
+  "reports/vitest-hooks.json": 259
 }

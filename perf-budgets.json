@@ -4,14 +4,32 @@
     "bundle": {
       "maxTotalJsGzipKb": 160,
       "maxLargestJsChunkGzipKb": 130,
-      "maxTotalCssGzipKb": 10
+      "maxTotalCssGzipKb": 10,
+      "maxPrGrowthKb": 5
     },
     "pages": {
-      "/": { "maxTtfbMs": 400, "maxLcpMs": 1500, "maxCls": 0.05 }
+      "/": {
+        "maxTtfbMs": 400,
+        "maxLcpMs": 1500,
+        "maxCls": 0.05,
+        "maxRequests": 6,
+        "maxApiRequests": 0,
+        "maxJsWireKb": 155,
+        "maxCssWireKb": 3,
+        "maxLcpNetMs": 600
+      }
     },
     "scenarios": {
-      "create-task": { "maxMs": 600 },
-      "toggle-task": { "maxMs": 400 }
+      "create-task": {
+        "maxMs": 600,
+        "maxApiRequests": 10,
+        "maxLongTasks": 10
+      },
+      "toggle-task": {
+        "maxMs": 400,
+        "maxApiRequests": 10,
+        "maxLongTasks": 10
+      }
     }
   },
   "api": {
