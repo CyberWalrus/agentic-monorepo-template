@@ -12,12 +12,14 @@ describe('a11y helper canary', () => {
     container.append(image);
     document.body.append(container);
 
-    const violations = await collectA11yViolations(container);
+    try {
+      const violations = await collectA11yViolations(container);
 
-    expect(violations, 'axe must catch the missing alt text').toContainEqual(
-      expect.stringMatching(/^image-alt/),
-    );
-
-    container.remove();
+      expect(violations, 'axe must catch the missing alt text').toContainEqual(
+        expect.stringMatching(/^image-alt/),
+      );
+    } finally {
+      container.remove();
+    }
   });
 });
