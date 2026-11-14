@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   dependencyCycles,
+  DOCTOR_IDLE_HOURS,
+  doctorFindings,
   invalidTouch,
   parseTask,
   statusOf,
@@ -168,5 +170,90 @@ describe('touchesOverlap', () => {
     const inProgress = [withTouches('w', ['AGENTS.md'])];
     expect(touchesOverlap(withTouches('t', ['AGENTS.md']), inProgress)).toBe(true);
     expect(touchesOverlap(withTouches('t', ['AGENTS.md.bak']), inProgress)).toBe(false);
+  });
+});
+
+describe('doctorFindings', () => {
+  const baseFacts = {
+    openIds: new Set(['a1']),
+    doneIds: new Set<string>(),
+    claimedIds: new Set<string>(),
+    mergedIds: new Set<string>(),
+    branchAgeHours: new Map<string, number>(),
+  };
+
+  it('чистая доска — находок нет', () => {
+    expect(doctorFindings(baseFacts)).toEqual([]);
+  });
+
+  it('смержена, но открыта — блокирующее unclosed с указанием переноса', () => {
+    const findings = doctorFindings({ ...baseFacts, mergedIds: new Set(['a1']) });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ id: 'a1', kind: 'unclosed', blocking: true });
+    expect(findings[0]?.message).toContain('перенеси backlog/a1.md в backlog/done/');
+  });
+
+  it('закрыта, ветки нигде нет — не расхождение (GitHub помнит head смерженного PR вечно)', () => {
+    expect(
+      doctorFindings({
+        ...baseFacts,
+        openIds: new Set<string>(),
+        doneIds: new Set(['a1']),
+        mergedIds: new Set(['a1']),
+      }),
+    ).toEqual([]);
+  });
+
+  it('закрыта, ветка осталась — блокирующее leftover-branch с командой удаления', () => {
+    const findings = doctorFindings({
+      ...baseFacts,
+      openIds: new Set<string>(),
+      doneIds: new Set(['a1']),
+      claimedIds: new Set(['a1']),
+      mergedIds: new Set(['a1']),
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ id: 'a1', kind: 'leftover-branch', blocking: true });
+    expect(findings[0]?.message).toContain('git branch -d task/a1');
+  });
+
+  it('брошенный захват без коммитов дольше порога — только предупреждение', () => {
+    const findings = doctorFindings({
+      ...baseFacts,
+      claimedIds: new Set(['a1']),
+      branchAgeHours: new Map([['a1', DOCTOR_IDLE_HOURS]]),
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ id: 'a1', kind: 'idle-claim', blocking: false });
+    expect(findings[0]?.message).toContain('pnpm backlog release a1');
+  });
+
+  it('свежий захват и возраст ниже порога — молчание', () => {
+    expect(
+      doctorFindings({
+        ...baseFacts,
+        claimedIds: new Set(['a1']),
+        branchAgeHours: new Map([['a1', DOCTOR_IDLE_HOURS - 1]]),
+      }),
+    ).toEqual([]);
+  });
+
+  it('возраст неизвестен (нет коммитов над базой) — предупреждения нет', () => {
+    expect(doctorFindings({ ...baseFacts, claimedIds: new Set(['a1']) })).toEqual([]);
+  });
+
+  it('блокирующие идут перед предупреждениями, внутри групп — по id', () => {
+    const findings = doctorFindings({
+      openIds: new Set(['b2', 'a1']),
+      doneIds: new Set(['z9']),
+      claimedIds: new Set(['z9', 'b2', 'a1']),
+      mergedIds: new Set(['a1', 'z9']),
+      branchAgeHours: new Map([['b2', 100]]),
+    });
+    expect(findings.map((finding) => [finding.kind, finding.id])).toEqual([
+      ['unclosed', 'a1'],
+      ['leftover-branch', 'z9'],
+      ['idle-claim', 'b2'],
+    ]);
   });
 });

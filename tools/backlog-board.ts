@@ -37,7 +37,7 @@ export class BoardError extends Error {
   }
 }
 
-const ID_RE = /^[a-z0-9][a-z0-9.-]*$/;
+export const ID_RE = /^[a-z0-9][a-z0-9.-]*$/;
 
 // --- Разбор ------------------------------------------------------------------
 
@@ -203,5 +203,77 @@ export function touchesOverlap(task: TaskFile, inProgress: TaskFile[]): boolean 
           matchesGlob(theirs, mine.replace(/__literal__$/, '/__child__')),
       ),
     ),
+  );
+}
+
+// --- Замыкание задачи (ADR 0007, «Замыкание задачи») --------------------------
+
+/** Сколько часов задача может висеть в работе без коммитов, прежде чем doctor предупредит. */
+export const DOCTOR_IDLE_HOURS = 48;
+
+export interface DoctorFacts {
+  /** id задач с открытым файлом (backlog/<id>.md). */
+  openIds: Set<string>;
+  /** id закрытых задач (backlog/done/<id>.md). */
+  doneIds: Set<string>;
+  /** Локальные ветки task/<id>. */
+  claimedIds: Set<string>;
+  /** Ветки task/<id>, попавшие в main (GitHub API или git-предок). */
+  mergedIds: Set<string>;
+  /** Часов с последнего коммита ветки task/<id>. */
+  branchAgeHours: Map<string, number>;
+}
+
+export interface DoctorFinding {
+  id: string;
+  kind: 'unclosed' | 'leftover-branch' | 'idle-claim';
+  /** true — расхождение, doctor завершается с ошибкой; false — предупреждение. */
+  blocking: boolean;
+  message: string;
+}
+
+/**
+ * Расхождения «работа смержена — доска не знает»: статус вычисляется из
+ * нескольких фактов (файл, ветка, merge), и каждый меняется своим путём.
+ * Работа вне доски (прямое поручение) — главный источник: PR закрывает работу,
+ * а файл задачи никто не переносит (случаи C5/C8, 2026-11-14).
+ */
+export function doctorFindings(facts: DoctorFacts): DoctorFinding[] {
+  const findings: DoctorFinding[] = [];
+  for (const id of facts.mergedIds) {
+    if (facts.openIds.has(id)) {
+      findings.push({
+        id,
+        kind: 'unclosed',
+        blocking: true,
+        message: `ветка task/${id} смержена в main, файл задачи ещё открыт — перенеси backlog/${id}.md в backlog/done/ (свой PR или отдельный PR гигиены) и дополни «Журнал» итогом`,
+      });
+    }
+    // Ветка, которой нет локально, — не расхождение: GitHub помнит head ветки
+    // смерженного PR вечно, а удаление ветки после merge — нормальная уборка.
+    if (facts.doneIds.has(id) && facts.claimedIds.has(id)) {
+      findings.push({
+        id,
+        kind: 'leftover-branch',
+        blocking: true,
+        message: `задача ${id} закрыта, но ветка task/${id} осталась — удали локально (git branch -d task/${id}) и в origin, если есть (git push origin --delete task/${id})`,
+      });
+    }
+  }
+  for (const id of facts.claimedIds) {
+    if (facts.openIds.has(id) && !facts.mergedIds.has(id)) {
+      const age = facts.branchAgeHours.get(id);
+      if (age !== undefined && age >= DOCTOR_IDLE_HOURS) {
+        findings.push({
+          id,
+          kind: 'idle-claim',
+          blocking: false,
+          message: `задача ${id} в работе, но последний коммит ${Math.floor(age)} ч назад — если сессия умерла, человек освобождает задачу: pnpm backlog release ${id}`,
+        });
+      }
+    }
+  }
+  return findings.toSorted(
+    (a, b) => Number(b.blocking) - Number(a.blocking) || a.id.localeCompare(b.id),
   );
 }
