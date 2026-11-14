@@ -11,8 +11,12 @@ function createRepository() {
   });
 }
 
+// Поведение интерфейса (CRUD, порядок, отсутствие ресурса) зафиксировано
+// контрактным набором в test/task-repository-contract/; здесь — только
+// то, что специфично для in-memory реализации.
+
 describe('InMemoryTaskRepository', () => {
-  it('creates an open task with generated id and timestamp', async () => {
+  it('creates a task with the injected id generator and clock', async () => {
     const repo = createRepository();
 
     const task = await repo.create('Write tests');
@@ -25,7 +29,7 @@ describe('InMemoryTaskRepository', () => {
     });
   });
 
-  it('lists tasks newest first', async () => {
+  it('orders tasks created later first using the captured clock', async () => {
     const repo = createRepository();
     await repo.create('first');
     await repo.create('second');
@@ -34,35 +38,5 @@ describe('InMemoryTaskRepository', () => {
     const titles = (await repo.list()).map((task) => task.title);
 
     expect(titles).toEqual(['third', 'second', 'first']);
-  });
-
-  it('toggles completion back and forth', async () => {
-    const repo = createRepository();
-    const { id } = await repo.create('Toggle me');
-
-    expect((await repo.toggle(id))?.completed).toBe(true);
-    expect((await repo.toggle(id))?.completed).toBe(false);
-    expect((await repo.list())[0]?.completed).toBe(false);
-  });
-
-  it('returns undefined when toggling an unknown task', async () => {
-    const repo = createRepository();
-
-    await expect(repo.toggle('00000000-0000-4000-8000-999999999999')).resolves.toBeUndefined();
-  });
-
-  it('replaces all tasks on reset', async () => {
-    const repo = createRepository();
-    await repo.create('old');
-    const seeded = {
-      id: '00000000-0000-4000-8000-000000000042',
-      title: 'seeded',
-      completed: true,
-      createdAt: '2026-01-01T00:00:00.000Z',
-    };
-
-    await repo.reset([seeded]);
-
-    expect(await repo.list()).toEqual([seeded]);
   });
 });
