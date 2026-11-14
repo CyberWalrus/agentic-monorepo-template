@@ -2,7 +2,7 @@ import { AxeBuilder } from '@axe-core/playwright';
 import { expect, test } from '../../fixtures.ts';
 
 test.describe('accessibility', () => {
-  test('home page has no accessibility violations', async ({ page, uniqueTitle }) => {
+  test('home page has no accessibility violations [AC-6]', async ({ page, uniqueTitle }) => {
     await page.goto('/');
 
     // Своя задача (uniqueTitle): скан идёт по заполненной странице независимо
@@ -21,7 +21,7 @@ test.describe('accessibility', () => {
     ).toEqual([]);
   });
 
-  test('not-found page has no accessibility violations', async ({ page }) => {
+  test('not-found page has no accessibility violations [AC-6]', async ({ page }) => {
     await page.goto('/this-route-does-not-exist');
 
     await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();

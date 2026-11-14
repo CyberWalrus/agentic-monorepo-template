@@ -1,7 +1,7 @@
 import { expect, test } from '../../fixtures.ts';
 
 test.describe('route states', () => {
-  test('shows a not-found page for an unknown URL and navigates home', async ({ page }) => {
+  test('shows a not-found page for an unknown URL and navigates home [AC-2]', async ({ page }) => {
     await page.goto('/this-route-does-not-exist');
 
     await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
