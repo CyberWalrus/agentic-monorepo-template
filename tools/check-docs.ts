@@ -307,8 +307,12 @@ function taskBranchId(): string | null {
 /**
  * На ветке `task/<id>` среди существующих файлов доски меняется только свой:
  * чужая задача или её блокирующие поля (depends_on, needs_human, touches)
- * меняются только в PR (ADR 0007, «Проверка доски»). Правило проверяем только
- * когда есть база для сравнения и каталог доски существует.
+ * меняются только в PR (ADR 0007, «Проверка доски»). Новые файлы доски
+ * разрешены: их добавляет PR декомпозиции — задачи из декомпозиции появляются
+ * только merge'ем (ADR 0007, «Доска обновляется с опозданием на merge»),
+ * а защищает их review-класс `backlog/**` и ревью декомпозиции в PR.
+ * Правило проверяем только когда есть база для сравнения и каталог доски
+ * существует.
  */
 function boardBranchRule(): void {
   if (!existsSync('backlog')) {
@@ -332,13 +336,22 @@ function boardBranchRule(): void {
   )
     .split('\n')
     .filter(Boolean);
+  const inBase = new Set(
+    execFileSync('git', ['ls-tree', '-r', '--name-only', base, '--', 'backlog/'], {
+      encoding: 'utf8',
+    })
+      .split('\n')
+      .filter(Boolean),
+  );
   const allowed = new Set([`backlog/${id}.md`, `backlog/done/${id}.md`]);
   for (const file of changed) {
-    if (!allowed.has(file)) {
-      findings.push(
-        `${file}: на ветке task/${id} среди файлов доски меняется только свой файл; правки чужих задач идут отдельным PR`,
-      );
+    // Файла нет в базе — новый (результат декомпозиции), не правка чужой задачи.
+    if (allowed.has(file) || !inBase.has(file)) {
+      continue;
     }
+    findings.push(
+      `${file}: на ветке task/${id} среди файлов доски меняется только свой файл; правки чужих задач идут отдельным PR`,
+    );
   }
 }
 
