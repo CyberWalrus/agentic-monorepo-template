@@ -1,13 +1,16 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  chmodSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   renameSync,
   rmSync,
   statSync,
-  writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -23,9 +26,10 @@ import { connectTaskDatabase } from '../src/tasks/database.ts';
 // Ryuk-реапер testcontainers гасит контейнер через ~10 c после закрытия
 // сокетов создавшего процесса — последователь, подключённый обычным
 // pg-клиентом, остался бы без базы под живыми тестами (rev c1.4). Поэтому
-// контейнером распоряжается только этот хелпер: остановка — по refcount,
-// утечка при принудительном убийстве воркера переживает прогон и разбирается
-// при следующем (docs/test-database-isolation.md).
+// контейнером распоряжается только этот хелпер: остановка — по refcount.
+// Утечка при принудительном убийстве воркера переиспользуется или заменяется
+// следующим прогоном; полная чистка — `docker rm -f agentic-pg-test-…`
+// (docs/test-database-isolation.md).
 process.env['TESTCONTAINERS_RYUK_DISABLED'] = 'true';
 
 // Таймауты холодного старта — на уровне вызывающего файла (beforeAll 120 c,
@@ -64,12 +68,25 @@ export interface PostgresTestDatabaseOptions {
  * Ключ экземпляра координации: образ + каталог миграций. Файлы состояния —
  * `instance-<key>.json` и `lock-<key>` в каталоге координации. Экспортирован
  * для тестов самого хелпера: они моделируют состояния координации (мёртвый
- * лок) по этому контракту.
+ * лок, протухший fingerprint) по этому контракту.
  */
 export function postgresTestInstanceKey(
   options: Pick<PostgresTestDatabaseOptions, 'image' | 'migrationsFolder'>,
 ): string {
   return sha256(`${options.image}\n${resolve(options.migrationsFolder)}`).slice(0, 12);
+}
+
+/**
+ * Имя контейнера экземпляра: каталог координации + ключ. Инъектированный
+ * каталог тестов хелпера даёт своё имя — общий контейнер прогона не задевается.
+ * Экспортирован по той же причине, что и ключ.
+ */
+export function postgresTestContainerName(
+  coordinationDir: string,
+  options: Pick<PostgresTestDatabaseOptions, 'image' | 'migrationsFolder'>,
+): string {
+  const instanceKey = postgresTestInstanceKey(options);
+  return `agentic-pg-test-${sha256(`${coordinationDir}\n${instanceKey}`).slice(0, 12)}`;
 }
 
 export interface PostgresTestDatabase {
@@ -94,21 +111,26 @@ interface InstanceState {
   refcount: number;
 }
 
-/** Валидация вместо `as`: файл состояния мог обраться на полуслове или протухнуть. */
+/** Валидация вместо `as`: файл состояния мог обраться на полуслове — или быть подменён. */
 function isInstanceState(value: unknown): value is InstanceState {
   return (
     typeof value === 'object' &&
     value !== null &&
     'uri' in value &&
     typeof value['uri'] === 'string' &&
+    isLocalPostgresUri(value['uri']) &&
     'containerId' in value &&
     typeof value['containerId'] === 'string' &&
+    DOCKER_ID_PATTERN.test(value['containerId']) &&
     'fingerprint' in value &&
     typeof value['fingerprint'] === 'string' &&
     'templateName' in value &&
     typeof value['templateName'] === 'string' &&
+    TEMPLATE_NAME_PATTERN.test(value['templateName']) &&
     'refcount' in value &&
-    typeof value['refcount'] === 'number'
+    typeof value['refcount'] === 'number' &&
+    Number.isInteger(value['refcount']) &&
+    value['refcount'] >= 1
   );
 }
 
@@ -116,8 +138,60 @@ function isInstanceState(value: unknown): value is InstanceState {
 // от каталога файла. Ключ каталога координации: два worktree не пересекаются (З9).
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
+// Права каталога координации и state-файлов: только владелец прогона (rev
+// security c1.4: файлы живут в tmpdir, uri и refcount не должны читаться и
+// тем более подменяться другими пользователями общего хоста).
+const DIR_MODE = 0o700;
+const FILE_MODE = 0o600;
+const DOCKER_ID_PATTERN = /^[0-9a-f]{64}$/;
+const TEMPLATE_NAME_PATTERN = /^template_[0-9a-f]{12}$/;
+
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+/** URI state-файла обязан вести в контейнер на той же машине — не в чужой мир. */
+function isLocalPostgresUri(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'postgres:' &&
+      ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Запись с эксклюзивным созданием ('wx'): предсозданный симлинк на пути
+ * записи не затирает чужой файл, а приводит к новому суффиксу (rev security
+ * c1.4). Финальная подмена — renameSync, он симлинк заменяет, а не следует ему.
+ */
+function writePrivateFile(path: string, data: string): void {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const target = attempt === 0 ? path : `${path}.${randomBytes(3).toString('hex')}`;
+    let fd: number;
+    try {
+      fd = openSync(target, 'wx', FILE_MODE);
+    } catch (error) {
+      const retryable = error instanceof Error && 'code' in error && error.code === 'EEXIST';
+      if (!retryable) {
+        throw error;
+      }
+      continue;
+    }
+    try {
+      writeSync(fd, data);
+    } finally {
+      closeSync(fd);
+    }
+    if (target !== path) {
+      renameSync(target, path);
+    }
+    return;
+  }
+  throw new Error(`Не удалось записать ${path}: все суффиксы имени заняты.`);
 }
 
 /** hash(образ + содержимое migrations/**): смена миграций — новый контейнер, шаблон не протухает. */
@@ -171,11 +245,21 @@ async function isReachable(uri: string): Promise<boolean> {
   }
 }
 
-/** Убрать контейнер по id (dockerode под клиентом testcontainers); нет — уже чисто. */
-async function removeContainerById(containerId: string): Promise<void> {
+/**
+ * Убрать контейнер по id, сверив имя с ожидаемым: state-файл в каталоге
+ * координации мог быть подменён — без сверки прогон удалил бы произвольный
+ * контейнер общего демона (rev security c1.4). Контейнера нет — уже чисто.
+ */
+async function removeContainerById(containerId: string, expectedName: string): Promise<void> {
   try {
     const runtime = await getContainerRuntimeClient();
-    await runtime.container.getById(containerId).remove({ force: true });
+    const container = runtime.container.getById(containerId);
+    const info = await container.inspect();
+    const name = info.Name.startsWith('/') ? info.Name.slice(1) : info.Name;
+    if (name !== expectedName) {
+      return;
+    }
+    await container.remove({ force: true });
   } catch {
     // Контейнера нет (убран предыдущим прогоном) — цель достигнута.
   }
@@ -188,7 +272,7 @@ async function removeContainersByName(name: string): Promise<void> {
     const staleIds = (await runtime.container.list())
       .filter((info) => (info.Names ?? []).includes(`/${name}`))
       .map((info) => info.Id);
-    await Promise.all(staleIds.map(removeContainerById));
+    await Promise.all(staleIds.map((id) => removeContainerById(id, name)));
   } catch {
     // Docker недоступен: старт ниже упадёт с внятным объяснением.
   }
@@ -219,7 +303,7 @@ export async function createPostgresTestDatabase(
   const lockDir = join(coordinationDir, `lock-${instanceKey}`);
   // Имя включает каталог координации: инъектированный каталог тестов хелпера
   // получает свой контейнер и не задевает общий контейнер прогона.
-  const containerName = `agentic-pg-test-${sha256(`${coordinationDir}\n${instanceKey}`).slice(0, 12)}`;
+  const containerName = postgresTestContainerName(coordinationDir, options);
   const fingerprint = migrationsFingerprint(options.image, options.migrationsFolder);
 
   const readState = (): InstanceState | undefined => {
@@ -235,9 +319,9 @@ export async function createPostgresTestDatabase(
   };
 
   const writeState = (state: InstanceState): void => {
-    const tempFile = `${instanceFile}.tmp`;
-    writeFileSync(tempFile, JSON.stringify(state));
-    renameSync(tempFile, instanceFile); // атомарная замена: читатели не видят полуфайл
+    // Эксклюзивная запись + атомарная подмена: читатели не видят полуфайл,
+    // предсозданный симлинк не затирает чужой файл (rev security c1.4).
+    writePrivateFile(instanceFile, JSON.stringify(state));
   };
 
   const startSharedInstance = async (): Promise<InstanceState> => {
@@ -282,7 +366,7 @@ export async function createPostgresTestDatabase(
     }
     if (state !== undefined) {
       // Контейнер мёртв (docker перезапущен) или миграции сменились: заменить.
-      await removeContainerById(state.containerId);
+      await removeContainerById(state.containerId, containerName);
     }
     const fresh = await startSharedInstance();
     writeState(fresh);
@@ -296,7 +380,7 @@ export async function createPostgresTestDatabase(
     }
     state.refcount -= 1;
     if (state.refcount <= 0) {
-      await removeContainerById(state.containerId);
+      await removeContainerById(state.containerId, containerName);
       rmSync(instanceFile, { force: true });
     } else {
       writeState(state);
@@ -322,7 +406,8 @@ export async function createPostgresTestDatabase(
         typeof holder !== 'object' ||
         holder === null ||
         !('pid' in holder) ||
-        typeof holder.pid !== 'number'
+        typeof holder.pid !== 'number' ||
+        holder.pid < 1
       ) {
         return true; // кривой PID-файл — держатель не справился, лок считаем мёртвым
       }
@@ -338,15 +423,29 @@ export async function createPostgresTestDatabase(
     }
   };
 
+  // Каталог координации — приватный владельцу прогона: чужой пользователь
+  // общего хоста не читает uri из state-файла и не подкладывает свои (rev
+  // security c1.4). Каталог чужого владельца — ошибка с объяснением.
+  const ensureCoordinationDir = (): void => {
+    mkdirSync(coordinationDir, { recursive: true, mode: DIR_MODE });
+    try {
+      chmodSync(coordinationDir, DIR_MODE);
+    } catch {
+      throw new Error(
+        `Каталог координации ${coordinationDir} принадлежит другому пользователю. Удали его (rm -rf) и повтори прогон.`,
+      );
+    }
+  };
+
   // Опрос лока — setTimeout-рекурсией, а не await в цикле: опрос честно
   // серийный, но глотки event loop не блокируют соседние воркеры.
   const acquireLock = (): Promise<void> =>
     new Promise((resolveLock, rejectLock) => {
-      mkdirSync(coordinationDir, { recursive: true });
+      ensureCoordinationDir();
       const deadline = Date.now() + LOCK_WAIT_TIMEOUT_MS;
       const attempt = (): void => {
         try {
-          mkdirSync(lockDir);
+          mkdirSync(lockDir, { mode: DIR_MODE });
         } catch {
           // Каталог занят: дождаться держателя либо сломать мёртвый лок (PID-файл).
           const stale = holderIsGone();
@@ -363,7 +462,7 @@ export async function createPostgresTestDatabase(
           setTimeout(attempt, LOCK_POLL_MS);
           return;
         }
-        writeFileSync(join(lockDir, 'holder.json'), JSON.stringify({ pid: process.pid }));
+        writePrivateFile(join(lockDir, 'holder.json'), JSON.stringify({ pid: process.pid }));
         resolveLock();
       };
       attempt();

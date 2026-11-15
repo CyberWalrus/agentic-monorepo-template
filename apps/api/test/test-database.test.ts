@@ -1,8 +1,9 @@
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+import { getContainerRuntimeClient } from 'testcontainers';
 import { sql } from 'drizzle-orm';
 import { afterAll, describe, expect, it } from 'vitest';
 
@@ -12,6 +13,7 @@ import * as schema from '../src/tasks/schema.ts';
 import {
   createPostgresTestDatabase,
   POSTGRES_TEST_IMAGE,
+  postgresTestContainerName,
   postgresTestInstanceKey,
   type PostgresTestDatabase,
 } from './test-database.ts';
@@ -124,6 +126,54 @@ describe('createPostgresTestDatabase', () => {
 
       // Последний ушедший останавливает контейнер: state экземпляра убран.
       expect(instanceFileCount()).toBe(0);
+
+      // Остановка проверяется фактом, а не только по state-файлу: регрессия
+      // в самом удалении (removeContainerById) красит тест (rev test-quality c1.4).
+      const runtime = await getContainerRuntimeClient();
+      const remaining = (await runtime.container.list()).filter((info) =>
+        (info.Names ?? []).includes(`/${postgresTestContainerName(lifecycleDir, options)}`),
+      );
+      expect(remaining).toEqual([]);
+    },
+    CONTAINER_TIMEOUT_MS,
+  );
+
+  it(
+    'replaces an instance whose fingerprint or container is stale',
+    async () => {
+      rmSync(lifecycleDir, { recursive: true, force: true });
+
+      // Подсунутый (или оставшийся от прошлой схемы миграций) state: формат
+      // валидный, но контейнер недостижим, fingerprint чужой. Хелпер обязан
+      // заменить экземпляр, а не подключиться к протухшему шаблону.
+      const staleKey = postgresTestInstanceKey(options);
+      mkdirSync(lifecycleDir, { recursive: true });
+      writeFileSync(
+        join(lifecycleDir, `instance-${staleKey}.json`),
+        JSON.stringify({
+          uri: 'postgres://test:test@localhost:1/postgres',
+          containerId: 'a'.repeat(64),
+          fingerprint: '0'.repeat(16),
+          templateName: `template_${staleKey}`,
+          refcount: 1,
+        }),
+      );
+
+      const replaced = await create(lifecycleDir);
+      const state: unknown = JSON.parse(
+        readFileSync(join(lifecycleDir, `instance-${staleKey}.json`), 'utf8'),
+      );
+      if (
+        typeof state !== 'object' ||
+        state === null ||
+        !('fingerprint' in state) ||
+        typeof state.fingerprint !== 'string'
+      ) {
+        throw new Error('instance state was not rewritten');
+      }
+      expect(state.fingerprint).not.toBe('0'.repeat(16));
+
+      await shut(replaced);
     },
     CONTAINER_TIMEOUT_MS,
   );
@@ -143,6 +193,26 @@ describe('createPostgresTestDatabase', () => {
       writeFileSync(join(lockDir, 'holder.json'), JSON.stringify({ pid: dead.pid }));
 
       // Хелпер ломает мёртвый лок, стартует экземпляр и штатно закрывается.
+      const recovered = await create(lifecycleDir);
+      await shut(recovered);
+
+      expect(instanceFileCount()).toBe(0);
+    },
+    CONTAINER_TIMEOUT_MS,
+  );
+
+  it(
+    'recovers a lock whose holder file is unreadable or malformed',
+    async () => {
+      rmSync(lifecycleDir, { recursive: true, force: true });
+
+      // Кривой PID-файл (обрванная запись, не JSON, чужой формат): лок должен
+      // сломаться сразу, а не повесить последователь до 115-секундного таймаута
+      // (фикс закреплён тестом — rev test-quality c1.4).
+      const lockDir = join(lifecycleDir, `lock-${postgresTestInstanceKey(options)}`);
+      mkdirSync(lockDir, { recursive: true });
+      writeFileSync(join(lockDir, 'holder.json'), 'not json');
+
       const recovered = await create(lifecycleDir);
       await shut(recovered);
 
