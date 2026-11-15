@@ -11,6 +11,14 @@ catalogMode: strict
 allowBuilds:
   # Хуки ставит `pnpm prepare` (lefthook install), postinstall не нужен.
   lefthook: false
+  # esbuild: бинарь приходит через optionalDependencies (@esbuild/<platform>),
+  # postinstall лишь фолбэк-загрузка из реестра. Работает без скрипта.
+  esbuild: false
+  # ssh2/cpu-features: чистый JS-фолбэк, нативная сборка опциональна.
+  ssh2: false
+  cpu-features: false
+  # protobufjs: postinstall не влияет на рантайм (нужен только testcontainers).
+  protobufjs: false
 
 # TS 7 пока без JS API (обещан в 7.1). Инструментам на Compiler API подкладываем
 # TS 6 только в их собственный резолв; проект компилируется TS 7.
@@ -38,7 +46,9 @@ catalog:
   '@tanstack/react-router': ^1.170.0
   '@tanstack/react-router-ssr-query': ^1.167.0
   '@tanstack/react-start': ^1.169.0
+  '@testcontainers/postgresql': ^12.2.1
   '@types/node': ^26.6.0
+  '@types/pg': ^8.23.1
   '@types/react': ^19.3.0
   '@types/react-dom': ^19.3.0
   '@vitejs/plugin-react': ^6.1.0
@@ -47,12 +57,16 @@ catalog:
   axe-core: ^4.14.0
   chrome-devtools-mcp: ^1.12.0
   dependency-cruiser: ^18.7.0
+  drizzle-kit: ^0.31.11
+  # Закреплён на 0.45.x: 1.0 в rc, caret на 0.x новый минор не тянет (задача c1.2).
+  drizzle-orm: ~0.45.4
   hono: ^4.13.0
   knip: ^6.44.0
   lefthook: ^2.2.0
   oxfmt: ^0.75.0
   oxlint: ^1.90.0
   oxlint-tsgolint: ^7.0.2005
+  pg: ^8.23.1
   playwright: 1.64.1
   react: ^19.3.1
   react-dom: ^19.3.1
