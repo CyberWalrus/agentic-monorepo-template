@@ -150,3 +150,40 @@ describe('гейт замыкания (tools/check-docs.ts)', () => {
     expect(result.stderr).not.toContain('перенеси');
   });
 });
+
+describe('правило ветки доски (boardBranchRule, ADR 0007)', () => {
+  it('правка чужого существующего файла доски на ветке задачи — красная', () => {
+    // Состояние после «гейт замыкания»: task/d с незакоммиченным переносом d
+    // в done. Фиксируем его, чтобы ветки переключались свободно.
+    commitAll('d: перенос в done');
+    expect(git(['switch', 'main']).status).toBe(0);
+    // a.md уже в done (коммит 'close c' унёс заодно перенос a) — своя задача
+    // на task/a закрыта, замыкание молчит; правим чужой существующий b.md.
+    expect(git(['switch', '-c', 'task/a']).status).toBe(0);
+    writeFileSync(
+      join(repo, 'backlog', 'b.md'),
+      taskFile('b').replace('priority: low', 'priority: high'),
+    );
+    // Удаление чужого существующего файла — тот же красный путь (--no-renames
+    // не даёт замыть удаление переименованием, rev architecture d14).
+    expect(git(['rm', 'backlog/d.md']).status).toBe(0);
+    commitAll('правка и удаление чужих задач');
+    const result = run(checkDocs, []);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('backlog/b.md');
+    expect(result.stderr).toContain('backlog/d.md');
+    expect(result.stderr).toContain('меняется только свой файл');
+  }, 30_000);
+
+  it('новые файлы доски на ветке задачи — зелёные: результат декомпозиции (ADR 0007)', () => {
+    expect(git(['switch', 'main']).status).toBe(0);
+    expect(git(['switch', '-c', 'task/f']).status).toBe(0);
+    // Чужих существующих файлов не трогаем; добавляем новые — как PR декомпозиции.
+    writeFileSync(join(repo, 'backlog', 'f1.md'), taskFile('f1'));
+    writeFileSync(join(repo, 'backlog', 'f2.md'), taskFile('f2'));
+    commitAll('декомпозиция f: f1, f2');
+    const result = run(checkDocs, []);
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain('меняется только свой файл');
+  }, 30_000);
+});
