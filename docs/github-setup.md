@@ -15,7 +15,7 @@ Merge queue, если доступна на вашем тарифе, стоит 
 
 ## 2. Labelы для гейтов
 
-Создайте: `gate-change-approved` (одобрение изменения гейтов мейнтейнером, действует только после последнего push — `gate-integrity` снимает label на новом push) и `nightly-failure`.
+Создайте labelы: `gate-change-approved` (одобрение изменения гейтов мейнтейнером, действует только после последнего push — `gate-integrity` снимает label на новом push) и `nightly-failure`.
 
 ```bash
 gh label create gate-change-approved --color B60205 --description "Maintainer approved a change to quality gates"
