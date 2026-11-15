@@ -211,6 +211,26 @@ export const CANARIES: GateCanary[] = [
     },
   },
   {
+    // Политика доступа объявляется метаданными процедуры (ADR 0011, C2.0),
+    // присутствие ловит тест перебора в пакете контрактов: снятие
+    // .meta({ access }) у одной процедуры красит шаг test. Якорь по форме
+    // meta, а не по литералу типа политики: смена public → owner не должна
+    // ломать канарейку.
+    name: 'процедура контракта без политики доступа',
+    steps: 'test',
+    failedStep: 'test',
+    expect: /every contract procedure declares a valid access policy/,
+    apply: (root) => {
+      const path = join(root, 'packages/contracts/src/tasks.ts');
+      const source = readFileSync(path, 'utf8');
+      const stripped = source.replace(/\n\s*\.meta\(\{ access: \{ type: '[^']+' \} \}\)/, '');
+      if (stripped === source) {
+        throw new Error('canary anchor not found: no .meta({ access }) in contracts/src/tasks.ts');
+      }
+      writeFileSync(path, stripped);
+    },
+  },
+  {
     name: 'бандл сверх бюджета',
     steps: 'build,bundle',
     full: true,
