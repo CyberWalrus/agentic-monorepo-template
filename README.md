@@ -20,7 +20,7 @@ pnpm dev           # web и api на портах из worktree (выбор — 
 
 Node (`.nvmrc`) · pnpm (`packageManager`) · Turborepo · TypeScript · Oxlint + Oxfmt · Vite (Rolldown) · React + TanStack Start + TanStack Query · Hono + oRPC + Zod · Vitest browser mode · Playwright · dependency-cruiser · Knip · sherif · StrykerJS · Lefthook.
 
-Версии зависимостей — только в каталоге `catalog:` в [pnpm-workspace.yaml](pnpm-workspace.yaml). Почему именно так: [ADR 0001](docs/adr/0001-initial-stack.md), [исследование стека](docs/research/2026-11-tech-stack.md).
+Версии зависимостей — только в каталоге `catalog:` в [pnpm-workspace.yaml](pnpm-workspace.yaml). Почему именно так: [ADR 0001](docs/adr/0001-initial-stack.md); исследование стека лежит в `docs/research/` и в проект из шаблона не едет, поэтому даётся без ссылки.
 
 ## Контуры проверки
 
@@ -66,7 +66,7 @@ tools               гейты: verify, бюджеты, защищённые п�
 ## Документы
 
 - [Зачем нужна система](docs/vision.md)
-- [Исследование стека, ноябрь 2026](docs/research/2026-11-tech-stack.md)
+- Исследование стека, ноябрь 2026 — `docs/research/` (в проект из шаблона не едет, поэтому без ссылки)
 - [ADR 0001: стек первой реализации](docs/adr/0001-initial-stack.md)
 - [Архитектурные и инфраструктурные подходы](docs/architecture.md): законы обвязки, слои, правила изменения гейтов
 - План развития обвязки: итог аудита от 2026-11-12 и таблица стека — `docs/roadmap.md`; задачи развития — доска `backlog/` (`pnpm backlog`, ADR 0007)
