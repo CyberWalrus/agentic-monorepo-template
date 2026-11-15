@@ -11,14 +11,17 @@
     "start": "node src/server.ts",
     "typecheck": "tsc",
     "test": "vitest run --coverage --reporter=json --reporter=default --outputFile=reports/vitest.json",
-    "mutation": "stryker run"
+    "mutation": "stryker run",
+    "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
     "@hono/node-server": "catalog:",
     "@orpc/openapi": "catalog:",
     "@orpc/server": "catalog:",
     "@repo/contracts": "workspace:*",
+    "drizzle-orm": "catalog:",
     "hono": "catalog:",
+    "pg": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
@@ -26,8 +29,11 @@
     "@orpc/contract": "catalog:",
     "@stryker-mutator/core": "catalog:",
     "@stryker-mutator/vitest-runner": "catalog:",
+    "@testcontainers/postgresql": "catalog:",
     "@types/node": "catalog:",
+    "@types/pg": "catalog:",
     "@vitest/coverage-v8": "catalog:",
+    "drizzle-kit": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }
