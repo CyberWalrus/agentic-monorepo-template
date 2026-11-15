@@ -18,7 +18,7 @@ function collectProcedures(node: unknown, prefix = ''): ProcedureMeta[] {
   for (const [key, value] of Object.entries(node)) {
     const path = prefix ? `${prefix}.${key}` : key;
     if (isContractProcedure(value)) {
-      procedures.push({ path, meta: value['~orpc'].meta });
+      procedures.push({ path, meta: value['~orpc'].meta ?? {} });
     } else {
       procedures.push(...collectProcedures(value, path));
     }
@@ -27,13 +27,12 @@ function collectProcedures(node: unknown, prefix = ''): ProcedureMeta[] {
 }
 
 describe('AccessPolicySchema', () => {
-  it.each([
-    ['public', { type: 'public' }],
-    ['owner', { type: 'owner' }],
-    ['admin', { type: 'admin' }],
-  ])('accepts the $1 policy', (_name, policy) => {
-    expect(AccessPolicySchema.parse(policy)).toEqual(policy);
-  });
+  it.each([{ type: 'public' }, { type: 'owner' }, { type: 'admin' }])(
+    'accepts the $type policy',
+    (policy) => {
+      expect(AccessPolicySchema.parse(policy)).toEqual(policy);
+    },
+  );
 
   it('rejects an unknown policy type', () => {
     expect(AccessPolicySchema.safeParse({ type: 'root' }).success).toBe(false);
@@ -41,6 +40,10 @@ describe('AccessPolicySchema', () => {
 
   it('rejects a policy without a type', () => {
     expect(AccessPolicySchema.safeParse({}).success).toBe(false);
+  });
+
+  it('rejects a policy with an unknown key', () => {
+    expect(AccessPolicySchema.safeParse({ type: 'public', scope: 'all' }).success).toBe(false);
   });
 
   it('rejects a non-object policy', () => {
@@ -56,12 +59,18 @@ describe('contract access policies', () => {
   });
 
   it('every contract procedure declares a valid access policy', () => {
+    const violations: string[] = [];
     for (const { path, meta } of procedures) {
       const result = AccessPolicySchema.safeParse(meta['access']);
-      expect(
-        result.success,
-        `procedure ${path} must declare an access policy (public | owner | admin)`,
-      ).toBe(true);
+      if (!result.success) {
+        const issues = result.error.issues
+          .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+          .join('; ');
+        violations.push(
+          `procedure ${path} must declare an access policy (public | owner | admin): ${issues}`,
+        );
+      }
     }
+    expect(violations, 'every contract procedure declares a valid access policy').toEqual([]);
   });
 });
