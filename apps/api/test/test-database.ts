@@ -1,0 +1,400 @@
+import { createHash, randomBytes } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { getContainerRuntimeClient } from 'testcontainers';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { Client } from 'pg';
+
+import { connectTaskDatabase } from '../src/tasks/database.ts';
+
+// Ryuk-реапер testcontainers гасит контейнер через ~10 c после закрытия
+// сокетов создавшего процесса — последователь, подключённый обычным
+// pg-клиентом, остался бы без базы под живыми тестами (rev c1.4). Поэтому
+// контейнером распоряжается только этот хелпер: остановка — по refcount,
+// утечка при принудительном убийстве воркера переживает прогон и разбирается
+// при следующем (docs/test-database-isolation.md).
+process.env['TESTCONTAINERS_RYUK_DISABLED'] = 'true';
+
+// Таймауты холодного старта — на уровне вызывающего файла (beforeAll 120 c,
+// как в C1.2): **/vitest.config.ts защищён. Ожидание лока — меньше файлового,
+// чтобы воркер-последователь не умер от собственного таймаута раньше объяснения.
+const CONTAINER_START_TIMEOUT_MS = 120_000;
+const LOCK_WAIT_TIMEOUT_MS = 115_000;
+const LOCK_POLL_MS = 250;
+// holder.json появляется сразу после mkdir лока; дольше — держатель умер в створе.
+const HOLDER_GRACE_MS = 5_000;
+const CONNECT_TIMEOUT_MS = 10_000;
+
+/**
+ * Закреплённый по digest образ Postgres для integration-тестов (решение c1.2:
+ * прогон воспроизводим, порт случайный — два worktree не пересекаются, З9).
+ */
+export const POSTGRES_TEST_IMAGE =
+  'postgres:17-alpine@sha256:d3244e8ce3f165ee3c93d9c4a4b1d0fe48b3a89e2287b717fdcbbde92d405065';
+
+export interface PostgresTestDatabaseOptions {
+  /** Образ контейнера; закрепляй по digest для воспроизводимости прогона. */
+  image: string;
+  /** Каталог миграций модуля: участвует в fingerprint шаблона и ключе экземпляра. */
+  migrationsFolder: string;
+  /** Применение миграций к базе-шаблону (для drizzle — migrateTaskDatabase). */
+  migrate: (db: NodePgDatabase) => Promise<void>;
+  /**
+   * Каталог координации воркеров. По умолчанию tmpdir с ключом пути репозитория
+   * (два worktree не пересекаются, З9). Тесты самого хелпера инъектируют свой
+   * каталог, чтобы не влиять на общий контейнер прогона.
+   */
+  coordinationDir?: string;
+}
+
+/**
+ * Ключ экземпляра координации: образ + каталог миграций. Файлы состояния —
+ * `instance-<key>.json` и `lock-<key>` в каталоге координации. Экспортирован
+ * для тестов самого хелпера: они моделируют состояния координации (мёртвый
+ * лок) по этому контракту.
+ */
+export function postgresTestInstanceKey(
+  options: Pick<PostgresTestDatabaseOptions, 'image' | 'migrationsFolder'>,
+): string {
+  return sha256(`${options.image}\n${resolve(options.migrationsFolder)}`).slice(0, 12);
+}
+
+export interface PostgresTestDatabase {
+  /** Drizzle поверх пула подключений своей базы. */
+  db: NodePgDatabase;
+  /** Имя базы воркера: уникально в контейнере, полезно в сообщениях тестов. */
+  databaseName: string;
+  /**
+   * Удаляет базу воркера и снимает ссылку на контейнер. Последний
+   * закрывший останавливает контейнер; его базу-шаблон не трогает.
+   */
+  close(): Promise<void>;
+}
+
+interface InstanceState {
+  /** Строка подключения к дефолтной базе контейнера. */
+  uri: string;
+  containerId: string;
+  fingerprint: string;
+  templateName: string;
+  /** Сколько живых баз воркеров держит контейнер. */
+  refcount: number;
+}
+
+/** Валидация вместо `as`: файл состояния мог обраться на полуслове или протухнуть. */
+function isInstanceState(value: unknown): value is InstanceState {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'uri' in value &&
+    typeof value['uri'] === 'string' &&
+    'containerId' in value &&
+    typeof value['containerId'] === 'string' &&
+    'fingerprint' in value &&
+    typeof value['fingerprint'] === 'string' &&
+    'templateName' in value &&
+    typeof value['templateName'] === 'string' &&
+    'refcount' in value &&
+    typeof value['refcount'] === 'number'
+  );
+}
+
+// Корень репозитория: apps/api/test/test-database.ts → на три уровня вверх
+// от каталога файла. Ключ каталога координации: два worktree не пересекаются (З9).
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+/** hash(образ + содержимое migrations/**): смена миграций — новый контейнер, шаблон не протухает. */
+function migrationsFingerprint(image: string, migrationsFolder: string): string {
+  const entries: string[] = [];
+  const walk = (dir: string, prefix: string): void => {
+    for (const name of readdirSync(dir).toSorted()) {
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) {
+        walk(full, `${prefix}${name}/`);
+      } else {
+        entries.push(`${prefix}${name}:${sha256(readFileSync(full, 'utf8'))}`);
+      }
+    }
+  };
+  walk(migrationsFolder, '');
+  return sha256(`${image}\n${entries.join('\n')}`).slice(0, 16);
+}
+
+/** Уникальная база воркера: pid + случайный суффикс, пересечений между воркерами нет. */
+function workerDatabaseName(): string {
+  return `w_${process.pid}_${randomBytes(3).toString('hex')}`;
+}
+
+function adminUriFor(uri: string, database: string): string {
+  const url = new URL(uri);
+  url.pathname = `/${database}`;
+  return url.toString();
+}
+
+async function withAdminClient<T>(uri: string, run: (client: Client) => Promise<T>): Promise<T> {
+  const client = new Client({
+    connectionString: adminUriFor(uri, 'postgres'),
+    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+  });
+  await client.connect();
+  try {
+    return await run(client);
+  } finally {
+    await client.end();
+  }
+}
+
+/** Жив ли контейнер: короткое подключение с SELECT 1. */
+async function isReachable(uri: string): Promise<boolean> {
+  try {
+    await withAdminClient(uri, (client) => client.query('SELECT 1'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Убрать контейнер по id (dockerode под клиентом testcontainers); нет — уже чисто. */
+async function removeContainerById(containerId: string): Promise<void> {
+  try {
+    const runtime = await getContainerRuntimeClient();
+    await runtime.container.getById(containerId).remove({ force: true });
+  } catch {
+    // Контейнера нет (убран предыдущим прогоном) — цель достигнута.
+  }
+}
+
+/** Мусорные контейнеры нашего имени без instance.json (снёсся tmpdir): убрать перед стартом. */
+async function removeContainersByName(name: string): Promise<void> {
+  try {
+    const runtime = await getContainerRuntimeClient();
+    const staleIds = (await runtime.container.list())
+      .filter((info) => (info.Names ?? []).includes(`/${name}`))
+      .map((info) => info.Id);
+    await Promise.all(staleIds.map(removeContainerById));
+  } catch {
+    // Docker недоступен: старт ниже упадёт с внятным объяснением.
+  }
+}
+
+/**
+ * Изоляция integration-тестов на Postgres: один контейнер на прогон, миграции
+ * один раз в базу-шаблон, каждый воркер получает свою базу через
+ * `CREATE DATABASE … TEMPLATE` (решение c1.4). Воркер — тестовый файл:
+ * vitest гоняет файлы параллельно, и чистка таблицы в одном воркере не
+ * задевает соседа. Изоляцию на этом уровне даёт база — локи вроде
+ * SHARED_DATA_LOCK здесь не нужны (лок — механика E2E, снимается в c1.5).
+ *
+ * Координация воркеров — mkdir-мьютекс + instance-файл в каталоге координации:
+ * первый воркер стартует контейнер и мигрирует шаблон, остальные подключаются;
+ * последний закрывший останавливает контейнер. Ryuk отключён (см. выше).
+ *
+ * Фича копирует вызов со своими параметрами — см.
+ * docs/test-database-isolation.md.
+ */
+export async function createPostgresTestDatabase(
+  options: PostgresTestDatabaseOptions,
+): Promise<PostgresTestDatabase> {
+  const coordinationDir =
+    options.coordinationDir ?? join(tmpdir(), `agentic-pg-${sha256(repoRoot).slice(0, 12)}`);
+  const instanceKey = postgresTestInstanceKey(options);
+  const instanceFile = join(coordinationDir, `instance-${instanceKey}.json`);
+  const lockDir = join(coordinationDir, `lock-${instanceKey}`);
+  // Имя включает каталог координации: инъектированный каталог тестов хелпера
+  // получает свой контейнер и не задевает общий контейнер прогона.
+  const containerName = `agentic-pg-test-${sha256(`${coordinationDir}\n${instanceKey}`).slice(0, 12)}`;
+  const fingerprint = migrationsFingerprint(options.image, options.migrationsFolder);
+
+  const readState = (): InstanceState | undefined => {
+    if (!existsSync(instanceFile)) {
+      return undefined;
+    }
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(instanceFile, 'utf8'));
+      return isInstanceState(parsed) ? parsed : undefined; // оборванная запись: пересоздаём
+    } catch {
+      return undefined;
+    }
+  };
+
+  const writeState = (state: InstanceState): void => {
+    const tempFile = `${instanceFile}.tmp`;
+    writeFileSync(tempFile, JSON.stringify(state));
+    renameSync(tempFile, instanceFile); // атомарная замена: читатели не видят полуфайл
+  };
+
+  const startSharedInstance = async (): Promise<InstanceState> => {
+    await removeContainersByName(containerName);
+    let container: StartedPostgreSqlContainer;
+    try {
+      container = await new PostgreSqlContainer(options.image)
+        .withName(containerName)
+        .withStartupTimeout(CONTAINER_START_TIMEOUT_MS)
+        .start();
+    } catch (error) {
+      throw new Error(
+        'Не удалось запустить контейнер Postgres: интеграционным тестам на Postgres нужен работающий Docker (образ тест поднимает сам). Запусти Docker и повтори.',
+        { cause: error },
+      );
+    }
+    const uri = container.getConnectionUri();
+    const templateName = `template_${instanceKey}`;
+    await withAdminClient(uri, (client) => client.query(`CREATE DATABASE "${templateName}"`));
+    const template = await connectTaskDatabase(adminUriFor(uri, templateName));
+    try {
+      await options.migrate(template.db);
+    } finally {
+      // Клонирование TEMPLATE требует 0 подключений к шаблону.
+      await template.close();
+    }
+    return { uri, containerId: container.getId(), fingerprint, templateName, refcount: 1 };
+  };
+
+  // Весь переход состояния экземпляра — под локом, включая refcount++:
+  // два воркера одновременно не читают и не пишут instance-файл.
+  const ensureSharedInstance = async (): Promise<InstanceState> => {
+    const state = readState();
+    if (
+      state !== undefined &&
+      state.fingerprint === fingerprint &&
+      (await isReachable(state.uri))
+    ) {
+      state.refcount += 1;
+      writeState(state);
+      return state;
+    }
+    if (state !== undefined) {
+      // Контейнер мёртв (docker перезапущен) или миграции сменились: заменить.
+      await removeContainerById(state.containerId);
+    }
+    const fresh = await startSharedInstance();
+    writeState(fresh);
+    return fresh;
+  };
+
+  const releaseSharedInstance = async (): Promise<void> => {
+    const state = readState();
+    if (state === undefined) {
+      return; // уже убран другим закрытием
+    }
+    state.refcount -= 1;
+    if (state.refcount <= 0) {
+      await removeContainerById(state.containerId);
+      rmSync(instanceFile, { force: true });
+    } else {
+      writeState(state);
+    }
+  };
+
+  /** Мёртвый держатель: PID-файла нет дольше грэйса или процесс держателя не существует. */
+  const holderIsGone = (): boolean => {
+    const holderFile = join(lockDir, 'holder.json');
+    if (!existsSync(holderFile)) {
+      // mkdir без holder.json дольше грэйса: держатель умер между mkdir и записью.
+      try {
+        const created = statSync(lockDir).ctimeMs;
+        return Date.now() - created > HOLDER_GRACE_MS;
+      } catch {
+        return false; // лок уже сняли — опрос повторит mkdir
+      }
+    }
+    let pid: number;
+    try {
+      const holder: unknown = JSON.parse(readFileSync(holderFile, 'utf8'));
+      if (
+        typeof holder !== 'object' ||
+        holder === null ||
+        !('pid' in holder) ||
+        typeof holder.pid !== 'number'
+      ) {
+        return true; // кривой PID-файл — держатель не справился, лок считаем мёртвым
+      }
+      pid = holder.pid;
+    } catch {
+      return true; // нечитаемый holder.json — то же
+    }
+    try {
+      process.kill(pid, 0); // ESRCH — процесса нет; EPERM — жив под другим пользователем
+      return false;
+    } catch (error) {
+      return error instanceof Error && 'code' in error && error.code === 'ESRCH';
+    }
+  };
+
+  // Опрос лока — setTimeout-рекурсией, а не await в цикле: опрос честно
+  // серийный, но глотки event loop не блокируют соседние воркеры.
+  const acquireLock = (): Promise<void> =>
+    new Promise((resolveLock, rejectLock) => {
+      mkdirSync(coordinationDir, { recursive: true });
+      const deadline = Date.now() + LOCK_WAIT_TIMEOUT_MS;
+      const attempt = (): void => {
+        try {
+          mkdirSync(lockDir);
+        } catch {
+          // Каталог занят: дождаться держателя либо сломать мёртвый лок (PID-файл).
+          const stale = holderIsGone();
+          if (stale) {
+            rmSync(lockDir, { recursive: true, force: true });
+          } else if (Date.now() > deadline) {
+            rejectLock(
+              new Error(
+                `Не дождались лока координации за ${LOCK_WAIT_TIMEOUT_MS} мс (${lockDir}): держатель жив. Проверь, не идёт ли параллельный прогон того же worktree.`,
+              ),
+            );
+            return;
+          }
+          setTimeout(attempt, LOCK_POLL_MS);
+          return;
+        }
+        writeFileSync(join(lockDir, 'holder.json'), JSON.stringify({ pid: process.pid }));
+        resolveLock();
+      };
+      attempt();
+    });
+
+  const withLock = async <T>(run: () => Promise<T>): Promise<T> => {
+    await acquireLock();
+    try {
+      return await run();
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  };
+
+  const instance = await withLock(ensureSharedInstance);
+  const databaseName = workerDatabaseName();
+  await withAdminClient(instance.uri, (client) =>
+    client.query(`CREATE DATABASE "${databaseName}" TEMPLATE "${instance.templateName}"`),
+  );
+  const database = await connectTaskDatabase(adminUriFor(instance.uri, databaseName));
+
+  return {
+    db: database.db,
+    databaseName,
+    close: async () => {
+      await database.close();
+      // WITH (FORCE): оборвать возможные остаточные подключения перед удалением.
+      await withAdminClient(instance.uri, (client) =>
+        client.query(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`),
+      );
+      await withLock(releaseSharedInstance);
+    },
+  };
+}
