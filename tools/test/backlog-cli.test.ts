@@ -164,10 +164,14 @@ describe('правило ветки доски (boardBranchRule, ADR 0007)', () 
       join(repo, 'backlog', 'b.md'),
       taskFile('b').replace('priority: low', 'priority: high'),
     );
-    commitAll('правка чужой задачи b');
+    // Удаление чужого существующего файла — тот же красный путь (--no-renames
+    // не даёт замыть удаление переименованием, rev architecture d14).
+    expect(git(['rm', 'backlog/d.md']).status).toBe(0);
+    commitAll('правка и удаление чужих задач');
     const result = run(checkDocs, []);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('backlog/b.md');
+    expect(result.stderr).toContain('backlog/d.md');
     expect(result.stderr).toContain('меняется только свой файл');
   }, 30_000);
 

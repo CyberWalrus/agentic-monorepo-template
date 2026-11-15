@@ -311,6 +311,9 @@ function taskBranchId(): string | null {
  * разрешены: их добавляет PR декомпозиции — задачи из декомпозиции появляются
  * только merge'ем (ADR 0007, «Доска обновляется с опозданием на merge»),
  * а защищает их review-класс `backlog/**` и ревью декомпозиции в PR.
+ * «Существующий» считается относительно tip `main`: если чужая задача закрылась
+ * на main после ветвления, правка её устаревшего файла на ветке не красится —
+ * merge всё равно покажет конфликт, а доску ревьюит CODEOWNERS.
  * Правило проверяем только когда есть база для сравнения и каталог доски
  * существует.
  */
@@ -343,10 +346,24 @@ function boardBranchRule(): void {
       .split('\n')
       .filter(Boolean),
   );
+  // Новые файлы доски разрешены только в грамматике ADR 0007: backlog/<id>.md
+  // и backlog/done/<id>.md — иначе «новый» путь уводит файл из-под парсера
+  // доски (rev sanity d14). Анкеры ID_RE срезаны: они не нужны в середине
+  // составного паттерна.
+  const idPattern = ID_RE.source.replace(/^\^/, '').replace(/\$$/, '');
+  const newBoardFile = new RegExp(`^backlog/(?:done/)?${idPattern}\\.md$`);
   const allowed = new Set([`backlog/${id}.md`, `backlog/done/${id}.md`]);
   for (const file of changed) {
     // Файла нет в базе — новый (результат декомпозиции), не правка чужой задачи.
-    if (allowed.has(file) || !inBase.has(file)) {
+    if (allowed.has(file)) {
+      continue;
+    }
+    if (!inBase.has(file)) {
+      if (!newBoardFile.test(file)) {
+        findings.push(
+          `${file}: новый файл доски обязан быть backlog/<id>.md или backlog/done/<id>.md (ADR 0007)`,
+        );
+      }
       continue;
     }
     findings.push(
