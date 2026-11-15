@@ -22,8 +22,8 @@ const CONTAINER_TIMEOUT_MS = 120_000;
 const POSTGRES_IMAGE =
   'postgres:17-alpine@sha256:d3244e8ce3f165ee3c93d9c4a4b1d0fe48b3a89e2287b717fdcbbde92d405065';
 
-let container: StartedPostgreSqlContainer;
-let database: TaskDatabase;
+let container: StartedPostgreSqlContainer | undefined;
+let database: TaskDatabase | undefined;
 
 beforeAll(async () => {
   try {
@@ -42,28 +42,45 @@ beforeAll(async () => {
 }, CONTAINER_TIMEOUT_MS);
 
 afterAll(async () => {
-  await database.close();
-  await container.stop();
+  // beforeAll может упасть до присвоения (Docker недоступен): не добавляем
+  // к его объяснению криптичную ошибку очистки (rev test-quality 2026-11-15).
+  if (database !== undefined) {
+    await database.close();
+  }
+  if (container !== undefined) {
+    await container.stop();
+  }
 });
+
+// Доступ к базе из проверок: beforeAll к этому моменту отработал.
+function taskDatabase(): TaskDatabase {
+  if (database === undefined) {
+    throw new Error('beforeAll did not start the Postgres container');
+  }
+  return database;
+}
 
 // Прогон контрактного набора C1.1 против Postgres-реализации. Каждая
 // проверка получает свежий изолированный экземпляр: таблица чистится
 // перед созданием репозитория.
 describe('TaskRepository contract: PostgresTaskRepository', () => {
   it.each(taskRepositoryContractChecks)('$name', async ({ check }) => {
-    await database.db.delete(schema.tasks);
+    const { db } = taskDatabase();
+    await db.delete(schema.tasks);
 
-    await expect(check(new PostgresTaskRepository({ db: database.db }))).resolves.toBeUndefined();
+    await expect(check(new PostgresTaskRepository({ db }))).resolves.toBeUndefined();
   });
 });
 
 // Реализационно-специфичное: инъекция часов и генератора идентификаторов
-// (З13, детерминизм через параметры) и точность timestamptz на границе.
+// (З13, детерминизм через параметры), точность timestamptz на границе и
+// запись в постоянное хранилище.
 describe('PostgresTaskRepository', () => {
   it('creates a task with the injected id generator and clock', async () => {
-    await database.db.delete(schema.tasks);
+    const { db } = taskDatabase();
+    await db.delete(schema.tasks);
     const repository = new PostgresTaskRepository({
-      db: database.db,
+      db,
       now: () => new Date('2026-11-01T10:00:00.000Z'),
       generateId: () => '00000000-0000-4000-8000-000000000001',
     });
@@ -77,5 +94,20 @@ describe('PostgresTaskRepository', () => {
       createdAt: '2026-11-01T10:00:00.000Z',
     });
     expect((await repository.list()).map((stored) => stored.id)).toEqual([task.id]);
+  });
+
+  it('persists tasks across repository instances on the same database', async () => {
+    const { db } = taskDatabase();
+    await db.delete(schema.tasks);
+    const writer = new PostgresTaskRepository({ db });
+    const reader = new PostgresTaskRepository({ db });
+
+    const created = await writer.create('Survives instances');
+
+    // Экземпляр-читатель видит запись другого экземпляра: данные лежат в
+    // хранилище, а не в памяти экземпляра (rev test-quality 2026-11-15).
+    expect((await reader.list()).map((task) => task.id)).toEqual([created.id]);
+    expect((await reader.toggle(created.id))?.completed).toBe(true);
+    expect((await writer.list()).find((task) => task.id === created.id)?.completed).toBe(true);
   });
 });
