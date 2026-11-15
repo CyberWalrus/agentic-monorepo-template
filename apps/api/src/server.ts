@@ -1,7 +1,10 @@
 import { serve } from '@hono/node-server';
 
 import { createApp } from './app.ts';
-import { InMemoryTaskRepository } from './tasks/repository.ts';
+import { connectTaskDatabase, migrateTaskDatabase } from './tasks/database.ts';
+import { PostgresTaskRepository } from './tasks/postgres-repository.ts';
+import { InMemoryTaskRepository, type TaskRepository } from './tasks/repository.ts';
+import { resolveServerStorage } from './server-config.ts';
 
 // Порт обязателен: его вычисляет tools/ports.ts (pnpm dev / e2e-конфиг / CI).
 // Фиксированного дефолта нет — два worktree не должны делить порт (З9, A5).
@@ -20,8 +23,28 @@ if (enableTestApi && process.env['NODE_ENV'] === 'production') {
   throw new Error('ENABLE_TEST_API must never be set in production');
 }
 
+// DATABASE_URL включает Postgres; решение с guard'ом опасной комбинации —
+// в server-config.ts (там же объяснение). Дефолт — in-memory: pnpm dev,
+// E2E и перф не требуют Docker до задачи C1.5.
+const storage = resolveServerStorage({
+  databaseUrl: process.env['DATABASE_URL'],
+  enableTestApi,
+  testApiWithDatabase: process.env['ENABLE_TEST_API_WITH_DATABASE'] === '1',
+});
+
+let tasks: TaskRepository;
+if (storage.kind === 'postgres') {
+  const database = await connectTaskDatabase(storage.connectionString);
+  // Миграции применяются на старте: поднятый сервер всегда соответствует схеме.
+  await migrateTaskDatabase(database.db);
+  console.warn('api storage: postgres (migrations applied)');
+  tasks = new PostgresTaskRepository({ db: database.db });
+} else {
+  tasks = new InMemoryTaskRepository();
+}
+
 const app = createApp({
-  tasks: new InMemoryTaskRepository(),
+  tasks,
   enableTestApi,
   // exactOptionalPropertyTypes: undefined нельзя передавать явно.
   ...(instanceId === undefined ? {} : { instanceId }),
