@@ -9,7 +9,7 @@ import type { TaskRepository } from './repository.ts';
 import * as schema from './schema.ts';
 
 export interface PostgresTaskRepositoryOptions {
-  db: NodePgDatabase<typeof schema>;
+  db: NodePgDatabase;
   now?: () => Date;
   generateId?: () => string;
 }
@@ -31,7 +31,7 @@ function toTask(row: typeof schema.tasks.$inferSelect): Task {
  * при равных createdAt порядок не определён — как в контракте (C1.1).
  */
 export class PostgresTaskRepository implements TaskRepository {
-  readonly #db: NodePgDatabase<typeof schema>;
+  readonly #db: NodePgDatabase;
   readonly #now: () => Date;
   readonly #generateId: () => string;
 
