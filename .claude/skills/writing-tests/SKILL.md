@@ -7,18 +7,19 @@ description: Testing policy for this repo — which level to test at (unit, comp
 
 ## Какой уровень
 
-| Что проверяем                               | Уровень                  | Где                                  | Инструмент                                                  |
-| ------------------------------------------- | ------------------------ | ------------------------------------ | ----------------------------------------------------------- |
-| Схемы, чистые функции, доменная логика      | unit                     | рядом с кодом, `*.test.ts`           | Vitest (node)                                               |
-| API: процедуры, ошибки, валидация, HTTP     | integration (in-process) | `apps/api/src/*.test.ts`             | Vitest + `app.request()` / oRPC-клиент с `fetch: app.fetch` |
-| Компонент: поведение, a11y, состояния       | component                | `*.test.tsx`                         | Vitest browser mode (реальный Chromium)                     |
-| Внешний вид компонента                      | visual                   | `<Component>.visual.test.tsx`        | `toMatchScreenshot` (только в Docker)                       |
-| Пользовательский сценарий через всю систему | E2E                      | `e2e/features/<feature>/*.spec.ts`   | Playwright                                                  |
-| Внешний вид страницы                        | visual                   | `e2e/features/<feature>/*.visual.ts` | `toHaveScreenshot` (только в Docker)                        |
-| Скорость загрузки и сценариев               | perf                     | `e2e/perf/*.perf.ts`                 | Playwright + бюджеты                                        |
-| Ловят ли тесты ошибки                       | mutation                 | `pnpm mutation`                      | StrykerJS                                                   |
+| Что проверяем                               | Уровень                  | Где                                  | Инструмент                                                                                      |
+| ------------------------------------------- | ------------------------ | ------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| Схемы, чистые функции, доменная логика      | unit                     | рядом с кодом, `*.test.ts`           | Vitest (node)                                                                                   |
+| API: процедуры, ошибки, валидация, HTTP     | integration (in-process) | `apps/api/src/*.test.ts`             | Vitest + `app.request()` / oRPC-клиент с `fetch: app.fetch`                                     |
+| Хранилище на настоящем Postgres             | integration              | `apps/api/test/**/*.test.ts`         | `createPostgresTestDatabase` — база на воркер из шаблона, см. `docs/test-database-isolation.md` |
+| Компонент: поведение, a11y, состояния       | component                | `*.test.tsx`                         | Vitest browser mode (реальный Chromium)                                                         |
+| Внешний вид компонента                      | visual                   | `<Component>.visual.test.tsx`        | `toMatchScreenshot` (только в Docker)                                                           |
+| Пользовательский сценарий через всю систему | E2E                      | `e2e/features/<feature>/*.spec.ts`   | Playwright                                                                                      |
+| Внешний вид страницы                        | visual                   | `e2e/features/<feature>/*.visual.ts` | `toHaveScreenshot` (только в Docker)                                                            |
+| Скорость загрузки и сценариев               | perf                     | `e2e/perf/*.perf.ts`                 | Playwright + бюджеты                                                                            |
+| Ловят ли тесты ошибки                       | mutation                 | `pnpm mutation`                      | StrykerJS                                                                                       |
 
-Правило: проверяй на самом низком уровне, где поведение наблюдаемо. E2E отвечают за то, что части системы правильно соединены, а не за перебор всех случаев.
+Правило: проверяй на самом низком уровне, где поведение наблюдаемо. E2E отвечают за то, что части системы правильно соединены, а не за перебор всех случаев. Лок (`SHARED_DATA_LOCK`) нужен только E2E-тестам на общих данных: integration на Postgres лок не требует — изоляцию даёт база на воркер из шаблона.
 
 ## Хороший тест
 

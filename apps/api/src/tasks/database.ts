@@ -4,7 +4,9 @@ import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 
-const migrationsFolder = fileURLToPath(new URL('./migrations/', import.meta.url));
+// Путь миграций — один источник (З10 по духу): тесты изоляции передают его
+// хелперу параметром, а не выводят заново отдельной строкой.
+export const taskMigrationsFolder = fileURLToPath(new URL('./migrations/', import.meta.url));
 
 export interface TaskDatabase {
   db: NodePgDatabase;
@@ -23,7 +25,7 @@ export async function connectTaskDatabase(connectionString: string): Promise<Tas
   return { db, close: () => pool.end() };
 }
 
-/** Применяет миграции из src/tasks/migrations; идемпотентно, по журналу drizzle. */
+/** Применяет миграции из taskMigrationsFolder; идемпотентно, по журналу drizzle. */
 export function migrateTaskDatabase(db: NodePgDatabase): Promise<void> {
-  return migrate(db, { migrationsFolder });
+  return migrate(db, { migrationsFolder: taskMigrationsFolder });
 }

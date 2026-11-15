@@ -281,6 +281,9 @@ catalogs:
     sherif:
       specifier: ^1.13.0
       version: 1.13.0
+    testcontainers:
+      specifier: ^12.2.1
+      version: 12.2.1
     turbo:
       specifier: ^2.11.0
       version: 2.11.10
@@ -400,6 +403,9 @@ importers:
       drizzle-kit:
         specifier: 'catalog:'
         version: 0.31.11
+      testcontainers:
+        specifier: 'catalog:'
+        version: 12.2.1(bare-buffer@3.7.2)(supports-color@7.2.0)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
