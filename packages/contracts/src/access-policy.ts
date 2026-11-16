@@ -7,10 +7,11 @@ const AdminAccessPolicySchema = z.strictObject({ type: z.literal('admin') });
 
 /**
  * Политика доступа процедуры: кто должен иметь возможность её вызвать.
- * Это декларация намерения, а не защита: исполнение появится с мидлварью
- * авторизации (задача C2.2), сейчас политики никем не проверяются.
- * Набор типов растёт аддитивно (ADR 0011): новый вариант или параметр —
- * правка этих схем; лишний ключ в meta отклоняется, а не стирается.
+ * Исполняет мидлварь авторизации на сервере (apps/api, C2.2): без актора
+ * или с чужим актором процедура с политикой «owner» получает отказ до
+ * доменной логики. Набор типов растёт аддитивно (ADR 0011): новый вариант
+ * или параметр — правка этих схем; лишний ключ в meta отклоняется, а не
+ * стирается.
  */
 export const AccessPolicySchema = z.discriminatedUnion('type', [
   PublicAccessPolicySchema,
@@ -23,5 +24,9 @@ type AccessPolicy = z.infer<typeof AccessPolicySchema>;
 /**
  * Строитель контракта с типизированной политикой доступа: каждая процедура
  * объявляет `.meta({ access })`, присутствие проверяет access-policy.test.ts.
+ * Отказ доступа — часть контракта: FORBIDDEN (предопределённый код oRPC,
+ * HTTP 403) наследуется всеми процедурами, сервер бросает его из мидлвари.
  */
-export const ocAccess = oc.$meta<{ access?: AccessPolicy }>({});
+export const ocAccess = oc
+  .$meta<{ access?: AccessPolicy }>({})
+  .errors({ FORBIDDEN: { message: 'Access denied' } });

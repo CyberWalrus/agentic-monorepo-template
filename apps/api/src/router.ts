@@ -1,13 +1,11 @@
 import { contract } from '@repo/contracts';
 import { implement } from '@orpc/server';
 
-import type { TaskRepository } from './tasks/repository.ts';
+import { authorizationMiddleware, type AppContext } from './authorization.ts';
 
-interface AppContext {
-  tasks: TaskRepository;
-}
-
-const os = implement(contract).$context<AppContext>();
+// Мидлварь на строителе, а не на отдельных процедурах: у каждой процедуры
+// роутера она в цепочке, пути вызвать её в обход нет (C2.2).
+const os = implement(contract).$context<AppContext>().use(authorizationMiddleware);
 
 export const router = os.router({
   tasks: {
