@@ -95,7 +95,9 @@ jobs:
 
       - name: Approval is valid only from a maintainer after the last push
         id: approval
-        run: node tools/check-gate-approval.ts pr.json events.json .github/CODEOWNERS head-commit.json
+        # Кандидаты CODEOWNERS в порядке приоритета GitHub: шаблон держит живой файл
+        # в docs/ (копия получает рендер в .github/, d8.2).
+        run: node tools/check-gate-approval.ts pr.json events.json .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS head-commit.json
 
       - name: Changed files against protected paths
         env:
