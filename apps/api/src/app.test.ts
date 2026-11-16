@@ -1,5 +1,6 @@
 import { createORPCClient, ORPCError } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
+import { oc } from '@orpc/contract';
 import { implement } from '@orpc/server';
 import type { ContractRouterClient } from '@orpc/contract';
 import { ocAccess, type Contract } from '@repo/contracts';
@@ -266,5 +267,29 @@ describe('authorization over both transports', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toBe('user-7');
+  });
+
+  it('refuses to serve a router built without the authorization middleware', () => {
+    const bareContract = {
+      group: {
+        bare: oc
+          .route({ method: 'GET', path: '/bare', summary: 'No policy at all' })
+          .output(z.string()),
+      },
+      other: {
+        bare: oc
+          .route({ method: 'GET', path: '/other', summary: 'No policy either' })
+          .output(z.string()),
+      },
+    };
+    const osBare = implement(bareContract).$context<AppContext>();
+    const bareRouter = osBare.router({
+      group: { bare: osBare.group.bare.handler(() => 'x') },
+      other: { bare: osBare.other.bare.handler(() => 'x') },
+    });
+
+    expect(() => createApp({ tasks: new InMemoryTaskRepository(), router: bareRouter })).toThrow(
+      'Router procedures without the authorization middleware: group.bare, other.bare',
+    );
   });
 });

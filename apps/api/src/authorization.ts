@@ -1,5 +1,5 @@
 import type { ORPCError } from '@orpc/client';
-import type { MiddlewareResult } from '@orpc/server';
+import { isProcedure, type AnyProcedure, type MiddlewareResult } from '@orpc/server';
 import { AccessPolicySchema } from '@repo/contracts';
 import * as z from 'zod';
 
@@ -39,6 +39,41 @@ const MetaSchema = z.object({ access: AccessPolicySchema.optional() });
 export function accessPolicyFromMeta(meta: unknown) {
   const parsed = MetaSchema.safeParse(meta);
   return parsed.success ? parsed.data.access : undefined;
+}
+
+/**
+ * Все процедуры роутера: рекурсивный обход вложенных роутеров с путями
+ * (перебор реального роутера и guard в createApp идут одной обходилкой).
+ */
+export function* collectProcedures(
+  node: unknown,
+  path: readonly string[] = [],
+): Generator<{ path: readonly string[]; procedure: AnyProcedure }> {
+  if (isProcedure(node)) {
+    yield { path, procedure: node };
+    return;
+  }
+  if (node === null || typeof node !== 'object') {
+    return;
+  }
+  for (const [key, value] of Object.entries(node)) {
+    yield* collectProcedures(value, [...path, key]);
+  }
+}
+
+/**
+ * Процедуры роутера без authorizationMiddleware в цепочке: у такой процедуры
+ * авторизация не исполняется вовсе. createApp отказывается поднимать такой
+ * роутер, тест перебора — красит ветку.
+ */
+export function proceduresWithoutAuthorization(router: unknown): readonly string[] {
+  const bypassed: string[] = [];
+  for (const { path, procedure } of collectProcedures(router)) {
+    if (!procedure['~orpc'].middlewares.includes(authorizationMiddleware)) {
+      bypassed.push(path.join('.'));
+    }
+  }
+  return bypassed;
 }
 
 /**

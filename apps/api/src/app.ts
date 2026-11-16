@@ -6,6 +6,7 @@ import { Hono } from 'hono';
 import * as z from 'zod';
 
 import type { Actor, AppContext } from './authorization.ts';
+import { proceduresWithoutAuthorization } from './authorization.ts';
 import { router as defaultRouter } from './router.ts';
 import type { TaskRepository } from './tasks/repository.ts';
 
@@ -45,6 +46,15 @@ export function createApp({
   enableTestApi = false,
   instanceId,
 }: AppOptions) {
+  // Подменённый роутер без мидлвари отдал бы процедуры мимо авторизации:
+  // падаем на старте, а не молча обслуживаем (ревью безопасности C2.2).
+  const bypassed = proceduresWithoutAuthorization(router);
+  if (bypassed.length > 0) {
+    throw new Error(
+      `Router procedures without the authorization middleware: ${bypassed.join(', ')}`,
+    );
+  }
+
   const app = new Hono();
   const buildContext = (request: Request): AppContext => ({
     tasks,

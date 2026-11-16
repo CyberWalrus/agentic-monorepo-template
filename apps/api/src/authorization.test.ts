@@ -4,7 +4,12 @@ import { ocAccess } from '@repo/contracts';
 import * as z from 'zod';
 import { describe, expect, it } from 'vitest';
 
-import { authorizationMiddleware, type AppContext } from './authorization.ts';
+import {
+  accessPolicyFromMeta,
+  authorizationMiddleware,
+  collectProcedures,
+  type AppContext,
+} from './authorization.ts';
 import { InMemoryTaskRepository } from './tasks/repository.ts';
 
 const OWNER_ACTOR = { id: 'owner-1' };
@@ -61,10 +66,35 @@ function setup(context: Pick<AppContext, 'actor' | 'ownerOf'>) {
     return error;
   };
 
-  return { clientOf, denyErrorOf, domainCalls: () => domainCalls };
+  return { router, clientOf, denyErrorOf, domainCalls: () => domainCalls };
 }
 
 describe('authorization middleware', () => {
+  it('reads a valid policy from procedure meta', () => {
+    expect(accessPolicyFromMeta({ access: { type: 'owner' } })).toEqual({ type: 'owner' });
+    expect(accessPolicyFromMeta({})).toBeUndefined();
+  });
+
+  it('reads no policy from broken procedure meta: deny-by-default', () => {
+    // Незнакомый тип политики и лишний ключ отклоняются, а не стираются.
+    expect(accessPolicyFromMeta({ access: { type: 'nope' } })).toBeUndefined();
+    expect(accessPolicyFromMeta({ access: { type: 'owner', write: true } })).toBeUndefined();
+    expect(accessPolicyFromMeta('not-an-object')).toBeUndefined();
+  });
+
+  it('walks nested routers and yields procedures with their paths', () => {
+    const { router } = setup({ actor: null, ownerOf: async () => null });
+    const paths = [...collectProcedures(router)].map(({ path }) => path.join('.'));
+
+    expect(paths).toEqual(['publicEcho', 'ownerEcho', 'adminEcho', 'noPolicyEcho']);
+  });
+
+  it('yields nothing for values that are not routers', () => {
+    expect([...collectProcedures(null)]).toEqual([]);
+    expect([...collectProcedures('not-a-router')]).toEqual([]);
+    expect([...collectProcedures(42)]).toEqual([]);
+  });
+
   it('lets a public procedure run without an actor', async () => {
     const { clientOf, domainCalls } = setup({ actor: null, ownerOf: async () => null });
 
