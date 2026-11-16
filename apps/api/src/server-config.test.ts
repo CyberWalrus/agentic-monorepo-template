@@ -10,6 +10,7 @@ describe('loadServerEnv', () => {
   it('parses a complete environment into a typed object', () => {
     const env = loadServerEnv({
       PORT: '3901',
+      HOST: '0.0.0.0',
       ENABLE_TEST_API: '1',
       INSTANCE_ID: 'run-1',
       DATABASE_URL: 'postgres://localhost:5432/demo',
@@ -18,6 +19,7 @@ describe('loadServerEnv', () => {
 
     expect(env).toStrictEqual({
       port: 3901,
+      host: '0.0.0.0',
       instanceId: 'run-1',
       databaseUrl: 'postgres://localhost:5432/demo',
       enableTestApi: true,
@@ -30,11 +32,34 @@ describe('loadServerEnv', () => {
 
     expect(env).toStrictEqual({
       port: 3901,
+      host: '127.0.0.1',
       instanceId: undefined,
       databaseUrl: undefined,
       enableTestApi: false,
       testApiWithDatabase: false,
     });
+  });
+
+  it('defaults HOST to the loopback so a local server never binds all interfaces', () => {
+    expect(loadServerEnv({ PORT: '3901' }).host).toBe('127.0.0.1');
+  });
+
+  it('accepts the container host from the environment', () => {
+    expect(loadServerEnv({ PORT: '3901', HOST: '0.0.0.0' }).host).toBe('0.0.0.0');
+    expect(loadServerEnv({ PORT: '3901', HOST: 'api.internal' }).host).toBe('api.internal');
+  });
+
+  it('rejects an empty HOST', () => {
+    expect(() => loadServerEnv({ PORT: '3901', HOST: '' })).toThrow(/HOST is empty/);
+  });
+
+  it('rejects HOST with whitespace', () => {
+    expect(() => loadServerEnv({ PORT: '3901', HOST: ' 0.0.0.0' })).toThrow(
+      /HOST must not contain whitespace/,
+    );
+    expect(() => loadServerEnv({ PORT: '3901', HOST: '0.0.0.0\n' })).toThrow(
+      /HOST must not contain whitespace/,
+    );
   });
 
   it('reads process.env by default', () => {

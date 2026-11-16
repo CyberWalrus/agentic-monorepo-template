@@ -2,15 +2,23 @@
   "name": "@repo/web",
   "version": "0.0.0",
   "private": true,
+  "files": [
+    "dist",
+    "server.ts",
+    "src/lib/env.ts",
+    "src/server-app.ts"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
     "start": "vite preview",
+    "start:prod": "node server.ts",
     "typecheck": "tsc",
     "test": "vitest run --reporter=json --reporter=default --outputFile=reports/vitest.json"
   },
   "dependencies": {
+    "@hono/node-server": "catalog:",
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",
     "@orpc/tanstack-query": "catalog:",
@@ -20,6 +28,7 @@
     "@tanstack/react-router": "catalog:",
     "@tanstack/react-router-ssr-query": "catalog:",
     "@tanstack/react-start": "catalog:",
+    "hono": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "zod": "catalog:"

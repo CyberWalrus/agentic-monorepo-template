@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { apiBaseUrl, loadWebServerEnv } from './env.ts';
+import { apiBaseUrl, loadWebProcessEnv, loadWebServerEnv } from './env.ts';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -50,6 +50,59 @@ describe('loadWebServerEnv', () => {
     expect(message).toMatch(/API_URL is empty or not an http\(s\) URL/);
     expect(message).not.toContain('secret');
     expect(message).not.toContain('postgres://');
+  });
+});
+
+describe('loadWebProcessEnv', () => {
+  it('parses the production-entry environment into a typed object', () => {
+    expect(
+      loadWebProcessEnv({ PORT: '3900', HOST: '0.0.0.0', API_URL: 'http://127.0.0.1:3901' }),
+    ).toEqual({ port: 3900, host: '0.0.0.0', apiUrl: 'http://127.0.0.1:3901' });
+  });
+
+  it('defaults HOST to the loopback so a local entry never binds all interfaces', () => {
+    expect(loadWebProcessEnv({ PORT: '3900', API_URL: 'http://127.0.0.1:3901' }).host).toBe(
+      '127.0.0.1',
+    );
+  });
+
+  it('rejects a missing PORT with the setup hint', () => {
+    expect(() => loadWebProcessEnv({ API_URL: 'http://127.0.0.1:3901' })).toThrow(
+      /PORT is missing.*start:prod/s,
+    );
+  });
+
+  it('rejects an empty, non-numeric and non-positive PORT', () => {
+    const apiUrl = { API_URL: 'http://127.0.0.1:3901' };
+    expect(() => loadWebProcessEnv({ ...apiUrl, PORT: '' })).toThrow(/PORT is empty/);
+    expect(() => loadWebProcessEnv({ ...apiUrl, PORT: 'abc' })).toThrow(
+      /PORT is not a positive integer/,
+    );
+    expect(() => loadWebProcessEnv({ ...apiUrl, PORT: '12abc' })).toThrow(
+      /PORT is not a positive integer/,
+    );
+    expect(() => loadWebProcessEnv({ ...apiUrl, PORT: '0' })).toThrow(
+      /PORT must be greater than zero/,
+    );
+  });
+
+  it('rejects an empty HOST and HOST with whitespace', () => {
+    const env = { PORT: '3900', API_URL: 'http://127.0.0.1:3901' };
+    expect(() => loadWebProcessEnv({ ...env, HOST: '' })).toThrow(/HOST is empty/);
+    expect(() => loadWebProcessEnv({ ...env, HOST: ' 0.0.0.0' })).toThrow(
+      /HOST must not contain whitespace/,
+    );
+  });
+
+  it('rejects a missing or non-http API_URL at startup so the process fails closed', () => {
+    expect(() => loadWebProcessEnv({ PORT: '3900' })).toThrow(/API_URL is empty/);
+    expect(() => loadWebProcessEnv({ PORT: '3900', API_URL: 'not-a-url' })).toThrow(/API_URL/);
+  });
+
+  it('lists every invalid variable in one failure', () => {
+    expect(() => loadWebProcessEnv({ PORT: 'abc', HOST: '', API_URL: 'nope' })).toThrow(
+      /PORT is not a positive integer[\s\S]*\n[\s\S]*HOST is empty[\s\S]*\n[\s\S]*API_URL/,
+    );
   });
 });
 
