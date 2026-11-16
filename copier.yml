@@ -1,0 +1,35 @@
+# Вопросы Copier (ADR 0008). Ответы сохраняются в .copier-answers.yml проекта.
+# _tasks и _migrations запрещены (ADR 0008): они исполняют команды на машине человека
+# при создании и обновлении. Проверка отсутствия — канарейка копии (d8.3).
+project_name:
+  type: str
+  help: Имя проекта (обязательно)
+  validator: '{% if not project_name.strip() %}Укажите имя проекта{% endif %}'
+
+repo_owner:
+  type: str
+  help: 'Владелец репозитория для CODEOWNERS — @пользователь, @организация или @орг/команда (обязательно: без него CODEOWNERS не заработает и gate-integrity не станет зелёным)'
+  validator: '{% if not repo_owner.startswith("@") or "\n" in repo_owner or "\t" in repo_owner or " " in repo_owner or "#" in repo_owner %}Укажите @пользователя, @организацию или @орг/команду — без пробелов, «#» и переводов строк{% endif %}'
+
+# Собственный _exclude copier 9 заменяет дефолты 9.19.1 целиком — ("copier.yaml",
+# "copier.yml", "~*", "*.py[co]", "__pycache__", ".git", ".DS_Store", ".svn"), поэтому
+# практический набор возвращён явно; ".github" среди дефолтов нет и не нужен: гейты едут
+# в копию (ADR 0008). Паттерны copier 9 — gitwildmatch (pathspec), не regex: паттерн со
+# слешем якорится к корню, без слеша матчит компонент пути на любой глубине (".git" не
+# задевает .gitignore и .github). copier.yml есть в дефолтах, но после замены списка
+# запись обязательна. Живой CODEOWNERS шаблона лежит в docs/CODEOWNERS и не едет в копию:
+# исключение матчит путь назначения, поэтому живой файл не может лежать рядом с рендером —
+# исключение .github/CODEOWNERS убило бы и рендер CODEOWNERS.jinja в тот же путь (проба d8.2).
+_exclude:
+  - '~*'
+  - '*.py[co]'
+  - __pycache__
+  - .DS_Store
+  - .git
+  - copier.yml
+  - copier.yaml
+  - backlog/
+  - docs/roadmap.md
+  - docs/research/
+  - docs/template-state.md
+  - docs/CODEOWNERS
