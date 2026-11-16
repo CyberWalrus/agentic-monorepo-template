@@ -1,13 +1,22 @@
 import { createORPCClient, ORPCError } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
+import { oc } from '@orpc/contract';
+import { implement } from '@orpc/server';
 import type { ContractRouterClient } from '@orpc/contract';
-import type { Contract } from '@repo/contracts';
+import { ocAccess, type Contract } from '@repo/contracts';
+import * as z from 'zod';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.ts';
+import { authorizationMiddleware, type Actor, type AppContext } from './authorization.ts';
 import { InMemoryTaskRepository } from './tasks/repository.ts';
 
 const UNKNOWN_ID = '00000000-0000-4000-8000-999999999999';
+
+const actorFromHeader = (request: Request): Actor | null => {
+  const id = request.headers.get('x-actor-id');
+  return id === null ? null : { id };
+};
 
 function setup({
   enableTestApi = false,
@@ -181,5 +190,106 @@ describe('test API', () => {
 
     expect(response.status).toBe(400);
     expect(await client.tasks.list()).toHaveLength(1);
+  });
+});
+
+function setupFixture({ actorId }: { actorId?: string } = {}) {
+  const fixtureContract = {
+    whoAmI: ocAccess
+      .route({ method: 'GET', path: '/fixture/who', summary: 'Name of the acting actor' })
+      .meta({ access: { type: 'public' } })
+      .output(z.string()),
+    ownerEcho: ocAccess
+      .route({ method: 'GET', path: '/fixture/owner', summary: 'Owner-only echo' })
+      .meta({ access: { type: 'owner' } })
+      .output(z.string()),
+  };
+
+  const os = implement(fixtureContract).$context<AppContext>().use(authorizationMiddleware);
+  const router = os.router({
+    whoAmI: os.whoAmI.handler(({ context }) => context.actor?.id ?? 'anonymous'),
+    ownerEcho: os.ownerEcho.handler(() => 'domain must not run'),
+  });
+
+  const app = createApp({
+    tasks: new InMemoryTaskRepository(),
+    router,
+    resolveActor: actorFromHeader,
+  });
+
+  const headers = actorId === undefined ? {} : { 'x-actor-id': actorId };
+  const client: ContractRouterClient<typeof fixtureContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://api.test/rpc',
+      headers,
+      fetch: async (request) => app.fetch(request),
+    }),
+  );
+  return { app, client };
+}
+
+describe('authorization over both transports', () => {
+  it('plumbs the resolved actor into procedures over RPC', async () => {
+    const { client } = setupFixture({ actorId: 'user-7' });
+
+    await expect(client.whoAmI()).resolves.toBe('user-7');
+  });
+
+  it('resolves no actor by default over RPC', async () => {
+    const { client } = setupFixture();
+
+    await expect(client.whoAmI()).resolves.toBe('anonymous');
+  });
+
+  it('denies an owner procedure over RPC with a typed FORBIDDEN', async () => {
+    const { client } = setupFixture({ actorId: 'user-7' });
+
+    const error = await client.ownerEcho().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ORPCError);
+    expect(error).toMatchObject({ code: 'FORBIDDEN', message: 'Access denied' });
+  });
+
+  it('responds 403 for an owner procedure over REST with or without an actor', async () => {
+    const { app } = setupFixture({ actorId: 'user-7' });
+
+    const anonymous = await app.request('/api/fixture/owner');
+    const acting = await app.request('/api/fixture/owner', { headers: { 'x-actor-id': 'user-7' } });
+
+    expect(anonymous.status).toBe(403);
+    expect(acting.status).toBe(403);
+  });
+
+  it('serves a public procedure over REST regardless of the actor', async () => {
+    const { app } = setupFixture({ actorId: 'user-7' });
+
+    const response = await app.request('/api/fixture/who', { headers: { 'x-actor-id': 'user-7' } });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toBe('user-7');
+  });
+
+  it('refuses to serve a router built without the authorization middleware', () => {
+    const bareContract = {
+      group: {
+        bare: oc
+          .route({ method: 'GET', path: '/bare', summary: 'No policy at all' })
+          .output(z.string()),
+      },
+      other: {
+        bare: oc
+          .route({ method: 'GET', path: '/other', summary: 'No policy either' })
+          .output(z.string()),
+      },
+    };
+    const osBare = implement(bareContract).$context<AppContext>();
+    const bareRouter = osBare.router({
+      group: { bare: osBare.group.bare.handler(() => 'x') },
+      other: { bare: osBare.other.bare.handler(() => 'x') },
+    });
+
+    expect(() => createApp({ tasks: new InMemoryTaskRepository(), router: bareRouter })).toThrow(
+      'Router procedures without the authorization middleware: group.bare, other.bare',
+    );
   });
 });

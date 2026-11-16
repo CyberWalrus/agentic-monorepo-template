@@ -3,20 +3,23 @@
  * Одобрение действительно, только если одновременно:
  *   1) label `gate-change-approved` стоит на PR сейчас;
  *   2) последнее событие labeled новее даты head-коммита PR (прокси времени push);
- *   3) событие сделал человек из глобальных владельцев .github/CODEOWNERS (строка `*`).
+ *   3) событие сделал человек из глобальных владельцев CODEOWNERS (строка `*`).
  * Свежесть строки 2 — вторая линия: основной механизм — job, снимающий label на
  * synchronize (любой реальный push меняет head-коммит и запускает synchronize).
  * Любая неопределённость (нет события, нет владельцев, битые данные) — не одобрено.
  * Это fail-closed (З4): упавшая или обойдённая проверка блокирует, а не пропускает.
  *
- *   node tools/check-gate-approval.ts <pr.json> <events.json> <CODEOWNERS> <head-commit.json>
+ *   node tools/check-gate-approval.ts <pr.json> <events.json> <CODEOWNERS...> <head-commit.json>
  *
  * pr.json          — `gh pr view <n> --json labels,headRefOid`
  * events.json      — `gh api issues/<n>/events`
+ * CODEOWNERS...    — кандидаты в порядке приоритета GitHub: `.github/`, корень, `docs/`;
+ *                    берётся первый существующий файл (шаблон держит живой файл в `docs/`,
+ *                    копия — рендер в `.github/`, d8.2)
  * head-commit.json — `gh api commits/<headRefOid>`
  * Вывод: человекочитаемая причина; в $GITHUB_OUTPUT дописывается approved=true|false.
  */
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 
 const LABEL = 'gate-change-approved';
 
@@ -34,7 +37,11 @@ interface LabeledEvent {
 }
 
 /** Глобальные владельцы CODEOWNERS: логины из строки с паттерном `*`. */
-function maintainersOf(codeownersPath: string): Set<string> {
+function maintainersOf(codeownersCandidates: string[]): Set<string> {
+  const codeownersPath = codeownersCandidates.find((candidate) => existsSync(candidate));
+  if (!codeownersPath) {
+    return new Set();
+  }
   return new Set(
     readFileSync(codeownersPath, 'utf8')
       .split('\n')
@@ -74,18 +81,20 @@ function lastLabeledEvent(events: unknown[]): LabeledEvent | undefined {
   return latest;
 }
 
-const [prPath, eventsPath, codeownersPath, headCommitPath] = process.argv.slice(2);
-if (!prPath || !eventsPath || !codeownersPath || !headCommitPath) {
+const args = process.argv.slice(2);
+const headCommitPath = args.at(-1);
+const codeownersCandidates = args.slice(2, -1);
+if (!args[0] || !args[1] || codeownersCandidates.length === 0 || !headCommitPath) {
   console.error(
-    'Использование: node tools/check-gate-approval.ts <pr.json> <events.json> <CODEOWNERS> <head-commit.json>',
+    'Использование: node tools/check-gate-approval.ts <pr.json> <events.json> <CODEOWNERS...> <head-commit.json>',
   );
   process.exit(2);
 }
 
-const pr: unknown = JSON.parse(readFileSync(prPath, 'utf8'));
-const events: unknown = JSON.parse(readFileSync(eventsPath, 'utf8'));
+const pr: unknown = JSON.parse(readFileSync(args[0], 'utf8'));
+const events: unknown = JSON.parse(readFileSync(args[1], 'utf8'));
 const headCommit: unknown = JSON.parse(readFileSync(headCommitPath, 'utf8'));
-const maintainers = maintainersOf(codeownersPath);
+const maintainers = maintainersOf(codeownersCandidates);
 
 let approved = false;
 let reason: string;
@@ -101,7 +110,8 @@ const pushedAt =
     : undefined;
 
 if (!maintainers.size) {
-  reason = 'в CODEOWNERS нет глобальных владельцев (строка `*`) — некому доверять одобрение';
+  reason =
+    'в CODEOWNERS (кандидаты: .github/, корень, docs/) нет файла со строкой `*` — некому доверять одобрение';
 } else if (!hasLabel) {
   reason = `label ${LABEL} не стоит на PR`;
 } else if (!pushedAt || Number.isNaN(Date.parse(pushedAt))) {

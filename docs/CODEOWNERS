@@ -21,6 +21,12 @@
 **/stryker.config.json          @CyberWalrus
 /e2e/playwright.config.ts       @CyberWalrus
 **/__screenshots__/             @CyberWalrus
+/copier.yml                     @CyberWalrus
+/.copier-answers.yml.jinja      @CyberWalrus
+/tools/copier-version.txt       @CyberWalrus
+/.github/CODEOWNERS.jinja       @CyberWalrus
+/docs/CODEOWNERS                @CyberWalrus
+/CODEOWNERS                     @CyberWalrus
 
 # Контракт API затрагивает и фронт, и бэк.
 /packages/contracts/            @CyberWalrus

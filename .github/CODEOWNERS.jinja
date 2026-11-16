@@ -1,0 +1,35 @@
+# Ruleset требует ревью CODEOWNERS. Замени владельцев на команды организации.
+# Гейты, их конфигурация и инструкции агентов — только мейнтейнеры (см. tools/protected-paths.json).
+
+*                               {{ repo_owner }}
+
+/.github/                       {{ repo_owner }}
+/tools/                         {{ repo_owner }}
+/.claude/                       {{ repo_owner }}
+/AGENTS.md                      {{ repo_owner }}
+/CLAUDE.md                      {{ repo_owner }}
+/perf-budgets.json              {{ repo_owner }}
+/.oxlintrc.json                 {{ repo_owner }}
+/.oxfmtrc.json                  {{ repo_owner }}
+/.dependency-cruiser.cjs        {{ repo_owner }}
+/knip.json                      {{ repo_owner }}
+/lefthook.yml                   {{ repo_owner }}
+/tsconfig.base.json             {{ repo_owner }}
+/turbo.json                     {{ repo_owner }}
+/pnpm-workspace.yaml            {{ repo_owner }}
+**/vitest.config.ts             {{ repo_owner }}
+**/stryker.config.json          {{ repo_owner }}
+/e2e/playwright.config.ts       {{ repo_owner }}
+**/__screenshots__/             {{ repo_owner }}
+/copier.yml                     {{ repo_owner }}
+/.copier-answers.yml.jinja      {{ repo_owner }}
+/tools/copier-version.txt       {{ repo_owner }}
+/.github/CODEOWNERS.jinja       {{ repo_owner }}
+/docs/CODEOWNERS                {{ repo_owner }}
+/CODEOWNERS                     {{ repo_owner }}
+
+# Контракт API затрагивает и фронт, и бэк.
+/packages/contracts/            {{ repo_owner }}
+
+# Доска задач (ADR 0007): правка чужой задачи или её блокирующих полей видна человеку.
+/backlog/                       {{ repo_owner }}

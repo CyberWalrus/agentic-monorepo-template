@@ -49,8 +49,28 @@ GitHub с 2026-12-02 блокирует `pull_request_target` в публичн�
 
 ## 6. CODEOWNERS
 
-Замените владельцев в [`.github/CODEOWNERS`](../.github/CODEOWNERS) на команды вашей организации (например, `@org/platform` для гейтов, `@org/api` для контрактов).
+В копии проекта `.github/CODEOWNERS` уже создан `copier copy` с вашим владельцем из ответа `repo_owner` ([ADR 0008](adr/0008-template-distribution.md)). Замените владельцев на команды вашей организации (например, `@org/platform` для гейтов, `@org/api` для контрактов): `gate-integrity` доверяет label `gate-change-approved`, только если его поставил владелец из строки `*`. В самом шаблоне рабочий CODEOWNERS лежит в `docs/CODEOWNERS` — GitHub читает его, когда файла нет в `.github/`.
 
 ## 7. Ruleset для тегов `v*`
 
+Создайте в UI (Settings → Rules → Rulesets) по снимку [`.github/rulesets/tags-v.json`](../.github/rulesets/tags-v.json):
+
+- таргет — Tags, паттерн `v*`;
+- запрет обновления и удаления существующих тегов; создание тегов не ограничено.
+
+Тег — доверенная база: по нему Copier находит версию шаблона и обновляет проект ([ADR 0008](adr/0008-template-distribution.md), «Версии»). Переставленный или удалённый тег подменяет базу проекта — поэтому существующие теги `v*` неприкосновенны, а новые версии добавляются следующими по номеру.
+
 ## 8. Создание проекта из шаблона
+
+Проект создаётся `copier copy` из **тега** `v*` шаблона, не из ветки или worktree: тег — доверенная база для будущих обновлений ([ADR 0008](adr/0008-template-distribution.md)). Версию Copier берите из [`tools/copier-version.txt`](../tools/copier-version.txt) — единственного источника закреплённой версии (З10; её же читает CI).
+
+```bash
+uvx --from "copier==$(cat tools/copier-version.txt)" \
+  copier copy --vcs-ref=v0.1.0 \
+  https://github.com/<владелец-шаблона>/agentic-monorepo-template.git \
+  путь/до/проекта
+```
+
+Copier спросит имя проекта и владельца репозитория (`@организация` или `@пользователь`). Оба ответа обязательны; владелец попадёт в `CODEOWNERS` копии — без него ревью по CODEOWNERS не заработает и `gate-integrity` не станет зелёным. Ответы сохраняются в `.copier-answers.yml` проекта: по нему позже работает `copier update` — его запускает человек, результат идёт обычным PR с label `gate-change-approved` ([ADR 0008](adr/0008-template-distribution.md)).
+
+Затем в копии выполните `pnpm install && pnpm verify` — должно быть зелёным. После этого пройдите разделы 1–6 выше.

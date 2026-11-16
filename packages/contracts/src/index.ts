@@ -14,3 +14,5 @@ export {
   type CreateTaskInput,
   type Task,
 } from './tasks.ts';
+
+export { AccessPolicySchema, ocAccess } from './access-policy.ts';
