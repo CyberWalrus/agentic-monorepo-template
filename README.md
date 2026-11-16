@@ -60,7 +60,7 @@ packages/ui         презентационные компоненты + виз
 e2e                 Playwright: features, visual, perf, agents (seed)
 tools               гейты: verify, бюджеты, защищённые пути, Docker-скриншоты
 .claude             хуки, скилы, субагенты-ревьюеры, Playwright Test Agents
-.github             CI, агентное ревью, nightly, ruleset, CODEOWNERS, Renovate
+.github             CI, агентное ревью, nightly, ruleset, Renovate; CODEOWNERS в docs/
 ```
 
 ## Документы
