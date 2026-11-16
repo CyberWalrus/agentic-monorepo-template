@@ -211,6 +211,34 @@ export const CANARIES: GateCanary[] = [
     },
   },
   {
+    // Политика доступа объявляется метаданными процедуры (ADR 0011, C2.0),
+    // наличие политики проверяет тест перебора в пакете контрактов. Плохое
+    // изменение — процедура без meta, добавленная в копию контракта: её
+    // замечает только перебор по объекту — тест, сведённый к списку имён,
+    // новую процедуру пропустит и останется зелёным (п.3 C2.1). Якорь —
+    // закрывающая скобка contract-объекта: переживает смену типа политики
+    // и появление параметров в её вариантах.
+    name: 'процедура контракта без политики доступа',
+    steps: 'test',
+    failedStep: 'test',
+    expect: /every contract procedure declares a valid access policy/,
+    apply: (root) => {
+      const path = join(root, 'packages/contracts/src/tasks.ts');
+      const source = readFileSync(path, 'utf8');
+      const withEvilProcedure = source.replace(
+        /\n};/,
+        `\n  evilProbe: ocAccess
+    .route({ method: 'GET', path: '/tasks/evil-probe', summary: 'Evil probe' })
+    .output(z.array(TaskSchema)),
+};`,
+      );
+      if (withEvilProcedure === source) {
+        throw new Error('canary anchor not found: contracts/src/tasks.ts has no closing brace');
+      }
+      writeFileSync(path, withEvilProcedure);
+    },
+  },
+  {
     name: 'бандл сверх бюджета',
     steps: 'build,bundle',
     full: true,
