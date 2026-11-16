@@ -16,10 +16,12 @@ const PORT_HINT = 'run through `pnpm dev`, the e2e webServer or `node tools/port
 const portSchema = z
   .string({ error: `PORT is missing: ${PORT_HINT}` })
   .min(1, { error: `PORT is empty: ${PORT_HINT}` })
-  .refine((raw) => /^\d+$/.test(raw) && Number(raw) > 0, {
+  // Целиком из цифр (якоря важны: '12abc' и 'abc12' — не порт).
+  .refine((raw) => /^\d+$/.test(raw), {
     error: `PORT is not a positive integer: ${PORT_HINT}`,
   })
-  .transform(Number);
+  .transform(Number)
+  .refine((port) => port > 0, { error: `PORT must be greater than zero: ${PORT_HINT}` });
 
 // '1'/'true'/… включают, '0'/'false'/… выключают, отсутствие — false; любое
 // другое значение — отказ при старте, а не молчаливое «выключено».
@@ -65,7 +67,8 @@ export type ServerStorage = { kind: 'memory' } | { kind: 'postgres'; connectionS
 function formatIssues(error: z.ZodError): string {
   return error.issues
     .map((issue) => {
-      const name = issue.path.map(String).join('.') || '(environment)';
+      // Путь у полевых issues всегда непустой: ключ переменной окружения.
+      const name = issue.path.join('.') || '(environment)';
       return `  - ${name}: ${issue.message}`;
     })
     .join('\n');

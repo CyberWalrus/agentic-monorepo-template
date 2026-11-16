@@ -64,7 +64,15 @@ describe('loadServerEnv', () => {
   });
 
   it('rejects a non-positive PORT', () => {
-    expect(() => loadServerEnv({ PORT: '0' })).toThrow(/PORT is not a positive integer/);
+    expect(() => loadServerEnv({ PORT: '0' })).toThrow(/PORT must be greater than zero/);
+  });
+
+  it('rejects a PORT with a trailing non-numeric suffix', () => {
+    expect(() => loadServerEnv({ PORT: '12abc' })).toThrow(/PORT is not a positive integer/);
+  });
+
+  it('rejects a PORT with a leading non-numeric prefix', () => {
+    expect(() => loadServerEnv({ PORT: 'abc12' })).toThrow(/PORT is not a positive integer/);
   });
 
   it('rejects an unknown flag value instead of treating it as off', () => {
@@ -75,15 +83,20 @@ describe('loadServerEnv', () => {
     expect(() => loadServerEnv({ PORT: '3901', NODE_ENV: 'prod' })).toThrow(/NODE_ENV/);
   });
 
+  it('accepts the canonical NODE_ENV values', () => {
+    expect(() => loadServerEnv({ PORT: '3901', NODE_ENV: 'development' })).not.toThrow();
+    expect(() => loadServerEnv({ PORT: '3901', NODE_ENV: 'production' })).not.toThrow();
+  });
+
   it('refuses the test API in production through the schema guard', () => {
     expect(() =>
       loadServerEnv({ PORT: '3901', ENABLE_TEST_API: '1', NODE_ENV: 'production' }),
-    ).toThrow(/ENABLE_TEST_API must never be set in production/);
+    ).toThrow(/- ENABLE_TEST_API: ENABLE_TEST_API must never be set in production/);
   });
 
   it('lists every invalid variable in one failure', () => {
     expect(() => loadServerEnv({ PORT: 'abc', ENABLE_TEST_API: '2', NODE_ENV: 'prod' })).toThrow(
-      /PORT is not a positive integer.*ENABLE_TEST_API.*NODE_ENV/s,
+      /PORT is not a positive integer[\s\S]*\n[\s\S]*ENABLE_TEST_API[\s\S]*\n[\s\S]*NODE_ENV/,
     );
   });
 
