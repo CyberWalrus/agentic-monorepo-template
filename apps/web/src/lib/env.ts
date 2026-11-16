@@ -33,7 +33,11 @@ export function loadWebServerEnv(source: Record<string, string | undefined> = pr
   apiUrl: string;
 } {
   const serverEnvSchema = z.object({
-    API_URL: z.url({ error: `API_URL is empty or not an absolute URL: ${API_URL_HINT}` }),
+    // Прокси и SSR fetch ходят по http(s); другая схема — ошибка конфигурации.
+    API_URL: z.url({
+      protocol: /^https?$/,
+      error: `API_URL is empty or not an http(s) URL: ${API_URL_HINT}`,
+    }),
   });
   const parsed = serverEnvSchema.safeParse(source);
   if (!parsed.success) {

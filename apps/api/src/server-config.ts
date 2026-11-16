@@ -23,9 +23,10 @@ const portSchema = z
   .transform(Number)
   .refine((port) => port > 0, { error: `PORT must be greater than zero: ${PORT_HINT}` });
 
-// '1'/'true'/… включают, '0'/'false'/… выключают, отсутствие — false; любое
-// другое значение — отказ при старте, а не молчаливое «выключено».
-const flagSchema = z.stringbool().default(false);
+// '1'/'true' включают, '0'/'false' выключают, отсутствие — false; любое другое
+// значение (включая 'enabled' и 'yes' из дефолтного словаря stringbool) —
+// отказ при старте, а не молчаливое «выключено».
+const flagSchema = z.stringbool({ truthy: ['1', 'true'], falsy: ['0', 'false'] }).default(false);
 
 // Пустая строка равна отсутствующей (DATABASE_URL='' — in-memory, как и раньше).
 const optionalStringSchema = z

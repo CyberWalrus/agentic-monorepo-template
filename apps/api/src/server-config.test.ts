@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { loadServerEnv, resolveServerStorage } from './server-config.ts';
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe('loadServerEnv', () => {
   it('parses a complete environment into a typed object', () => {
@@ -12,7 +16,7 @@ describe('loadServerEnv', () => {
       NODE_ENV: 'test',
     });
 
-    expect(env).toEqual({
+    expect(env).toStrictEqual({
       port: 3901,
       instanceId: 'run-1',
       databaseUrl: 'postgres://localhost:5432/demo',
@@ -24,13 +28,23 @@ describe('loadServerEnv', () => {
   it('defaults flags to false and absent optional values to undefined', () => {
     const env = loadServerEnv({ PORT: '3901' });
 
-    expect(env).toEqual({
+    expect(env).toStrictEqual({
       port: 3901,
       instanceId: undefined,
       databaseUrl: undefined,
       enableTestApi: false,
       testApiWithDatabase: false,
     });
+  });
+
+  it('reads process.env by default', () => {
+    vi.stubEnv('PORT', '3901');
+
+    expect(loadServerEnv().port).toBe(3901);
+  });
+
+  it('treats an empty INSTANCE_ID as absent', () => {
+    expect(loadServerEnv({ PORT: '3901', INSTANCE_ID: '' }).instanceId).toBeUndefined();
   });
 
   it('treats an empty DATABASE_URL as absent so storage stays in-memory', () => {
@@ -49,6 +63,20 @@ describe('loadServerEnv', () => {
 
     expect(env.enableTestApi).toBe(true);
     expect(env.testApiWithDatabase).toBe(true);
+  });
+
+  it('accepts the word form of the off state', () => {
+    expect(loadServerEnv({ PORT: '3901', ENABLE_TEST_API: '0' }).enableTestApi).toBe(false);
+    expect(loadServerEnv({ PORT: '3901', ENABLE_TEST_API: 'false' }).enableTestApi).toBe(false);
+  });
+
+  it('rejects word forms outside the pinned boolean vocabulary', () => {
+    expect(() => loadServerEnv({ PORT: '3901', ENABLE_TEST_API: 'enabled' })).toThrow(
+      /ENABLE_TEST_API/,
+    );
+    expect(() => loadServerEnv({ PORT: '3901', ENABLE_TEST_API: 'yes' })).toThrow(
+      /ENABLE_TEST_API/,
+    );
   });
 
   it('rejects a missing PORT with the setup hint', () => {

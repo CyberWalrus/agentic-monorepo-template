@@ -14,20 +14,42 @@ describe('loadWebServerEnv', () => {
   });
 
   it('rejects a missing API_URL with the setup hint', () => {
-    expect(() => loadWebServerEnv({})).toThrow(/API_URL is empty or not an absolute URL/);
+    expect(() => loadWebServerEnv({})).toThrow(/API_URL is empty or not an http\(s\) URL/);
     expect(() => loadWebServerEnv({})).toThrow(/reports\/ports\.json/);
   });
 
   it('rejects an empty API_URL', () => {
     expect(() => loadWebServerEnv({ API_URL: '' })).toThrow(
-      /API_URL is empty or not an absolute URL/,
+      /API_URL is empty or not an http\(s\) URL/,
     );
   });
 
   it('rejects a value that is not an absolute URL', () => {
     expect(() => loadWebServerEnv({ API_URL: 'not-a-url' })).toThrow(
-      /API_URL is empty or not an absolute URL/,
+      /API_URL is empty or not an http\(s\) URL/,
     );
+  });
+
+  it('rejects a URL outside the http(s) schemes the proxy and fetch need', () => {
+    expect(() => loadWebServerEnv({ API_URL: 'postgres://host.example:5432/db' })).toThrow(
+      /API_URL is empty or not an http\(s\) URL/,
+    );
+  });
+
+  it('keeps a rejected API_URL value out of the failure message', () => {
+    let thrown: unknown;
+    try {
+      loadWebServerEnv({ API_URL: 'postgres://user:secret@host.example:5432/db' });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = thrown instanceof Error ? thrown.message : '';
+
+    expect(message).toMatch(/API_URL is empty or not an http\(s\) URL/);
+    expect(message).not.toContain('secret');
+    expect(message).not.toContain('postgres://');
   });
 });
 
@@ -43,6 +65,6 @@ describe('apiBaseUrl', () => {
   it('fails loudly when API_URL is missing on the server render', () => {
     vi.stubEnv('API_URL', '');
 
-    expect(() => apiBaseUrl()).toThrow(/API_URL is empty or not an absolute URL/);
+    expect(() => apiBaseUrl()).toThrow(/API_URL is empty or not an http\(s\) URL/);
   });
 });
