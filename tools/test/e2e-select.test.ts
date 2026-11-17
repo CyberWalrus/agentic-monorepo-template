@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import {
+  appFeatureDirs,
   e2eFeatureDirs,
   functionalTestIgnore,
   parseE2eFeaturesEnv,
@@ -217,16 +218,19 @@ describe('functionalTestIgnore (на фикстурном дереве)', () => 
     expect(selectE2eFeatures(['e2e/features/tasks2/a.spec.ts'], e2eFeatureDirs(root))).toEqual(ALL);
   });
 
-  it('на живом репозитории игнорируется только фича с app-каталогом (tasks)', () => {
+  it('на живом репозитории инвариант H1 без пина на состав фич (M1-ревью: файл под deny)', () => {
     const repoRoot = resolve(import.meta.dirname, '../..');
-    // Задача tasks: сквозные (a11y, api-origin, route-states, traceability)
-    // не попадают в игнор ни при каком выборе (H1).
-    expect(
-      functionalTestIgnore(repoRoot, [], ['tasks']).every((path) =>
-        path.startsWith('features/tasks/'),
-      ),
-    ).toBe(true);
-    expect(functionalTestIgnore(repoRoot, ['tasks'])).toEqual([]);
+    const appFeatures = appFeatureDirs(repoRoot);
+    const crosscut = e2eFeatureDirs(repoRoot).filter((feature) => !appFeatures.includes(feature));
+    // Сквозные (без app-каталога) не попадают в игнор ни при каком выборе;
+    // выбраны все app-фичи → игнор пуст, сколько бы фич ни появилось.
+    for (const path of functionalTestIgnore(repoRoot, [], appFeatures)) {
+      expect(
+        crosscut.some((feature) => path.startsWith(`features/${feature}/`)),
+        `${path} отсекает сквозную фичу`,
+      ).toBe(false);
+    }
+    expect(functionalTestIgnore(repoRoot, appFeatures)).toEqual([]);
   });
 
   it('e2eFeatureDirs на живом репозитории видит пять фич', () => {
