@@ -4,7 +4,11 @@ import {
   dependencyCycles,
   DOCTOR_IDLE_HOURS,
   doctorFindings,
+  invalidNeedsHuman,
   invalidTouch,
+  isOperatorTask,
+  needsHumanKind,
+  openDependentsCount,
   parseTask,
   statusOf,
   touchesOverlap,
@@ -180,6 +184,7 @@ describe('doctorFindings', () => {
     claimedIds: new Set<string>(),
     mergedIds: new Set<string>(),
     branchAgeHours: new Map<string, number>(),
+    maintenanceFiles: [],
   };
 
   it('чистая доска — находок нет', () => {
@@ -249,11 +254,158 @@ describe('doctorFindings', () => {
       claimedIds: new Set(['z9', 'b2', 'a1']),
       mergedIds: new Set(['a1', 'z9']),
       branchAgeHours: new Map([['b2', 100]]),
+      maintenanceFiles: [],
     });
     expect(findings.map((finding) => [finding.kind, finding.id])).toEqual([
       ['unclosed', 'a1'],
       ['leftover-branch', 'z9'],
       ['idle-claim', 'b2'],
     ]);
+  });
+});
+
+describe('needsHumanKind', () => {
+  it('три допустимых префикса и пустое значение', () => {
+    expect(needsHumanKind('')).toBe(null);
+    expect(needsHumanKind('оператор: настроить запись')).toBe('operator');
+    expect(needsHumanKind('отложено: появится второй тег')).toBe('deferred');
+    expect(needsHumanKind('человек: поставить защищённый тег')).toBe('human');
+  });
+
+  it('произвольный текст и чужие префиксы — null (гейт красит)', () => {
+    expect(needsHumanKind('выбрать вариант')).toBe(null);
+    expect(needsHumanKind('Оператор: настроить')).toBe(null);
+    expect(needsHumanKind('оператор : с пробелом')).toBe(null);
+  });
+});
+
+describe('invalidNeedsHuman', () => {
+  it('пустое и корректно префиксованное — допустимо', () => {
+    expect(invalidNeedsHuman('')).toBe(null);
+    expect(invalidNeedsHuman('оператор: настроить запись Claude Code')).toBe(null);
+    expect(invalidNeedsHuman('отложено: появился второй тег v*')).toBe(null);
+    expect(invalidNeedsHuman('человек: поставить защищённый тег v0.1.0')).toBe(null);
+  });
+
+  it('без префикса — красит с подсказкой трёх префиксов', () => {
+    const problem = invalidNeedsHuman('утвердить дизайн метаданных');
+    expect(problem).toContain('оператор:');
+    expect(problem).toContain('человек:');
+  });
+
+  it('оператор: с действием приёмки — красит: делегирование запрещено (ADR 0009)', () => {
+    for (const text of [
+      'оператор: поставить label gate-change-approved',
+      'оператор: сделать approve и merge PR',
+      'оператор: ввести пароль в форму входа',
+      'оператор: создать токен доступа',
+      'оператор: завести аккаунт облачного агента',
+    ]) {
+      const problem = invalidNeedsHuman(text);
+      expect(problem?.includes('не делегируется')).toBe(true);
+    }
+  });
+
+  it('оператор: без действий приёмки и другие префиксы со словами из списка — допустимы', () => {
+    expect(
+      invalidNeedsHuman('оператор: выполнить codex login через открытую сессию браузера'),
+    ).toBe(null);
+    expect(invalidNeedsHuman('человек: смержи PR после приёмки')).toBe(null);
+    expect(invalidNeedsHuman('отложено: merge queue появится в GitHub')).toBe(null);
+  });
+});
+
+describe('isOperatorTask', () => {
+  it('touches под deny защищённых путей — задача оператора', () => {
+    expect(isOperatorTask(withTouches('op1', ['tools/backlog.ts']))).toBe(true);
+    expect(isOperatorTask(withTouches('op2', ['.github/workflows/**']))).toBe(true);
+  });
+
+  it('needs_human «оператор: …» — задача оператора без защищённых путей', () => {
+    const task = parseTask(
+      'op3',
+      '---\ntitle: op3\ntype: change\npriority: high\ntouches: docs/**\nneeds_human: оператор: настроить запись Claude Code\n---\n',
+    );
+    expect(isOperatorTask(task)).toBe(true);
+  });
+
+  it('обычная задача — не операторская', () => {
+    expect(isOperatorTask(withTouches('free1', ['apps/api/src/**']))).toBe(false);
+    const deferred = parseTask(
+      'def1',
+      '---\ntitle: def1\ntype: change\npriority: low\ntouches: docs/**\nneeds_human: отложено: появится второй тег\n---\n',
+    );
+    expect(isOperatorTask(deferred)).toBe(false);
+  });
+});
+
+describe('openDependentsCount', () => {
+  it('считает только открытые прямые зависимые', () => {
+    const tasks = [mk('a', []), mk('b', ['a']), mk('c', ['a']), mk('d', ['b'])];
+    expect(openDependentsCount('a', tasks)).toBe(2);
+    expect(openDependentsCount('b', tasks)).toBe(1);
+    expect(openDependentsCount('d', tasks)).toBe(0);
+  });
+
+  it('закрытая зависимая не считается', () => {
+    const closed = { ...mk('b', ['a']), done: true };
+    expect(openDependentsCount('a', [mk('a', []), closed])).toBe(0);
+  });
+});
+
+describe('doctorFindings: файлы режима обслуживания (ADR 0009)', () => {
+  const modeFacts = {
+    openIds: new Set(['a1']),
+    doneIds: new Set<string>(),
+    claimedIds: new Set<string>(),
+    mergedIds: new Set<string>(),
+    branchAgeHours: new Map<string, number>(),
+    maintenanceFiles: [],
+  };
+
+  it('в основном checkout — блокирующее безусловно', () => {
+    const findings = doctorFindings({
+      ...modeFacts,
+      maintenanceFiles: [{ where: '/repo', taskId: null, hasOpenPr: false, idleHours: null }],
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ id: 'main', kind: 'maintenance-mode', blocking: true });
+    expect(findings[0]?.message).toContain('основном checkout');
+  });
+
+  it('в worktree задачи с открытым PR — блокирующее: режим выключают до PR', () => {
+    const findings = doctorFindings({
+      ...modeFacts,
+      maintenanceFiles: [{ where: '/repo-task-a1', taskId: 'a1', hasOpenPr: true, idleHours: 1 }],
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ id: 'a1', kind: 'maintenance-mode', blocking: true });
+    expect(findings[0]?.message).toContain('открытом PR');
+  });
+
+  it('в worktree задачи с простоем дольше порога — блокирующее', () => {
+    const findings = doctorFindings({
+      ...modeFacts,
+      maintenanceFiles: [
+        { where: '/repo-task-a1', taskId: 'a1', hasOpenPr: false, idleHours: DOCTOR_IDLE_HOURS },
+      ],
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ id: 'a1', kind: 'maintenance-mode', blocking: true });
+    expect(findings[0]?.message).toContain('последнем коммите');
+  });
+
+  it('активное окно (без PR, ветка свежая) — только предупреждение', () => {
+    const findings = doctorFindings({
+      ...modeFacts,
+      maintenanceFiles: [{ where: '/repo-task-a1', taskId: 'a1', hasOpenPr: false, idleHours: 2 }],
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ id: 'a1', kind: 'maintenance-mode', blocking: false });
+    expect(findings[0]?.message).toContain('активное окно');
+  });
+
+  it('файлов нет — находок нет', () => {
+    expect(doctorFindings(modeFacts)).toEqual([]);
   });
 });
