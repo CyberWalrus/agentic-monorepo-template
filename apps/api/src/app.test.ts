@@ -86,6 +86,12 @@ describe('OpenAPI transport', () => {
     const response = await app.request(`/api/tasks/${UNKNOWN_ID}/toggle`, { method: 'POST' });
 
     expect(response.status).toBe(404);
+    // код таксономии виден и в теле REST-ответа: различение по коду на обоих
+    // транспортах, текст — из каталога (C4.1)
+    expect(await response.json()).toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'Resource not found',
+    });
   });
 });
 
@@ -395,6 +401,7 @@ describe('tasks.remove access over both transports', () => {
     });
 
     expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'FORBIDDEN' });
   });
 
   it('distinguishes domain errors by code, not by text: NOT_FOUND vs FORBIDDEN', async () => {

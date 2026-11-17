@@ -1,7 +1,7 @@
 import { OpenAPIHandler } from '@orpc/openapi/fetch';
 import { RPCHandler } from '@orpc/server/fetch';
 import type { AnyRouter } from '@orpc/server';
-import { TaskIdInputSchema, TaskSchema } from '@repo/contracts';
+import { TaskIdInputSchema, TaskSchema, ERROR_MESSAGES } from '@repo/contracts';
 import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
 import * as z from 'zod';
@@ -114,6 +114,11 @@ export function createApp({
 
   // Непойманное (мимо oRPC: тестовый API, Hono-маршруты) — событие с явно
   // сериализованной ошибкой; наружу уходит только статичный текст каталога.
+  // Внимание: message/stack непойманного могут нести данные запроса (текст
+  // DB-ошибки, snippet парсера) — записи 'unhandled' считать потенциально
+  // чувствительными при появлении ретенции/выгрузки логов. Тело ответа —
+  // не форма oRPC-ошибок (эти маршруты вне openapi): у задокументированных
+  // операций 500 отдаёт механизм oRPC с текстом каталога.
   app.onError((error, c) => {
     log('error', 'unhandled', {
       requestId: c.get('requestId'),
@@ -121,7 +126,7 @@ export function createApp({
       path: new URL(c.req.raw.url).pathname,
       error: serializeError(error),
     });
-    return c.json({ error: 'Internal error' }, 500);
+    return c.json({ error: ERROR_MESSAGES.INTERNAL }, 500);
   });
 
   const buildContext = (request: Request): AppContext => ({

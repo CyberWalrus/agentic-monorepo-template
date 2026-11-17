@@ -190,7 +190,7 @@ describe('unhandled errors outside oRPC handlers', () => {
     });
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Internal error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error' });
     const unhandled = records.filter((record) => record.event === 'unhandled');
     expect(unhandled).toHaveLength(1);
     expect(unhandled[0]).toMatchObject({

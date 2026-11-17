@@ -2,7 +2,15 @@ import { isContractProcedure } from '@orpc/contract';
 import { describe, expect, it } from 'vitest';
 
 import { contract } from './index.ts';
-import { ERROR_MESSAGES } from './errors.ts';
+import { commonErrors, notFoundError } from './errors.ts';
+
+/** Каталог целиком: каждый объявленный где-то код обязан иметь его текст. */
+const catalogMessages: Record<string, string> = {
+  ...Object.fromEntries(
+    Object.entries(commonErrors).map(([code, item]) => [code, item.message ?? '']),
+  ),
+  NOT_FOUND: notFoundError.message ?? '',
+};
 
 interface ProcedureErrors {
   path: string;
@@ -29,34 +37,27 @@ function collectProcedures(node: unknown, prefix = ''): ProcedureErrors[] {
 describe('error catalog is the single source of taxonomy messages', () => {
   const procedures = collectProcedures(contract);
 
-  it('every procedure inherits the common errors from the catalog', () => {
+  it('every declared error message comes from the catalog', () => {
     expect(procedures.length).toBeGreaterThan(0);
     const violations: string[] = [];
     for (const { path, errors } of procedures) {
-      if (errors['FORBIDDEN']?.message !== ERROR_MESSAGES.FORBIDDEN) {
-        violations.push(`${path}: FORBIDDEN message is not the catalog one`);
-      }
-      if (errors['INTERNAL_SERVER_ERROR']?.message !== ERROR_MESSAGES.INTERNAL) {
-        violations.push(`${path}: INTERNAL_SERVER_ERROR message is not the catalog one`);
+      for (const [code, item] of Object.entries(errors)) {
+        const expected = catalogMessages[code];
+        if (expected === undefined) {
+          violations.push(`${path}: ${code} is declared outside the catalog`);
+        } else if (item.message !== expected) {
+          violations.push(`${path}: ${code} message is not the catalog one`);
+        }
       }
     }
-    expect(violations, 'procedures with off-catalog common error messages').toEqual([]);
+    expect(violations, 'procedures with off-catalog error declarations').toEqual([]);
   });
 
-  it('NOT_FOUND is declared only through the catalog where it is possible at all', () => {
-    const violations: string[] = [];
-    const withNotFound: string[] = [];
-    for (const { path, errors } of procedures) {
-      const item = errors['NOT_FOUND'];
-      if (item === undefined) {
-        continue;
-      }
-      withNotFound.push(path);
-      if (item.message !== ERROR_MESSAGES.NOT_FOUND) {
-        violations.push(`${path}: NOT_FOUND message is not the catalog one`);
-      }
-    }
-    expect(violations).toEqual([]);
+  it('NOT_FOUND is declared only where it is possible at all', () => {
+    const withNotFound = procedures
+      .filter((p) => p.errors['NOT_FOUND'] !== undefined)
+      .map((p) => p.path);
+
     expect(withNotFound).toContain('tasks.toggle');
     // remove без NOT_FOUND: отказ fail-closed без оракула существования (C2.3)
     expect(withNotFound).not.toContain('tasks.remove');

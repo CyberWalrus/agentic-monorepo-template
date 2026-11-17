@@ -132,7 +132,7 @@
                         },
                         "message": {
                           "type": "string",
-                          "default": "Internal error"
+                          "default": "Internal server error"
                         },
                         "data": {}
                       },
@@ -312,7 +312,7 @@
                         },
                         "message": {
                           "type": "string",
-                          "default": "Internal error"
+                          "default": "Internal server error"
                         },
                         "data": {}
                       },
@@ -545,7 +545,7 @@
                         },
                         "message": {
                           "type": "string",
-                          "default": "Internal error"
+                          "default": "Internal server error"
                         },
                         "data": {}
                       },
@@ -701,7 +701,7 @@
                         },
                         "message": {
                           "type": "string",
-                          "default": "Internal error"
+                          "default": "Internal server error"
                         },
                         "data": {}
                       },
