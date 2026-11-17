@@ -7,7 +7,7 @@
  * Отсутствие снимка не притворяется успехом — сообщается как слепая проверка.
  */
 import { projectDir, readHookInput } from './lib.ts';
-import { reconcile } from '../../tools/snapshot.ts';
+import { reconcile } from '../snapshot.ts';
 
 const input = await readHookInput();
 const isStop = input.hook_event_name === 'Stop';

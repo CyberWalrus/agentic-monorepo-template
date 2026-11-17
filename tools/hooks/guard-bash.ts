@@ -7,8 +7,8 @@
  */
 import { relative } from 'node:path';
 
-import { repoWriteTargets, stripHeredocs } from '../../tools/analyze-command.ts';
-import { protectionOf } from '../../tools/protected-paths.ts';
+import { repoWriteTargets, stripHeredocs } from '../analyze-command.ts';
+import { protectionOf } from '../protected-paths.ts';
 import { deny, projectDir, readHookInput } from './lib.ts';
 
 /** Сверхдлинный вход не анализируем: разбор heredoc квадратичен, а таймаут хука пропускает команду. */

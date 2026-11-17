@@ -4,7 +4,7 @@
  * а не выйти с кодом 1, который Claude Code считает неблокирующим (З4).
  */
 try {
-  await import('./stop-verify.main.ts');
+  await import('../../tools/hooks/stop-verify.ts');
 } catch (error) {
   console.error(
     `stop-verify could not check the result (${error instanceof Error ? error.message : String(error)}). ` +

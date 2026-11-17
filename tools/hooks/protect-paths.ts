@@ -1,5 +1,5 @@
 /** PreToolUse(Edit|Write|MultiEdit|NotebookEdit): запрет записи в защищённые пути. */
-import { protectionOf } from '../../tools/protected-paths.ts';
+import { protectionOf } from '../protected-paths.ts';
 import { deny, readHookInput, targetFile } from './lib.ts';
 
 const input = await readHookInput();

@@ -1,10 +1,10 @@
 /**
- * PreToolUse(Bash) — точка входа. Вся логика и импорты — в guard-bash.main.ts:
+ * PreToolUse(Bash) — точка входа. Вся логика и импорты — в guard-bash.ts (tools/hooks, C10.1):
  * сбой при загрузке модулей (битый конфиг, битый вход) должен закрыть хук (exit 2),
  * а не выйти с кодом 1, который Claude Code считает неблокирующим (З4).
  */
 try {
-  await import('./guard-bash.main.ts');
+  await import('../../tools/hooks/guard-bash.ts');
 } catch (error) {
   console.error(
     `guard-bash could not verify the command (${error instanceof Error ? error.message : String(error)}). ` +

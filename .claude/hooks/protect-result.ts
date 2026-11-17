@@ -5,7 +5,7 @@
  * а не выйти с кодом 1, который Claude Code считает неблокирующим (З4).
  */
 try {
-  await import('./protect-result.main.ts');
+  await import('../../tools/hooks/protect-result.ts');
 } catch (error) {
   console.error(
     `protect-result could not check the result (${error instanceof Error ? error.message : String(error)}). ` +
