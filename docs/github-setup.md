@@ -7,7 +7,7 @@
 Создайте в UI (Settings → Rules → Rulesets) по снимку [`.github/rulesets/main.json`](../.github/rulesets/main.json):
 
 - merge только через PR;
-- обязательные check-и — **`gate`** (агрегирует job-ы CI) и **`gate-integrity`** ([ADR 0002](adr/0002-gate-integrity.md): доверенный workflow на `pull_request_target` из базовой ветки, код PR не читается и не исполняется);
+- обязательные check-и — **`gate`** (агрегирует job-ы CI), **`gate-integrity`** ([ADR 0002](adr/0002-gate-integrity.md): доверенный workflow на `pull_request_target` из базовой ветки, код PR не читается и не исполняется) и **`bundle-approval`** ([ADR 0013](adr/0013-bundle-delta-gate.md): доверенное одобрение роста бандла; включает человек, после того как label создан — ниже);
 - 1 апрув, обязательное ревью **CODEOWNERS**, сброс апрува при новом push, апрув последнего push, разрешённые треды;
 - запрет force-push и удаления ветки, линейная история; merge-метод — только squash.
 
@@ -15,10 +15,11 @@ Merge queue, если доступна на вашем тарифе, стоит 
 
 ## 2. Labelы для гейтов
 
-Создайте labelы: `gate-change-approved` (одобрение изменения гейтов мейнтейнером, действует только после последнего push — `gate-integrity` снимает label на новом push) и `nightly-failure`.
+Создайте labelы: `gate-change-approved` (одобрение изменения гейтов мейнтейнером, действует только после последнего push — `gate-integrity` снимает label на новом push), `bundle-growth-approved` (одобрение роста бандла сверх 5 КБ за PR, тот же механизм снятия и свежести — [ADR 0013](adr/0013-bundle-delta-gate.md)) и `nightly-failure`.
 
-```bash
-gh label create gate-change-approved --color B60205 --description "Maintainer approved a change to quality gates"
+```sh
+gh label create gate-change-approved --color 0E8A16 --description "Gate change approved by maintainer"
+gh label create bundle-growth-approved --color D93F0B --description "Bundle growth approved by maintainer"
 gh label create nightly-failure --color D93F0B --description "Nightly checks failed"
 ```
 
