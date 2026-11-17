@@ -1,6 +1,8 @@
 import { oc } from '@orpc/contract';
 import * as z from 'zod';
 
+import { commonErrors } from './errors.ts';
+
 const PublicAccessPolicySchema = z.strictObject({ type: z.literal('public') });
 const OwnerAccessPolicySchema = z.strictObject({ type: z.literal('owner') });
 const AdminAccessPolicySchema = z.strictObject({ type: z.literal('admin') });
@@ -24,9 +26,8 @@ type AccessPolicy = z.infer<typeof AccessPolicySchema>;
 /**
  * Строитель контракта с типизированной политикой доступа: каждая процедура
  * объявляет `.meta({ access })`, присутствие проверяет access-policy.test.ts.
- * Отказ доступа — часть контракта: FORBIDDEN (предопределённый код oRPC,
- * HTTP 403) наследуется всеми процедурами, сервер бросает его из мидлвари.
+ * Общие ошибки таксономии (C4.1) наследуются всеми процедурами из каталога
+ * errors.ts — единственного источника текстов: FORBIDDEN бросает мидлварь
+ * авторизации, INTERNAL_SERVER_ERROR — механизм oRPC для непойманного.
  */
-export const ocAccess = oc
-  .$meta<{ access?: AccessPolicy }>({})
-  .errors({ FORBIDDEN: { message: 'Access denied' } });
+export const ocAccess = oc.$meta<{ access?: AccessPolicy }>({}).errors(commonErrors);

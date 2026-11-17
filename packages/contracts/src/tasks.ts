@@ -1,5 +1,6 @@
 import * as z from 'zod';
 
+import { notFoundError } from './errors.ts';
 import { ocAccess } from './access-policy.ts';
 
 export const TASK_TITLE_MAX_LENGTH = 200;
@@ -35,7 +36,7 @@ export const tasksContract = {
   toggle: ocAccess
     .route({ method: 'POST', path: '/tasks/{id}/toggle', summary: 'Toggle task completion' })
     .meta({ access: { type: 'public' } })
-    .errors({ NOT_FOUND: { message: 'Task not found' } })
+    .errors({ NOT_FOUND: notFoundError })
     .input(TaskIdInputSchema)
     .output(TaskSchema),
   // Первая процедура с политикой «owner» (C2.3): удалять может только владелец

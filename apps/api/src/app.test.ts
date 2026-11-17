@@ -55,13 +55,13 @@ describe('RPC transport', () => {
     });
   });
 
-  it('returns a typed NOT_FOUND error for an unknown task', async () => {
+  it('returns a typed NOT_FOUND error with the catalog message for an unknown task', async () => {
     const { client } = setup();
 
     const error = await client.tasks.toggle({ id: UNKNOWN_ID }).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(ORPCError);
-    expect(error).toMatchObject({ code: 'NOT_FOUND', message: 'Task not found' });
+    expect(error).toMatchObject({ code: 'NOT_FOUND', message: 'Resource not found' });
   });
 });
 
@@ -86,6 +86,12 @@ describe('OpenAPI transport', () => {
     const response = await app.request(`/api/tasks/${UNKNOWN_ID}/toggle`, { method: 'POST' });
 
     expect(response.status).toBe(404);
+    // код таксономии виден и в теле REST-ответа: различение по коду на обоих
+    // транспортах, текст — из каталога (C4.1)
+    expect(await response.json()).toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'Resource not found',
+    });
   });
 });
 
@@ -395,5 +401,23 @@ describe('tasks.remove access over both transports', () => {
     });
 
     expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('distinguishes domain errors by code, not by text: NOT_FOUND vs FORBIDDEN', async () => {
+    const { clientFor } = setupWithOwnedTask();
+    const { client } = setup();
+
+    // Один и тот же симптом «задачи с таким id нет» — разные коды: у toggle
+    // NOT_FOUND объявлен контрактом, у remove мидлварь отвечает FORBIDDEN.
+    const toggleError = await client.tasks
+      .toggle({ id: UNKNOWN_ID })
+      .catch((caught: unknown) => caught);
+    const removeError = await clientFor('owner-1')
+      .tasks.remove({ id: UNKNOWN_ID })
+      .catch((caught: unknown) => caught);
+
+    expect(toggleError).toMatchObject({ code: 'NOT_FOUND', message: 'Resource not found' });
+    expect(removeError).toMatchObject({ code: 'FORBIDDEN', message: 'Access denied' });
   });
 });

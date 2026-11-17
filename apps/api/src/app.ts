@@ -1,12 +1,14 @@
 import { OpenAPIHandler } from '@orpc/openapi/fetch';
 import { RPCHandler } from '@orpc/server/fetch';
 import type { AnyRouter } from '@orpc/server';
-import { TaskIdInputSchema, TaskSchema } from '@repo/contracts';
+import { TaskIdInputSchema, TaskSchema, ERROR_MESSAGES } from '@repo/contracts';
 import { Hono } from 'hono';
+import { randomUUID } from 'node:crypto';
 import * as z from 'zod';
 
 import type { Actor, AppContext } from './authorization.ts';
 import { proceduresWithoutAuthorization } from './authorization.ts';
+import { createLogger, requestIdOf, serializeError, type LogSink } from './observability.ts';
 import { router as defaultRouter } from './router.ts';
 import type { TaskRepository } from './tasks/repository.ts';
 
@@ -33,6 +35,14 @@ export interface AppOptions {
    * сверяет его с токеном прогона, чтобы тест не смотрел в чужой сервер.
    */
   instanceId?: string;
+  /**
+   * Приёмник структурного лога (C4.1): по записи на событие, JSON на stdout.
+   * Тесты подменяют коллектирующим sink-ом; тела запросов не логируются.
+   */
+  log?: LogSink;
+  /** З13: генерация requestId и время приходят через параметры. */
+  generateRequestId?: () => string;
+  now?: () => Date;
 }
 
 /**
@@ -58,6 +68,9 @@ export function createApp({
   resolveActor,
   enableTestApi = false,
   instanceId,
+  log: logSink,
+  generateRequestId = randomUUID,
+  now = () => new Date(),
 }: AppOptions) {
   // Подменённый роутер без мидлвари отдал бы процедуры мимо авторизации:
   // падаем на старте, а не молча обслуживаем (ревью безопасности C2.2).
@@ -68,7 +81,54 @@ export function createApp({
     );
   }
 
-  const app = new Hono();
+  const log = createLogger({
+    ...(logSink === undefined ? {} : { sink: logSink }),
+    now,
+  });
+
+  const app = new Hono<{ Variables: { requestId: string } }>();
+
+  // Структурный лог и идентификатор запроса (C4.1): id из заголовка безопасной
+  // формы или свежий uuid; возвращается в ответе и попадает в каждое событие
+  // запроса. Путь — без query (токен из ?token= не должен дойти до лога),
+  // тела не читаются и не логируются.
+  app.use('*', async (c, next) => {
+    const requestId = requestIdOf(c.req.raw, generateRequestId);
+    c.set('requestId', requestId);
+    const startedAtMs = now().getTime();
+
+    await next();
+
+    c.res.headers.set('x-request-id', requestId);
+    const path = new URL(c.req.raw.url).pathname;
+    const status = c.res.status;
+    const level = status < 400 ? 'info' : 'warn';
+    log(level, 'request', {
+      requestId,
+      method: c.req.method,
+      path,
+      status,
+      durationMs: now().getTime() - startedAtMs,
+    });
+  });
+
+  // Непойманное (мимо oRPC: тестовый API, Hono-маршруты) — событие с явно
+  // сериализованной ошибкой; наружу уходит только статичный текст каталога.
+  // Внимание: message/stack непойманного могут нести данные запроса (текст
+  // DB-ошибки, snippet парсера) — записи 'unhandled' считать потенциально
+  // чувствительными при появлении ретенции/выгрузки логов. Тело ответа —
+  // не форма oRPC-ошибок (эти маршруты вне openapi): у задокументированных
+  // операций 500 отдаёт механизм oRPC с текстом каталога.
+  app.onError((error, c) => {
+    log('error', 'unhandled', {
+      requestId: c.get('requestId'),
+      method: c.req.method,
+      path: new URL(c.req.raw.url).pathname,
+      error: serializeError(error),
+    });
+    return c.json({ error: ERROR_MESSAGES.INTERNAL }, 500);
+  });
+
   const buildContext = (request: Request): AppContext => ({
     tasks,
     actor: resolveActor ? resolveActor(request) : null,

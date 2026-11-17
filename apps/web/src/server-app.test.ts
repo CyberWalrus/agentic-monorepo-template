@@ -121,6 +121,32 @@ describe('rpc proxy', () => {
     expect(proxiedRequest(proxyFetch).url).toBe('http://api.local:3901/rpc/tasks/list?cursor=7');
   });
 
+  it('passes the request id header through to the API (C4.1)', async () => {
+    const { app, proxyFetch } = makeApp();
+
+    await app.request('http://web.local/rpc/tasks/list', {
+      method: 'POST',
+      headers: { 'x-request-id': 'req-from-browser-1' },
+    });
+
+    expect(proxiedRequest(proxyFetch).headers.get('x-request-id')).toBe('req-from-browser-1');
+  });
+
+  it('passes the API request id back to the browser (C4.1)', async () => {
+    const { app, proxyFetch } = makeApp();
+    proxyFetch.mockImplementation(
+      async () =>
+        new Response('upstream-body', {
+          status: 201,
+          headers: { 'x-request-id': 'req-from-api-2' },
+        }),
+    );
+
+    const response = await app.request('http://web.local/rpc/tasks/list', { method: 'POST' });
+
+    expect(response.headers.get('x-request-id')).toBe('req-from-api-2');
+  });
+
   it('proxies the bare /rpc path too', async () => {
     const { app, proxyFetch } = makeApp();
 
