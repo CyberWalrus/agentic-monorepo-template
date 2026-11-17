@@ -23,6 +23,9 @@ beforeAll(async () => {
   outsideRoot = await mkdtemp(path.join(tmpdir(), 'web-entry-outside-'));
   await mkdir(path.join(staticRoot, 'assets'), { recursive: true });
   await writeFile(path.join(staticRoot, 'assets', 'app-abc123.js'), 'console.log("app")');
+  // Реальный файл с заглавным расширением: на case-sensitive ФС (CI Linux)
+  // ищется именно он — тест проверяет whitelist, а не регистр самой ФС.
+  await writeFile(path.join(staticRoot, 'assets', 'upper.JS'), '// upper');
   await writeFile(path.join(staticRoot, 'assets', 'style-abc123.css'), 'body {}');
   await writeFile(path.join(staticRoot, 'index.html'), '<html lang="en"></html>');
   await writeFile(path.join(staticRoot, 'notes.txt'), 'text');
@@ -258,10 +261,11 @@ describe('static files', () => {
   it('matches extensions case-insensitively', async () => {
     const { app } = makeApp();
 
-    const response = await app.request('http://web.local/assets/app-abc123.JS');
+    const response = await app.request('http://web.local/assets/upper.JS');
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
+    await expect(response.text()).resolves.toBe('// upper');
   });
 
   it('never serves symlinks even inside the static root', async () => {
