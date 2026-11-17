@@ -127,6 +127,61 @@ export const taskRepositoryContractChecks: readonly TaskRepositoryContractCheck[
     },
   },
   {
+    name: 'remove deletes the task and returns it',
+    check: async (repository) => {
+      const created = await repository.create('Delete me');
+
+      const removed = await repository.remove(created.id);
+
+      expect(removed?.id).toBe(created.id);
+      expect((await repository.list()).map((task) => task.id)).not.toContain(created.id);
+    },
+  },
+  {
+    name: 'remove of an unknown id resolves undefined and leaves the store unchanged',
+    check: async (repository) => {
+      const seeded = seededTask();
+      await repository.reset([seeded]);
+
+      await expect(
+        repository.remove('00000000-0000-4000-8000-999999999999'),
+      ).resolves.toBeUndefined();
+
+      expect(await repository.list()).toEqual([seeded]);
+    },
+  },
+  {
+    name: 'create records the owner and ownerOf reads it back',
+    check: async (repository) => {
+      const created = await repository.create('Owned task', 'actor-1');
+
+      await expect(repository.ownerOf(created.id)).resolves.toBe('actor-1');
+    },
+  },
+  {
+    name: 'create without an owner and ownerOf of an ownerless task resolve null',
+    check: async (repository) => {
+      const created = await repository.create('Ownerless task');
+
+      await expect(repository.ownerOf(created.id)).resolves.toBeNull();
+    },
+  },
+  {
+    name: 'ownerOf of an unknown id resolves null: fail-closed, no oracle',
+    check: async (repository) => {
+      await expect(repository.ownerOf('00000000-0000-4000-8000-999999999999')).resolves.toBeNull();
+    },
+  },
+  {
+    name: 'reset gives seeded tasks no owner: e2e seed data stays ownerless',
+    check: async (repository) => {
+      const seeded = seededTask();
+      await repository.reset([seeded]);
+
+      await expect(repository.ownerOf(seeded.id)).resolves.toBeNull();
+    },
+  },
+  {
     name: 'reset replaces the whole store',
     check: async (repository) => {
       await repository.create('old');

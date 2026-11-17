@@ -1,7 +1,7 @@
 import { OpenAPIHandler } from '@orpc/openapi/fetch';
 import { RPCHandler } from '@orpc/server/fetch';
 import type { AnyRouter } from '@orpc/server';
-import { TaskSchema } from '@repo/contracts';
+import { TaskIdInputSchema, TaskSchema } from '@repo/contracts';
 import { Hono } from 'hono';
 import * as z from 'zod';
 
@@ -35,9 +35,22 @@ export interface AppOptions {
   instanceId?: string;
 }
 
-// Владельцев у задач пока нет (поле ownerId — не в этой задаче): порт
-// отвечает null, политика «owner» отказывает всем до появления владельцев.
-const ownerOfWithoutOwners: AppContext['ownerOf'] = async () => null;
+/**
+ * Порт «владелец ресурса процедуры» на репозитории задач (C2.3): владелец
+ * читается по id из input. Незнакомая форма input — null: политика «owner»
+ * отвечает отказом (fail-closed), как и для задачи без владельца. При второй
+ * owner-области диспетчеризация переезжает с формы input на путь процедуры
+ * (мидлварь уже держит procedure; условие возврата C2.2).
+ */
+function ownerOfThroughRepository(tasks: TaskRepository): AppContext['ownerOf'] {
+  return async (input) => {
+    const parsed = TaskIdInputSchema.safeParse(input);
+    if (!parsed.success) {
+      return null;
+    }
+    return tasks.ownerOf(parsed.data.id);
+  };
+}
 
 export function createApp({
   tasks,
@@ -59,7 +72,7 @@ export function createApp({
   const buildContext = (request: Request): AppContext => ({
     tasks,
     actor: resolveActor ? resolveActor(request) : null,
-    ownerOf: ownerOfWithoutOwners,
+    ownerOf: ownerOfThroughRepository(tasks),
   });
   const rpcHandler = new RPCHandler(router);
   const openApiHandler = new OpenAPIHandler(router);
