@@ -7,7 +7,11 @@
  */
 import { existsSync } from 'node:fs';
 
-import { projectDir, readHookInput } from './lib.ts';
+import { failClosedExit, projectDir, readHookInput } from './lib.ts';
+
+// Прямой вызов CLI наследует fail-closed: необработанный сбой — exit 2 (З4, C10.1).
+process.on('uncaughtException', failClosedExit);
+process.on('unhandledRejection', failClosedExit);
 
 const problems: string[] = [];
 const [major = 0, minor = 0] = process.versions.node.split('.').map(Number);

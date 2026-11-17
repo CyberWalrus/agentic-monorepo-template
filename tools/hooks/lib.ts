@@ -12,6 +12,19 @@ export interface HookInput {
 
 export const projectDir = process.env['CLAUDE_PROJECT_DIR'] ?? process.cwd();
 
+/**
+ * Fail-closed для прямого вызова CLI (З4, C10.1): любой необработанный сбой
+ * модуля хука — exit 2 (блокирующий), а не 1 (неблокирующий). Регистрируется
+ * в каждом CLI tools/hooks; адаптеры агентов дублируют обёрткой на случай
+ * сбоя самой загрузки модуля.
+ */
+export function failClosedExit(reason: unknown): never {
+  console.error(
+    `hook failed closed (З4): ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`,
+  );
+  process.exit(2);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

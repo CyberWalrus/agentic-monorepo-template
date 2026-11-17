@@ -9,7 +9,11 @@ import { relative } from 'node:path';
 
 import { repoWriteTargets, stripHeredocs } from '../analyze-command.ts';
 import { protectionOf } from '../protected-paths.ts';
-import { deny, projectDir, readHookInput } from './lib.ts';
+import { deny, failClosedExit, projectDir, readHookInput } from './lib.ts';
+
+// Прямой вызов CLI наследует fail-closed: необработанный сбой — exit 2 (З4, C10.1).
+process.on('uncaughtException', failClosedExit);
+process.on('unhandledRejection', failClosedExit);
 
 /** Сверхдлинный вход не анализируем: разбор heredoc квадратичен, а таймаут хука пропускает команду. */
 const MAX_COMMAND_LENGTH = 64_000;

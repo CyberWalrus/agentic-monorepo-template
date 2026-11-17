@@ -1,5 +1,5 @@
 /**
- * Stop — точка входа stop-verify. Логика — в stop-verify.main.ts: сбой при
+ * Stop — точка входа stop-verify. Логика — CLI в tools/hooks/stop-verify.ts (C10.1): сбой при
  * загрузке модулей (битый вход, битый state) должен закрыть хук (exit 2),
  * а не выйти с кодом 1, который Claude Code считает неблокирующим (З4).
  */
