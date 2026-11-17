@@ -135,8 +135,12 @@ export function needsHumanKind(needsHuman: string): NeedsHumanKind | null {
  * «оператор:» не может называть действие приёмки PR или ввод секрета:
  * у изменения гейта не останется независимой проверки (ADR 0009,
  * «Что остаётся человеку»). Латиница — по границе слова, кириллица — по корню.
+ * Список корней — best-effort подсказка, не граница (З3): синтаксические
+ * синонимы он не покрывает; детерминированная часть правила — префиксы,
+ * настоящая граница — ревью и приёмка человека.
  */
-const OPERATOR_UNDELEGATABLE = /(?:\b(?:label|approve|merge)\b|парол|токен|аккаунт)/i;
+const OPERATOR_UNDELEGATABLE =
+  /(?:\b(?:label|approve|merge)\b|парол|токен|аккаунт|мерж|смерж|аппрув|апрув|лейбл|метку|метка|секре|подтверждени|платн)/i;
 
 /** null — значение корректно; строка — что именно не так (гейт docs). */
 export function invalidNeedsHuman(needsHuman: string): string | null {
@@ -148,9 +152,14 @@ export function invalidNeedsHuman(needsHuman: string): string | null {
     return 'непустой needs_human начинается с «оператор:», «отложено:» или «человек:» — действие, которое остаётся человеку, помечай «человек: …» (ADR 0009)';
   }
   if (kind === 'operator' && OPERATOR_UNDELEGATABLE.test(needsHuman)) {
-    return '«оператор:» называет действие приёмки (label, approve, merge, пароль, токен, аккаунт) — оператору оно не делегируется, помечай «человек: …» (ADR 0009, «Что остаётся человеку»)';
+    return '«оператор:» называет действие приёмки (label/approve/merge и однокоренные, пароли, токены, секреты, коды подтверждения, платные ресурсы, аккаунты) — оператору оно не делегируется, помечай «человек: …» (ADR 0009, «Что остаётся человеку»)';
   }
   return null;
+}
+
+/** touches целиком под deny защищённых путей — нужен режим обслуживания (ADR 0007/0009). */
+export function isMaintenanceTask(task: TaskFile): boolean {
+  return task.touches.some((path) => protectionOf(path) === 'deny');
 }
 
 /**
@@ -160,10 +169,7 @@ export function invalidNeedsHuman(needsHuman: string): string | null {
  * архив, их needs_human никого больше не блокирует и правится только своим PR.
  */
 export function isOperatorTask(task: TaskFile): boolean {
-  return (
-    task.needsHuman.startsWith('оператор:') ||
-    task.touches.some((path) => protectionOf(path) === 'deny')
-  );
+  return task.needsHuman.startsWith('оператор:') || isMaintenanceTask(task);
 }
 
 /** Сколько открытых задач зависят от данной напрямую — порядок для next --operator (ADR 0009). */
@@ -242,7 +248,7 @@ export function statusOf(task: TaskFile, facts: BoardFacts): TaskStatus {
   if (openDeps.length > 0 || task.needsHuman !== '') {
     return 'blocked';
   }
-  if (task.touches.some((path) => protectionOf(path) === 'deny')) {
+  if (isMaintenanceTask(task)) {
     return 'maintenance';
   }
   return 'free';
@@ -294,10 +300,14 @@ export interface DoctorFacts {
 export interface MaintenanceFile {
   /** Расположение: путь основного checkout или worktree (человекочитаемо). */
   where: string;
-  /** id задачи ветки worktree; null — основной checkout. */
+  /** true — основной checkout; false — worktree (в том числе без ветки task/*). */
+  main: boolean;
+  /** id задачи ветки worktree; null — основной checkout или ветка не task/*. */
   taskId: string | null;
-  /** У ветки task/<id> есть открытый PR (gh); false, если определить не удалось. */
+  /** У ветки task/<id> есть открытый PR (gh); значимо только при taskId !== null. */
   hasOpenPr: boolean;
+  /** true — PR-состояние проверить не удалось (gh недоступен), hasOpenPr не отличает «нет PR». */
+  prUnknown: boolean;
   /** Часов с последнего коммита ветки; null — определить не удалось. */
   idleHours: number | null;
 }
@@ -359,24 +369,25 @@ export function doctorFindings(facts: DoctorFacts): DoctorFinding[] {
         id: 'main',
         kind: 'maintenance-mode',
         blocking: true,
-        message: `файл режима обслуживания .claude/settings.local.json в основном checkout (${file.where}) — хуки и песочница выключены в основном дереве. Удали файл; запись о включении и выключении — в «Журнале» задачи (ADR 0004, ADR 0009)`,
+        message: `файл режима обслуживания .claude/settings.local.json в ${file.main ? 'основном checkout' : 'worktree без ветки задачи'} (${file.where}) — хуки и песочница там выключены, протокол оператора это место не покрывает. Удали файл (ADR 0004, ADR 0009)`,
       });
       continue;
     }
     const idle = file.idleHours !== null && file.idleHours >= DOCTOR_IDLE_HOURS;
+    const prNote = file.prUnknown ? '; PR-состояние не проверено (gh недоступен)' : '';
     if (file.hasOpenPr || idle) {
       findings.push({
         id: file.taskId,
         kind: 'maintenance-mode',
         blocking: true,
-        message: `файл режима обслуживания в worktree задачи ${file.taskId} (${file.where}) при ${file.hasOpenPr ? 'открытом PR' : `последнем коммите ${Math.floor(file.idleHours ?? 0)} ч назад`} — режим выключается до открытия PR. Удали .claude/settings.local.json из worktree и запиши время выключения в «Журнал» (ADR 0009)`,
+        message: `файл режима обслуживания в worktree задачи ${file.taskId} (${file.where}) при ${file.hasOpenPr ? 'открытом PR' : `последнем коммите ${Math.floor(file.idleHours ?? 0)} ч назад`}${prNote} — режим выключается до открытия PR. Удали .claude/settings.local.json из worktree и запиши время выключения в «Журнал» (ADR 0009)`,
       });
     } else {
       findings.push({
         id: file.taskId,
         kind: 'maintenance-mode',
         blocking: false,
-        message: `файл режима обслуживания в worktree задачи ${file.taskId} (${file.where}) — активное окно оператора: время включения должно быть записано в «Журнале» задачи, файл удаляется до открытия PR (ADR 0009)`,
+        message: `файл режима обслуживания в worktree задачи ${file.taskId} (${file.where}) — активное окно оператора${prNote}: время включения должно быть записано в «Журнале» задачи, файл удаляется до открытия PR (ADR 0009)`,
       });
     }
   }

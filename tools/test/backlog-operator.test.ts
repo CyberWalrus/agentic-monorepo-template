@@ -101,6 +101,10 @@ beforeAll(() => {
   );
   writeFileSync(join(repo, 'backlog', 'dep.md'), taskFile('dep', { depends_on: 'e' }));
   writeFileSync(join(repo, 'backlog', 'plain.md'), taskFile('plain', {}));
+  writeFileSync(
+    join(repo, 'backlog', 'bad.md'),
+    taskFile('bad', { needs_human: 'выбери вариант сам и продолжай' }),
+  );
   git(['add', '-A']);
   assertOk(git(['commit', '-m', 'init: задачи оператора']), 'git commit');
 });
@@ -116,7 +120,7 @@ describe('pnpm backlog list: статусы needs_human', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('нужен оператор');
     expect(result.stdout).toContain('отложено');
-    expect(result.stdout).toContain('нужно решение: отложено: появится второй тег');
+    expect(result.stdout).toContain('— отложено: появится второй тег');
     expect(result.stdout).toContain('ждёт: e');
   });
 });
@@ -166,6 +170,16 @@ describe('pnpm backlog start --operator', () => {
     expect(existsSync(join(tmpBase, 'clone-task-e'))).toBe(true);
   }, 30_000);
 
+  it('невалидный needs_human не захватывается ни без флага, ни с --operator (fail-closed)', () => {
+    const plain = run(backlogCli, ['start', 'bad']);
+    expect(plain.status).not.toBe(0);
+    expect(plain.stderr).toContain('needs_human');
+    const forced = run(backlogCli, ['start', 'bad', '--operator']);
+    expect(forced.status).not.toBe(0);
+    expect(forced.stderr).toContain('needs_human');
+    expect(git(['rev-parse', '--verify', 'task/bad']).status).not.toBe(0);
+  });
+
   it('отложенная задача не захватывается даже оператором', () => {
     const result = run(backlogCli, ['start', 'o2', '--operator']);
     expect(result.status).not.toBe(0);
@@ -194,6 +208,26 @@ describe('pnpm backlog start --operator', () => {
 const mainSettings = (): string => join(repo, '.claude', 'settings.local.json');
 const worktreeDir = (): string => join(tmpBase, 'clone-task-e');
 const worktreeSettings = (): string => join(worktreeDir(), '.claude', 'settings.local.json');
+
+describe('pnpm backlog resume для задачи оператора', () => {
+  it('без флага — отказ (в worktree включён режим обслуживания), с --operator — продолжение', () => {
+    const refused = run(backlogCli, ['resume', 'e']);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain('задача оператора');
+    const ok = run(backlogCli, ['resume', 'e', '--operator']);
+    expect(ok.status).toBe(0);
+    expect(ok.stdout).toContain('Продолжение задачи e');
+  }, 30_000);
+});
+
+describe('неизвестный флаг', () => {
+  it('умирает с перечислением, а не молча игнорирует (З11)', () => {
+    const result = run(backlogCli, ['list', '--operatr']);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Неизвестный флаг');
+    expect(result.stderr).toContain('--operatr');
+  });
+});
 
 describe('pnpm backlog doctor: файлы режима обслуживания', () => {
   it('в основном checkout — блокирующее расхождение безусловно', () => {
@@ -246,6 +280,9 @@ describe('pnpm backlog doctor: файлы режима обслуживания'
 describe('гейт needs_human (tools/check-docs.ts)', () => {
   it('без префикса и «оператор:» с действием приёмки — красный; допустимые — зелёный', () => {
     git(['switch', 'main']);
+    // Фикстура bad.md нужна CLI-сценариям выше, но она заведомо невалидна для
+    // этого гейта: убираем из дерева, чтобы happy-path был чистым.
+    rmSync(join(repo, 'backlog', 'bad.md'), { force: true });
     writeFileSync(
       join(repo, 'backlog', 'evil-nh.md'),
       taskFile('evil-nh', { needs_human: 'выбери вариант сам и продолжай' }),

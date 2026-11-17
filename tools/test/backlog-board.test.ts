@@ -300,6 +300,11 @@ describe('invalidNeedsHuman', () => {
       'оператор: ввести пароль в форму входа',
       'оператор: создать токен доступа',
       'оператор: завести аккаунт облачного агента',
+      'оператор: смержи PR после приёмки',
+      'оператор: поставить лейбл на PR',
+      'оператор: ввести секрет в форму',
+      'оператор: ввести код подтверждения',
+      'оператор: создать платный ресурс',
     ]) {
       const problem = invalidNeedsHuman(text);
       expect(problem?.includes('не делегируется')).toBe(true);
@@ -366,7 +371,16 @@ describe('doctorFindings: файлы режима обслуживания (ADR 
   it('в основном checkout — блокирующее безусловно', () => {
     const findings = doctorFindings({
       ...modeFacts,
-      maintenanceFiles: [{ where: '/repo', taskId: null, hasOpenPr: false, idleHours: null }],
+      maintenanceFiles: [
+        {
+          where: '/repo',
+          main: true,
+          taskId: null,
+          hasOpenPr: false,
+          prUnknown: false,
+          idleHours: null,
+        },
+      ],
     });
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({ id: 'main', kind: 'maintenance-mode', blocking: true });
@@ -376,7 +390,16 @@ describe('doctorFindings: файлы режима обслуживания (ADR 
   it('в worktree задачи с открытым PR — блокирующее: режим выключают до PR', () => {
     const findings = doctorFindings({
       ...modeFacts,
-      maintenanceFiles: [{ where: '/repo-task-a1', taskId: 'a1', hasOpenPr: true, idleHours: 1 }],
+      maintenanceFiles: [
+        {
+          where: '/repo-task-a1',
+          main: false,
+          taskId: 'a1',
+          hasOpenPr: true,
+          prUnknown: false,
+          idleHours: 1,
+        },
+      ],
     });
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({ id: 'a1', kind: 'maintenance-mode', blocking: true });
@@ -387,7 +410,14 @@ describe('doctorFindings: файлы режима обслуживания (ADR 
     const findings = doctorFindings({
       ...modeFacts,
       maintenanceFiles: [
-        { where: '/repo-task-a1', taskId: 'a1', hasOpenPr: false, idleHours: DOCTOR_IDLE_HOURS },
+        {
+          where: '/repo-task-a1',
+          main: false,
+          taskId: 'a1',
+          hasOpenPr: false,
+          prUnknown: false,
+          idleHours: DOCTOR_IDLE_HOURS,
+        },
       ],
     });
     expect(findings).toHaveLength(1);
@@ -398,11 +428,58 @@ describe('doctorFindings: файлы режима обслуживания (ADR 
   it('активное окно (без PR, ветка свежая) — только предупреждение', () => {
     const findings = doctorFindings({
       ...modeFacts,
-      maintenanceFiles: [{ where: '/repo-task-a1', taskId: 'a1', hasOpenPr: false, idleHours: 2 }],
+      maintenanceFiles: [
+        {
+          where: '/repo-task-a1',
+          main: false,
+          taskId: 'a1',
+          hasOpenPr: false,
+          prUnknown: false,
+          idleHours: 2,
+        },
+      ],
     });
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({ id: 'a1', kind: 'maintenance-mode', blocking: false });
     expect(findings[0]?.message).toContain('активное окно');
+  });
+
+  it('в worktree без ветки задачи (released/abandoned, detached) — блокирующее', () => {
+    const findings = doctorFindings({
+      ...modeFacts,
+      maintenanceFiles: [
+        {
+          where: '/repo-abandoned-x',
+          main: false,
+          taskId: null,
+          hasOpenPr: false,
+          prUnknown: false,
+          idleHours: null,
+        },
+      ],
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ id: 'main', kind: 'maintenance-mode', blocking: true });
+    expect(findings[0]?.message).toContain('без ветки задачи');
+  });
+
+  it('активное окно при недоступном gh — предупреждение с пометкой о непроверенном PR', () => {
+    const findings = doctorFindings({
+      ...modeFacts,
+      maintenanceFiles: [
+        {
+          where: '/repo-task-a1',
+          main: false,
+          taskId: 'a1',
+          hasOpenPr: false,
+          prUnknown: true,
+          idleHours: 2,
+        },
+      ],
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ kind: 'maintenance-mode', blocking: false });
+    expect(findings[0]?.message).toContain('PR-состояние не проверено');
   });
 
   it('файлов нет — находок нет', () => {
