@@ -16,8 +16,12 @@ import { createHash } from 'node:crypto';
 import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { projectDir, readHookInput } from './lib.ts';
-import { ensureStateRoot, stateDir } from '../../tools/snapshot.ts';
+import { failClosedExit, projectDir, readHookInput } from './lib.ts';
+
+// Прямой вызов CLI наследует fail-closed: необработанный сбой — exit 2 (З4, C10.1).
+process.on('uncaughtException', failClosedExit);
+process.on('unhandledRejection', failClosedExit);
+import { ensureStateRoot, stateDir } from '../snapshot.ts';
 
 const MAX_BLOCKS = 3;
 const VERIFY_TIMEOUT_MS = 280_000;

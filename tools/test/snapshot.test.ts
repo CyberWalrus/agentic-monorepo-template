@@ -36,10 +36,11 @@ const repoDir = resolve(import.meta.dirname, '..', '..');
 
 /** Хуки и модули, без которых цепочка импортов фикстуры не собирается. */
 const COPIED_FILES = [
-  '.claude/hooks/lib.ts',
   '.claude/hooks/session-start.ts',
   '.claude/hooks/protect-result.ts',
-  '.claude/hooks/protect-result.main.ts',
+  'tools/hooks/lib.ts',
+  'tools/hooks/session-start.ts',
+  'tools/hooks/protect-result.ts',
   'tools/protected-paths.ts',
   'tools/snapshot.ts',
 ];

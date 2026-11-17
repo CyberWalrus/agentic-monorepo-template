@@ -337,6 +337,23 @@ export const CANARIES: GateCanary[] = [
     },
   },
   {
+    // Поля needs_human (ADR 0009): непустое значение начинается с «оператор:»,
+    // «отложено:» или «человек:» — иначе агент не отличает делегируемое от
+    // неделегируемого. Плохое изменение — произвольный текст: шаг docs краснеет
+    // invalidNeedsHuman в tools/check-docs.ts (правило для открытых задач).
+    name: 'needs_human без допустимого префикса',
+    steps: 'docs',
+    failedStep: 'docs',
+    expect: /needs_human/,
+    apply: (root) => {
+      write(
+        root,
+        'backlog/evil-human-probe.md',
+        `---\ntitle: probe\ntype: change\npriority: low\ndepends_on:\nneeds_human: выбери вариант сам и продолжай\n---\n# probe\n\n## Журнал\n`,
+      );
+    },
+  },
+  {
     name: 'рассинхрон З10-пары',
     steps: 'sandbox',
     failedStep: 'sandbox',
@@ -510,6 +527,35 @@ export const CANARIES: GateCanary[] = [
         throw new Error('canary anchor not found: ci.yml has no Playwright image line');
       }
       writeFileSync(path, drifted);
+    },
+  },
+  {
+    // Выбор E2E по фичам (B4.1): env E2E_FEATURES → testIgnore проекта
+    // functional в e2e/playwright.config.ts. Плохое изменение — срыв привязки
+    // (импорт чекера и testIgnore удалены): конфиг снова гоняет всё молча и
+    // шаг e2e зелёный, а wiring-тест в tools/test/e2e-select.test.ts краснеет.
+    // Проводка живёт в test:hooks, потому что выбор исполняет CI поверх обычной
+    // команды e2e — отдельного шага verify у него нет (З6: логика чекера
+    // канареечится тестами, проводка — здесь).
+    name: 'выбор E2E по фичам удалён из конфига',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /проводка: конфиг Playwright держит выбор E2E/,
+    apply: (root) => {
+      const path = join(root, 'e2e/playwright.config.ts');
+      const source = readFileSync(path, 'utf8');
+      const stripped = source
+        .replaceAll(
+          "import { e2eFeatureDirs, functionalTestIgnore, parseE2eFeaturesEnv } from '../tools/e2e-select.ts';\n",
+          '',
+        )
+        .replace('      testIgnore: e2eIgnore,\n', '\n');
+      if (stripped === source) {
+        throw new Error(
+          'canary anchor not found: e2e/playwright.config.ts has no e2e-select wiring',
+        );
+      }
+      writeFileSync(path, stripped);
     },
   },
 ];

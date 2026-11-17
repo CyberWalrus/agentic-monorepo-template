@@ -5,7 +5,7 @@
  * Канарейка: любой внешний import в хуковой цепочке роняет этот тест.
  */
 import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const HOOKS_DIR = resolve(import.meta.dirname, '..', '..', '.claude', 'hooks');
@@ -42,19 +42,28 @@ function localChain(entry: string): { files: string[]; external: string[] } {
 
 // stop-verify.ts в списке с 2026-11-13: zod убран, отчёт verify валидируется
 // вручную, неожиданная ошибка закрывается обёрткой (exit 2).
+// C10.1: логика хуков — CLI в tools/ (tools/hooks/* + общие модули tools/),
+// адаптер в .claude/hooks — только вызов; файлы lib.ts/*.main.ts из
+// .claude/hooks переехали в tools/hooks.
 describe('hooks are dependency-free', () => {
   for (const name of [
-    'lib.ts',
     'guard-bash.ts',
     'protect-paths.ts',
     'protect-result.ts',
     'session-start.ts',
     'stop-verify.ts',
+    'lint-changed-file.ts',
   ]) {
     it(`${name} imports nothing from node_modules`, () => {
       const { files, external } = localChain(resolve(HOOKS_DIR, name));
-      expect(files.length, 'import chain is discovered').toBeGreaterThanOrEqual(1);
+      expect(files.length, 'import chain is discovered').toBeGreaterThanOrEqual(2);
       expect(external, 'external imports found').toEqual([]);
+    });
+
+    it(`${name}: вся логика — в tools/ (адаптер без логики, C10.1)`, () => {
+      const { files } = localChain(resolve(HOOKS_DIR, name));
+      const strays = files.slice(1).filter((file) => !file.includes(`${sep}tools${sep}`));
+      expect(strays, 'files outside tools/ in the import chain').toEqual([]);
     });
   }
 });

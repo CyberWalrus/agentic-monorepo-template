@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 import { defineConfig, devices } from '@playwright/test';
 
+import { e2eFeatureDirs, functionalTestIgnore, parseE2eFeaturesEnv } from '../tools/e2e-select.ts';
 import { apiOrigin, resolvePorts } from '../tools/ports.ts';
 import { assertVisualRunAllowed, snapshotsUpdateMode } from '../tools/visual-guard.ts';
 
@@ -50,6 +51,16 @@ if (!reuseManualServer) {
 // Любой запуск Playwright (включая --project=perf/visual) перезаписывает этот файл,
 // поэтому проверка отчёта e2e идёт сразу после задачи e2e, до perf.
 const JSON_REPORTER = ['json', { outputFile: 'reports/e2e.json' }] as const;
+// Выбор E2E по фичам (B4.1): env E2E_FEATURES выставляет только CI (job e2e,
+// только PR) и действует только там (M1-ревью: локальный прогон агента не
+// сужается случайной переменной окружения). Пусто/'all'/мусор → всё: локальный
+// pnpm e2e, merge queue, push и nightly без env. Сквозные e2e-фичи (без
+// app-каталога) и @critical-файлы не игнорируются никогда.
+const e2eSelection = CI
+  ? parseE2eFeaturesEnv(process.env['E2E_FEATURES'], e2eFeatureDirs(repoRoot))
+  : { mode: 'all' as const, features: [] as string[] };
+const e2eIgnore =
+  e2eSelection.mode === 'subset' ? functionalTestIgnore(repoRoot, e2eSelection.features) : [];
 
 export default defineConfig({
   testDir: '.',
@@ -83,6 +94,7 @@ export default defineConfig({
     {
       name: 'functional',
       testMatch: 'features/**/*.spec.ts',
+      testIgnore: e2eIgnore,
       use: { ...devices['Desktop Chrome'] },
     },
     // visual и perf перезаписывают общие данные API: по умолчанию не запускаются,
