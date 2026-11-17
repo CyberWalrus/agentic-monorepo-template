@@ -135,6 +135,15 @@ jobs:
         with: { playwright: 'true' }
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+      # Выбор E2E по фичам (B4.1): только в PR — merge queue, push и nightly
+      # идут целиком. Base тот же, что у TURBO_SCM_BASE (пакетный --affected
+      # turbo). Ошибка диффа валит шаг громко: молча «всё» здесь не безопаснее.
+      - name: e2e feature selection
+        if: github.event_name == 'pull_request'
+        run: |
+          CHANGED=$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)
+          SELECTION=$(printf '%s\n' "$CHANGED" | node tools/e2e-select.ts --from-stdin)
+          echo "E2E_FEATURES=$SELECTION" >> "$GITHUB_ENV"
       - run: pnpm turbo run e2e $AFFECTED --output-logs=errors-only
       # Проект functional с default:false не запускается без явного --project —
       # гейт требует его присутствия в отчёте (A3). $AFFECTED — как у прогона.
