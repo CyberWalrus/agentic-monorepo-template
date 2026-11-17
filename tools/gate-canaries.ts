@@ -33,10 +33,17 @@ export interface GateCanary {
 // Высокоэнтропийный литерал: повторяющиеся символы gzip сжимает, и перерасход
 // бандла перестанет ловиться.
 const CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-export const BLOAT = Array.from(
-  { length: 40_000 },
-  () => CHARSET[Math.floor(Math.random() * CHARSET.length)],
-).join('');
+
+/** ~0.75 байта энтропии на символ: bloat(10_000) — это ~7.3 КБ gzip. */
+export function bloat(length: number): string {
+  return Array.from({ length }, () => CHARSET[Math.floor(Math.random() * CHARSET.length)]).join('');
+}
+
+export const BLOAT = bloat(40_000);
+// Дельта-канарейке (A6 PR-2, ADR 0013) хватает ~7.3 КБ: больше порога
+// maxPrGrowthKb (5 КБ) и меньше запаса абсолютных потолков (см. инвариант
+// порогов в тесте gates-canary).
+export const BLOAT_DELTA = bloat(10_000);
 
 function write(root: string, relativePath: string, content: string): void {
   const path = join(root, relativePath);
@@ -252,6 +259,26 @@ export const CANARIES: GateCanary[] = [
       const path = join(root, 'apps/web/src/features/tasks/use-tasks.ts');
       const source = readFileSync(path, 'utf8');
       const content = `${source}\nconst evilBloatProbe = '${BLOAT}';\nconsole.log(atob(btoa(evilBloatProbe)).length);\n`;
+      writeFileSync(path, content);
+    },
+  },
+  {
+    // Дельта-гейт (A6 PR-2, ADR 0013): рост ниже абсолютных потолков (их запас
+    // больше дельта-порога — инвариант порогов тестируется в gates-canary),
+    // поэтому первым и единственным срабатывает bundle-delta: +~7 КБ gzip
+    // больше maxPrGrowthKb (5 КБ). Правильная причина красноты — подсказка про
+    // label: любой другой текст означает сломанный чекер.
+    name: 'рост бандла в пределах абсолютов',
+    steps: 'build,bundle-delta',
+    full: true,
+    failedStep: 'bundle-delta',
+    expect: /bundle-growth-approved/,
+    apply: (root) => {
+      // Тот же import-graph, что у 30-КБ канарейки: use-tasks.ts живёт в
+      // самом большом чанке. atob(btoa()) не сворачивается минификатором.
+      const path = join(root, 'apps/web/src/features/tasks/use-tasks.ts');
+      const source = readFileSync(path, 'utf8');
+      const content = `${source}\nconst evilGrowthProbe = '${BLOAT_DELTA}';\nconsole.log(atob(btoa(evilGrowthProbe)).length);\n`;
       writeFileSync(path, content);
     },
   },
