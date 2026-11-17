@@ -83,8 +83,14 @@ const prLabels =
     : [];
 const commitData = isRecord(headCommit) ? headCommit['commit'] : undefined;
 const committer = isRecord(commitData) ? commitData['committer'] : undefined;
-const pushedAt =
+// Время push берём из pr.json (поле pushedAt ставит GitHub, подделать нельзя);
+// committer.date head-коммита — только фолбэк: автор контролирует её
+// (GIT_COMMITTER_DATE), доверять можно лишь при отсутствии лучшего источника
+// (находка security-ревью A6 PR-2).
+const prPushedAt = isRecord(pr) && typeof pr['pushedAt'] === 'string' ? pr['pushedAt'] : undefined;
+const commitDate =
   isRecord(committer) && typeof committer['date'] === 'string' ? committer['date'] : undefined;
+const pushedAt = prPushedAt ?? commitDate;
 
 const verdict = evaluateApproval({
   label,

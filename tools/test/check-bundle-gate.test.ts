@@ -40,7 +40,7 @@ function run(fixture: Fixture): { status: number | null; output: string } {
   writeFileSync(join(dir, 'check-runs.json'), JSON.stringify(fixture.checkRuns));
   writeFileSync(
     join(dir, 'pr.json'),
-    JSON.stringify({ labels: fixture.labels.map((name) => ({ name })) }),
+    JSON.stringify({ labels: fixture.labels.map((name) => ({ name })), pushedAt: PUSH_AT }),
   );
   writeFileSync(
     join(dir, 'events.json'),
@@ -179,4 +179,83 @@ it('retarget: берётся последний завершённый по comp
   });
   expect(result.status).toBe(0);
   expect(result.output).toMatch(/PASS/);
+});
+
+it('инверсный retarget: старее success, новее failure без label — FAIL', () => {
+  const result = run({
+    checkRuns: {
+      check_runs: [successRun('2026-11-17T01:00:00Z'), failureRun('2026-11-17T02:00:00Z')],
+    },
+    labels: [],
+  });
+  expect(result.status).toBe(1);
+  expect(result.output).toMatch(/FAIL/);
+  expect(result.output).toMatch(/не стоит/);
+});
+
+it('timed_out conclusion — FAIL (fail-closed)', () => {
+  const result = run({
+    checkRuns: {
+      check_runs: [
+        {
+          name: 'bundle-delta',
+          status: 'completed',
+          conclusion: 'timed_out',
+          completed_at: '2026-11-17T01:00:00Z',
+        },
+      ],
+    },
+    labels: [],
+  });
+  expect(result.status).toBe(1);
+  expect(result.output).toMatch(/timed_out/);
+});
+
+it('pushedAt из pr.json главнее committer.date: label старше реального push — FAIL', () => {
+  // committer.date автор подделывает (GIT_COMMITTER_DATE): подставлена дата ДО
+  // label, чтобы старая проверка свежести прошла. pushedAt в pr.json ставит
+  // GitHub и показывает, что push был ПОСЛЕ label — одобрение недействительно.
+  const dir = mkdtempSync(join(tmpdir(), 'bundle-gate-'));
+  dirs.push(dir);
+  writeFileSync(
+    join(dir, 'check-runs.json'),
+    JSON.stringify({ check_runs: [failureRun('2026-11-17T01:00:00Z')] }),
+  );
+  writeFileSync(
+    join(dir, 'pr.json'),
+    JSON.stringify({
+      labels: [{ name: 'bundle-growth-approved' }],
+      pushedAt: '2026-11-17T03:00:00Z',
+    }),
+  );
+  writeFileSync(
+    join(dir, 'events.json'),
+    JSON.stringify([
+      {
+        event: 'labeled',
+        actor: { login: 'template-owner' },
+        created_at: '2026-11-17T02:00:00Z',
+        label: { name: 'bundle-growth-approved' },
+      },
+    ]),
+  );
+  // committer.date подделан «до label» — против старой механики прошло бы.
+  writeFileSync(
+    join(dir, 'head-commit.json'),
+    JSON.stringify({ commit: { committer: { date: '2026-11-15T00:00:00Z' } } }),
+  );
+  mkdirSync(join(dir, 'docs'));
+  writeFileSync(join(dir, 'docs/CODEOWNERS'), OWNERS);
+  const result = spawnSync(
+    process.execPath,
+    [checker, 'check-runs.json', 'pr.json', 'events.json', 'head-commit.json', ...CANDIDATES],
+    { cwd: dir, encoding: 'utf8', timeout: 30_000 },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  const output = `${result.stdout}${result.stderr}`;
+  expect(result.status).toBe(1);
+  expect(output).toMatch(/до последнего push/);
+  expect(output).toMatch(/2026-11-17T03:00:00Z/);
 });

@@ -35,7 +35,10 @@ function run(
   const approvedLabel = fixtureLabel ?? label ?? 'gate-change-approved';
   const dir = mkdtempSync(join(tmpdir(), 'gate-approval-'));
   dirs.push(dir);
-  writeFileSync(join(dir, 'pr.json'), JSON.stringify({ labels: [{ name: approvedLabel }] }));
+  writeFileSync(
+    join(dir, 'pr.json'),
+    JSON.stringify({ labels: [{ name: approvedLabel }], pushedAt: PUSH_AT }),
+  );
   writeFileSync(
     join(dir, 'events.json'),
     JSON.stringify([

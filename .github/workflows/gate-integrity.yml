@@ -26,7 +26,12 @@ jobs:
   # прочитает состояние. «Label не стоит» — успех, а не ошибка.
   unlabel-stale-approval:
     name: unlabel-stale-approval
-    if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
+    # Снимать не только на synchronize: close → push → reopen приносит новый
+    # head-коммит без события synchronize, и устаревший label пережил бы reopen
+    # (находка security-ревью A6 PR-2). ready_for_review — то же для черновиков.
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      contains(fromJSON('["synchronize", "reopened", "ready_for_review"]'), github.event.action)
     permissions:
       pull-requests: write
     runs-on: ubuntu-latest
@@ -80,7 +85,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels,headRefOid > pr.json
+          gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels,headRefOid,pushedAt > pr.json
           gh api --paginate "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" > files.json
           HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json headRefOid --jq .headRefOid)
           gh api "repos/${{ github.repository }}/commits/$HEAD_SHA" > head-commit.json
@@ -122,7 +127,9 @@ jobs:
       pull-requests: read
       checks: read
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 30 мин: poll чеков 20 мин + poll событий ~1 мин + финальные чтения; ci-job
+    # bundle-delta имеет 25 мин — окно ожидания шире его худшего случая.
+    timeout-minutes: 30
     steps:
       # Fail-closed (З4): если job снятия label упал, состоянию label нельзя
       # доверять — падаем, а не пропускаем. Симметрично job'у integrity.
@@ -145,7 +152,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels,headRefOid > pr.json
+          gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels,headRefOid,pushedAt > pr.json
           HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json headRefOid --jq .headRefOid)
           gh api "repos/${{ github.repository }}/commits/$HEAD_SHA" > head-commit.json
           # Лента событий отстаёт от свежепоставленного label (eventual consistency):
@@ -163,8 +170,8 @@ jobs:
           # ждём до 15 минут. queued/in_progress — ждать; если за окно не завершился
           # или не появился вовсе — fail-closed, ремонт: перезапустить job
           # bundle-approval (ADR 0013, «красный по таймауту ≠ рост»).
-          for _ in $(seq 1 60); do
-            gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs" > check-runs.json
+          for _ in $(seq 1 80); do
+            gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > check-runs.json
             TOTAL=$(jq '[.check_runs[] | select(.name == "bundle-delta")] | length' check-runs.json)
             PENDING=$(jq '[.check_runs[] | select(.name == "bundle-delta" and .status != "completed")] | length' check-runs.json)
             if [ "$TOTAL" -gt 0 ] && [ "$PENDING" -eq 0 ]; then
@@ -173,7 +180,7 @@ jobs:
             echo "bundle-delta ещё не завершён (total=$TOTAL, pending=$PENDING) — ждём 15 с."
             sleep 15
           done
-          gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs" > check-runs.json
+          gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > check-runs.json
 
       - name: Bundle growth gate
         # Кандидаты CODEOWNERS в порядке приоритета GitHub (как в integrity).

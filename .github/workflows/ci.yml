@@ -237,7 +237,9 @@ jobs:
     name: bundle-delta
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25 мин: капы чекера install 10 + build 15 на холодном раннере — job обязан
+    # пережить худший случай сам, иначе SIGTERM вместо чистого fail-closed.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }

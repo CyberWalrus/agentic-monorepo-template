@@ -18,7 +18,7 @@
  * с причиной, а не молчаливый пропуск.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -100,8 +100,10 @@ const baseSha = mergeBase.output.trim().split('\n').at(-1) ?? '';
 
 // База: отдельный worktree на merge-base, install + сборка с общим кэшем
 // turbo. Любой сбой — красный: немерянная база не даёт верить дельте.
+// Выход из catch — через флаг и process.exitCode, не process.exit():
+// exit внутри catch пропускает finally и оставляет worktree базы в tmp.
 const baseDir = mkdtempSync(join(tmpdir(), 'bundle-delta-base-'));
-let base: BundleSizes;
+let base: BundleSizes | undefined;
 try {
   const added = git(['worktree', 'add', '--detach', baseDir, baseSha]);
   if (added.status !== 0) {
@@ -135,11 +137,14 @@ try {
       '  Дельта не измерена — красный по контракту fail-closed (ADR 0013).',
     ].join('\n'),
   );
-  process.exit(1);
 } finally {
   git(['worktree', 'remove', '--force', baseDir]);
   git(['worktree', 'prune']);
   rmSync(baseDir, { recursive: true, force: true });
+}
+// process.exit() — never: после guard'а base сужен до BundleSizes.
+if (base === undefined) {
+  process.exit(1);
 }
 
 const deltaKb = current.totalJsKb - base.totalJsKb;
@@ -169,6 +174,9 @@ if (fileDiffs.length > 10) {
 }
 
 const round2 = (value: number): number => Number(value.toFixed(2));
+// reports/ игнорируется git'ом и в CI-чекауте не существует (локально каталог
+// создаёт шаг bundle раньше) — создаём сами, иначе writeFileSync падает ENOENT.
+mkdirSync(join(root, 'reports'), { recursive: true });
 writeFileSync(
   join(root, 'reports/bundle-delta.json'),
   `${JSON.stringify(

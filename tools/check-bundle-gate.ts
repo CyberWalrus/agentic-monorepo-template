@@ -120,10 +120,15 @@ if (named.length === 0) {
               : [],
           )
         : [];
+    // pushedAt из pr.json автор подделать не может; committer.date — фолбэк
+    // (GIT_COMMITTER_DATE подконтролен автору; см. check-gate-approval.ts).
     const commitData = isRecord(headCommit) ? headCommit['commit'] : undefined;
     const committer = isRecord(commitData) ? commitData['committer'] : undefined;
-    const pushedAt =
+    const prPushedAt =
+      isRecord(pr) && typeof pr['pushedAt'] === 'string' ? pr['pushedAt'] : undefined;
+    const commitDate =
       isRecord(committer) && typeof committer['date'] === 'string' ? committer['date'] : undefined;
+    const pushedAt = prPushedAt ?? commitDate;
     const approval = evaluateApproval({
       label: LABEL,
       prLabels: labels,
