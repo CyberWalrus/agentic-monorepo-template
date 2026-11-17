@@ -30,7 +30,9 @@
       "outputs": ["playwright-report/**", "test-results/**", "reports/**"],
       // VIDEO=on — видео прогона как доказательство для PR; без env Turborepo не передаст его и не учтёт в хеше.
       // API_URL — цель прокси /rpc; PORT_BASE — явная база портов (ADR 0005, З9); оба читает конфиг Playwright.
-      "env": ["CI", "VIDEO", "API_URL", "PORT_BASE"]
+      // E2E_FEATURES — выбор фич (B4.1): без него перезапуск PR с тем же SHA
+      // реплеил бы из кэша отчёт старого подмножества.
+      "env": ["CI", "VIDEO", "API_URL", "PORT_BASE", "E2E_FEATURES"]
     },
     "perf": {
       "dependsOn": ["transit", "^build"],

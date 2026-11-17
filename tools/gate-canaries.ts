@@ -502,6 +502,35 @@ export const CANARIES: GateCanary[] = [
       writeFileSync(path, drifted);
     },
   },
+  {
+    // Выбор E2E по фичам (B4.1): env E2E_FEATURES → testIgnore проекта
+    // functional в e2e/playwright.config.ts. Плохое изменение — срыв привязки
+    // (импорт чекера и testIgnore удалены): конфиг снова гоняет всё молча и
+    // шаг e2e зелёный, а wiring-тест в tools/test/e2e-select.test.ts краснеет.
+    // Проводка живёт в test:hooks, потому что выбор исполняет CI поверх обычной
+    // команды e2e — отдельного шага verify у него нет (З6: логика чекера
+    // канареечится тестами, проводка — здесь).
+    name: 'выбор E2E по фичам удалён из конфига',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /проводка: конфиг Playwright держит выбор E2E/,
+    apply: (root) => {
+      const path = join(root, 'e2e/playwright.config.ts');
+      const source = readFileSync(path, 'utf8');
+      const stripped = source
+        .replaceAll(
+          "import { e2eFeatureDirs, functionalTestIgnore, parseE2eFeaturesEnv } from '../tools/e2e-select.ts';\n",
+          '',
+        )
+        .replace('      testIgnore: e2eIgnore,\n', '\n');
+      if (stripped === source) {
+        throw new Error(
+          'canary anchor not found: e2e/playwright.config.ts has no e2e-select wiring',
+        );
+      }
+      writeFileSync(path, stripped);
+    },
+  },
 ];
 // Вывод портов (З9, A5 PR-3) канарейки шага не имеет: рантайм читает записанный
 // reports/ports.json (read-first — иначе зонд после старта серверов уезжал на
