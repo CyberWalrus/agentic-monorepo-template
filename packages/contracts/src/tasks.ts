@@ -38,4 +38,14 @@ export const tasksContract = {
     .errors({ NOT_FOUND: { message: 'Task not found' } })
     .input(TaskIdInputSchema)
     .output(TaskSchema),
+  // Первая процедура с политикой «owner» (C2.3): удалять может только владелец
+  // задачи. NOT_FOUND не объявляется намеренно: проверка владельца идёт до
+  // доменной логики, у несуществующей задачи владельца нет — ownerOf отвечает
+  // null — и оба случая (чужой и неизвестный id) получают отказ FORBIDDEN
+  // без оракула «ресурс существует» (fail-closed, C2.2).
+  remove: ocAccess
+    .route({ method: 'DELETE', path: '/tasks/{id}', summary: 'Delete an owned task' })
+    .meta({ access: { type: 'owner' } })
+    .input(TaskIdInputSchema)
+    .output(z.void()),
 };

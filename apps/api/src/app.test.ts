@@ -293,3 +293,107 @@ describe('authorization over both transports', () => {
     );
   });
 });
+
+/**
+ * tasks.remove — первая owner-процедура домена (C2.3): доступ по таблице
+ * перебора покрывает owner-access-table.test.ts, здесь — поведение обоих
+ * транспортов и проводка «актор → владелец созданной задачи».
+ */
+function setupWithOwnedTask() {
+  const tasks = new InMemoryTaskRepository();
+  const app = createApp({ tasks, resolveActor: actorFromHeader });
+  const clientFor = (actorId?: string): ContractRouterClient<Contract> =>
+    createORPCClient(
+      new RPCLink({
+        url: 'http://api.test/rpc',
+        headers: actorId === undefined ? {} : { 'x-actor-id': actorId },
+        fetch: async (request) => app.fetch(request),
+      }),
+    );
+  const ownedTask = () => tasks.create('Delete me', 'owner-1');
+  return { app, tasks, clientFor, ownedTask };
+}
+
+describe('tasks.remove access over both transports', () => {
+  it('lets the owner delete their task over RPC', async () => {
+    const { tasks, clientFor, ownedTask } = setupWithOwnedTask();
+    const created = await ownedTask();
+
+    await expect(clientFor('owner-1').tasks.remove({ id: created.id })).resolves.toBeUndefined();
+
+    expect((await tasks.list()).map((task) => task.id)).not.toContain(created.id);
+  });
+
+  it('denies a foreign actor over RPC with a typed FORBIDDEN before the domain', async () => {
+    const { tasks, clientFor, ownedTask } = setupWithOwnedTask();
+    const created = await ownedTask();
+
+    const error = await clientFor('foreign-2')
+      .tasks.remove({ id: created.id })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ORPCError);
+    expect(error).toMatchObject({ code: 'FORBIDDEN', message: 'Access denied' });
+    expect((await tasks.list()).map((task) => task.id)).toContain(created.id);
+  });
+
+  it('answers FORBIDDEN, not NOT_FOUND, for repeated deletion by the owner', async () => {
+    const { clientFor, ownedTask } = setupWithOwnedTask();
+    const created = await ownedTask();
+
+    await expect(clientFor('owner-1').tasks.remove({ id: created.id })).resolves.toBeUndefined();
+
+    // Задачи больше нет — владельца нет — тот же отказ FORBIDDEN: оракула
+    // существования нет (решение из ревью плана C2.3)
+    const error = await clientFor('owner-1')
+      .tasks.remove({ id: created.id })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('records the acting actor as the owner of the created task', async () => {
+    const { tasks, clientFor } = setupWithOwnedTask();
+    const created = await clientFor('creator-7').tasks.create({ title: 'Mine' });
+
+    const foreign = await clientFor('other-8')
+      .tasks.remove({ id: created.id })
+      .catch((caught: unknown) => caught);
+
+    expect(foreign).toMatchObject({ code: 'FORBIDDEN' });
+    await expect(clientFor('creator-7').tasks.remove({ id: created.id })).resolves.toBeUndefined();
+    expect(await tasks.list()).toEqual([]);
+  });
+
+  it('responds 200 to the owner, 403 to anonymous and foreign actors over REST', async () => {
+    const { app, tasks, ownedTask } = setupWithOwnedTask();
+    const created = await ownedTask();
+
+    const anonymous = await app.request(`/api/tasks/${created.id}`, { method: 'DELETE' });
+    const foreign = await app.request(`/api/tasks/${created.id}`, {
+      method: 'DELETE',
+      headers: { 'x-actor-id': 'foreign-2' },
+    });
+    const owner = await app.request(`/api/tasks/${created.id}`, {
+      method: 'DELETE',
+      headers: { 'x-actor-id': 'owner-1' },
+    });
+
+    expect(anonymous.status).toBe(403);
+    expect(foreign.status).toBe(403);
+    // void-вывод OpenAPI-транспорт отдаёт как 200 с пустым телом
+    expect(owner.status).toBe(200);
+    expect(await tasks.list()).toEqual([]);
+  });
+
+  it('responds 403 for an unknown task id over REST: fail-closed, no existence oracle', async () => {
+    const { app } = setupWithOwnedTask();
+
+    const response = await app.request(`/api/tasks/${UNKNOWN_ID}`, {
+      method: 'DELETE',
+      headers: { 'x-actor-id': 'owner-1' },
+    });
+
+    expect(response.status).toBe(403);
+  });
+});

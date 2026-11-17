@@ -28,6 +28,14 @@ class OrderingLosingTaskRepository implements TaskRepository {
     return this.#inner.toggle(id);
   }
 
+  remove(id: string) {
+    return this.#inner.remove(id);
+  }
+
+  ownerOf(id: string) {
+    return this.#inner.ownerOf(id);
+  }
+
   reset(tasks: readonly Task[]) {
     return this.#inner.reset(tasks);
   }

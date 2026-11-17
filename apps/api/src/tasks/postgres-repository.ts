@@ -50,7 +50,7 @@ export class PostgresTaskRepository implements TaskRepository {
     return rows.map(toTask);
   }
 
-  async create(title: string): Promise<Task> {
+  async create(title: string, ownerId?: string | null): Promise<Task> {
     const task: Task = {
       id: this.#generateId(),
       title,
@@ -62,6 +62,7 @@ export class PostgresTaskRepository implements TaskRepository {
       title: task.title,
       completed: task.completed,
       createdAt: new Date(task.createdAt),
+      ownerId: ownerId ?? null,
     });
     return task;
   }
@@ -75,6 +76,20 @@ export class PostgresTaskRepository implements TaskRepository {
       .returning();
     const row = rows.at(0);
     return row === undefined ? undefined : toTask(row);
+  }
+
+  async remove(id: string): Promise<Task | undefined> {
+    const rows = await this.#db.delete(schema.tasks).where(eq(schema.tasks.id, id)).returning();
+    const row = rows.at(0);
+    return row === undefined ? undefined : toTask(row);
+  }
+
+  async ownerOf(id: string): Promise<string | null> {
+    const rows = await this.#db
+      .select({ ownerId: schema.tasks.ownerId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id));
+    return rows.at(0)?.ownerId ?? null;
   }
 
   async reset(tasks: readonly Task[]): Promise<void> {
