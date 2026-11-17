@@ -9,6 +9,12 @@
  *   pnpm backlog release <id>    освободить задачу (только человек, интерактивный терминал)
  *   pnpm backlog doctor          расхождения «смержена — доска не знает» (локально и nightly)
  *
+ * Флаг оператора (ADR 0009): `next --operator` выдаёт следующую задачу режима
+ * обслуживания или needs_human «оператор: …», `start <id> --operator` захватывает
+ * её тем же атомарным созданием ветки. doctor красит забытый файл режима
+ * обслуживания (.claude/settings.local.json) в основном checkout безусловно,
+ * в worktree задачи — при открытом PR или простое ветки дольше порога.
+ *
  * Доска читается из ссылки main (а не из рабочего дерева): у каждого worktree
  * своё дерево, а ветка не должна снимать с себя блокировку (З2). Если ссылки
  * main нет (свежий worktree без fetch), команда печатает возраст данных и
@@ -22,11 +28,17 @@ import path from 'node:path';
 import {
   dependencyCycles,
   doctorFindings,
+  invalidNeedsHuman,
+  isOperatorTask,
+  needsHumanKind,
+  openDependentsCount,
   parseTask,
   PRIORITIES,
   statusOf,
   touchesOverlap,
   type BoardFacts,
+  type MaintenanceFile,
+  type NeedsHumanKind,
   type TaskFile,
   type TaskStatus,
 } from './backlog-board.ts';
@@ -37,6 +49,13 @@ const LABEL: Record<TaskStatus, string> = {
   blocked: 'заблокирована',
   maintenance: 'режим обслуживания',
   free: 'свободна',
+};
+
+/** Статус вместо общего «заблокирована» — по виду needs_human (ADR 0009). */
+const NEEDS_HUMAN_LABEL: Record<NeedsHumanKind, string> = {
+  operator: 'нужен оператор',
+  deferred: 'отложено',
+  human: 'нужен человек',
 };
 
 function git(...args: string[]): string {
@@ -181,6 +200,8 @@ function reportBoard(source: BoardSource, tasks: TaskFile[]): void {
   const byId = new Map(all.tasks.map((task) => [task.id, task]));
   const rows = tasks.map((task) => {
     const status = statusOf(task, all);
+    const kind = needsHumanKind(task.needsHuman);
+    const label = status === 'blocked' && kind !== null ? NEEDS_HUMAN_LABEL[kind] : LABEL[status];
     const extras: string[] = [];
     if (status === 'in-progress') {
       const branchAge = tryGit('log', '-1', '--format=%ct', `task/${task.id}`);
@@ -198,10 +219,10 @@ function reportBoard(source: BoardSource, tasks: TaskFile[]): void {
         extras.push(`ждёт: ${open.join(', ')}`);
       }
       if (task.needsHuman !== '') {
-        extras.push(`нужно решение человека: ${task.needsHuman}`);
+        extras.push(task.needsHuman);
       }
     }
-    return `${task.id.padEnd(8)} ${LABEL[status].padEnd(20)} [${task.priority}] ${task.title}${extras.length > 0 ? `\n          — ${extras.join('; ')}` : ''}`;
+    return `${task.id.padEnd(8)} ${label.padEnd(20)} [${task.priority}] ${task.title}${extras.length > 0 ? `\n          — ${extras.join('; ')}` : ''}`;
   });
   console.log(`Доска из ${source.ref ?? 'рабочего дерева'} (${humanAge(source.age)}):\n`);
   console.log(rows.join('\n'));
@@ -259,7 +280,7 @@ function journalOf(task: TaskFile): string {
     .trim();
 }
 
-function commandNext(source: BoardSource): void {
+function commandNext(source: BoardSource, operator: boolean): void {
   const current = currentTaskBranch();
   if (current !== null) {
     console.log(`Ты в worktree задачи ${current}: продолжай её по коммитам и журналу.\n`);
@@ -268,6 +289,10 @@ function commandNext(source: BoardSource): void {
   }
   const all = facts(source);
   const open = all.tasks.filter((task) => !task.done);
+  if (operator) {
+    commandNextOperator(source, all, open);
+    return;
+  }
   if (open.length === 0) {
     die('Доска пуста: свободных задач нет. Пополни доску PR-ом (декомпозиция), не в ветке задачи.');
   }
@@ -303,11 +328,85 @@ function commandNext(source: BoardSource): void {
   }
   if (maintenance.length > 0) {
     console.error(
-      `Задачи режима обслуживания агенту не выдаются, перечислены человеку: ${maintenance.map((task) => task.id).join(', ')}. Начинает их человек: включает режим обслуживания и называет id.`,
+      `Задачи режима обслуживания агенту не выдаются, их ведёт оператор: ${maintenance.map((task) => task.id).join(', ')}. Операторская сессия берёт их через pnpm backlog next --operator (ADR 0009).`,
     );
   }
   console.log(
     `Следующая свободная задача: ${chosen.id} — ${chosen.title} [${chosen.priority}]\nЗахвати её: pnpm backlog start ${chosen.id}`,
+  );
+}
+
+/** Головки открытых PR (gh): null — gh недоступен (З11: вызывающий печатает причину). */
+function openPrHeads(): Set<string> | null {
+  const raw = tryRun('gh', [
+    'pr',
+    'list',
+    '--state',
+    'open',
+    '--limit',
+    '200',
+    '--json',
+    'headRefName',
+    '--jq',
+    '.[].headRefName',
+  ]);
+  if (raw === null) {
+    return null;
+  }
+  return new Set(raw.split('\n').filter(Boolean));
+}
+
+/**
+ * Ветки задач оператора этого клона без открытого PR — они занимают слот
+ * «одна операторская задача за раз» (ADR 0009, «Очерёдность»). gh недоступен →
+ * PR-состояние неизвестно, ветка считается ведущейся (fail-closed), причина
+ * печатается здесь (З11).
+ */
+function busyOperatorClaims(all: BoardFacts): string[] {
+  const byId = new Map(all.tasks.map((task) => [task.id, task]));
+  const claims = [...all.claimedIds].filter((id) => {
+    const task = byId.get(id);
+    return task !== undefined && !task.done && isOperatorTask(task);
+  });
+  if (claims.length === 0) {
+    return [];
+  }
+  const prHeads = openPrHeads();
+  if (prHeads === null) {
+    console.error(
+      'gh недоступен: открытые PR веток не проверены — считаю операторскую задачу ведущейся (ADR 0009).',
+    );
+  }
+  return claims.filter((id) => prHeads === null || !prHeads.has(`task/${id}`));
+}
+
+function commandNextOperator(source: BoardSource, all: BoardFacts, open: TaskFile[]): void {
+  const byId = new Map(all.tasks.map((task) => [task.id, task]));
+  const active = busyOperatorClaims(all);
+  if (active.length > 0) {
+    die(
+      `В клоне уже ведётся задача оператора без открытого PR: ${active.map((id) => `task/${id}`).join(', ')}.\nОдна операторская задача за раз (ADR 0009): открой PR по ней, либо человек освобождает: pnpm backlog release <id>.\nЕсли PR по ней уже открыт, а gh недоступен — захвати следующую напрямую: pnpm backlog start <id> --operator.`,
+    );
+  }
+  const candidates = open
+    .filter((task) => !all.claimedIds.has(task.id))
+    .filter((task) => !task.dependsOn.some((dep) => byId.get(dep)?.done !== true))
+    .filter(isOperatorTask)
+    .toSorted(
+      (a, b) =>
+        PRIORITIES.indexOf(a.priority) - PRIORITIES.indexOf(b.priority) ||
+        openDependentsCount(b.id, all.tasks) - openDependentsCount(a.id, all.tasks) ||
+        a.id.localeCompare(b.id),
+    );
+  const chosen = candidates[0];
+  if (chosen === undefined) {
+    die(
+      'Задач оператора нет: ни режима обслуживания, ни needs_human «оператор: …» со снятыми зависимостями.',
+    );
+  }
+  const dependents = openDependentsCount(chosen.id, all.tasks);
+  console.log(
+    `Следующая задача оператора: ${chosen.id} — ${chosen.title} [${chosen.priority}], открывает задач: ${dependents}\nЗахвати её: pnpm backlog start ${chosen.id} --operator\nРежим обслуживания включается в worktree задачи и выключается до открытия PR (ADR 0009).`,
   );
 }
 
@@ -357,29 +456,42 @@ function createWorktree(id: string, branch: string): boolean {
   return true;
 }
 
-function commandStart(id: string, source: BoardSource): void {
+function commandStart(id: string, source: BoardSource, operator: boolean): void {
   const task = source.tasks.find((item) => item.id === id);
   if (!task || task.done) {
     die(`Задачи ${id} нет на доске (из ${source.ref ?? 'рабочего дерева'}) или она закрыта.`);
   }
   const all = facts(source);
   const status = statusOf(task, all);
+  const kind = needsHumanKind(task.needsHuman);
   if (all.claimedIds.has(id)) {
     die(
       `Задача ${id} занята (ветка task/${id} уже существует).\nВозьми другую: pnpm backlog next. Освободить задачу может только человек: pnpm backlog release ${id}.`,
     );
   }
-  if (status === 'maintenance') {
-    die(
-      `Задача ${id} требует режима обслуживания (touches попадает под защищённые пути). Агент её не начинает: это делает человек, включая режим обслуживания.`,
-    );
+  const byId = new Map(all.tasks.map((item) => [item.id, item]));
+  const open = task.dependsOn.filter((dep) => byId.get(dep)?.done !== true);
+  if (open.length > 0) {
+    die(`Задача ${id} заблокирована: ждёт ${open.join(', ')}.`);
   }
-  if (status === 'blocked') {
-    const byId = new Map(all.tasks.map((item) => [item.id, item]));
-    const open = task.dependsOn.filter((dep) => byId.get(dep)?.done !== true);
+  if (status === 'maintenance' || kind === 'operator') {
+    if (!operator) {
+      die(
+        `Задача ${id} — задача оператора (${status === 'maintenance' ? 'режим обслуживания: touches под защищёнными путями' : 'needs_human «оператор: …»'}). Обычная сессия её не начинает: захватывает оператор — pnpm backlog start ${id} --operator (ADR 0009).`,
+      );
+    }
+    // Слот «одна операторская задача за раз» проверяет next --operator; start
+    // с явным id его сознательно не проверяет: эскейп-хатч next при
+    // недоступном gh — «захвати следующую напрямую» (подсказка, не граница, З3).
+  } else if (kind === 'deferred' || kind === 'human') {
     die(
-      `Задача ${id} заблокирована: ${open.length > 0 ? `ждёт ${open.join(', ')}` : `нужно решение человека: ${task.needsHuman}`}.`,
+      `Задача ${id} заблокирована: ${kind === 'deferred' ? 'отложено' : 'нужно решение человека'}: ${task.needsHuman}.`,
     );
+  } else if (task.needsHuman !== '') {
+    // Fail-closed: невалидный needs_human не захватывается ни с флагом, ни без —
+    // даже если гейт docs ещё не добежал (доска из fallback на рабочее дерево).
+    const problem = invalidNeedsHuman(task.needsHuman);
+    die(`Задача ${id} заблокирована: needs_human: ${problem ?? 'невалидное значение'}`);
   }
   // Захват — атомарное создание ветки от main: два одновременных start одной
   // задачи дают отказ второму (свойство общего хранилища ссылок, ADR 0007).
@@ -390,9 +502,17 @@ function commandStart(id: string, source: BoardSource): void {
   createWorktree(id, `task/${id}`);
 }
 
-function commandResume(id: string, source: BoardSource): void {
+function commandResume(id: string, source: BoardSource, operator: boolean): void {
   if (tryGit('rev-parse', '--verify', `task/${id}`) === null) {
     die(`Ветки task/${id} нет: нечего продолжать. Свободные задачи: pnpm backlog next.`);
+  }
+  // Worktree задачи оператора содержит включённый режим обслуживания:
+  // обычная сессия туда не заходит, продолжает оператор (ADR 0009).
+  const task = source.tasks.find((item) => item.id === id);
+  if (task !== undefined && !task.done && isOperatorTask(task) && !operator) {
+    die(
+      `Задача ${id} — задача оператора: в её worktree включён режим обслуживания. Продолжает оператор: pnpm backlog resume ${id} --operator (ADR 0009).`,
+    );
   }
   console.log(`Продолжение задачи ${id} по поручению человека (ADR 0007).`);
   showTaskState(id, source);
@@ -486,6 +606,92 @@ function mergedViaGit(ref: string, claims: string[]): Set<string> {
   return merged;
 }
 
+/**
+ * Файлы режима обслуживания .claude/settings.local.json (ADR 0009): основной
+ * checkout и worktree без ветки task/* — расхождение безусловно; worktree
+ * задачи — по открытому PR или простою ветки. gh вызывается лениво и только
+ * когда нашёлся файл в worktree задачи; недоступен → PR-состояние неизвестно,
+ * об этом печатается причина (З11), файл не перестаёт быть находкой.
+ */
+function maintenanceFiles(branchAgeHours: Map<string, number>): MaintenanceFile[] {
+  const files: MaintenanceFile[] = [];
+  const commonDir = git('rev-parse', '--path-format=absolute', '--git-common-dir');
+  const mainRoot = path.dirname(commonDir);
+  let prHeads: Set<string> | null | undefined = undefined;
+  const openPrFor = (taskId: string): { hasOpenPr: boolean; prUnknown: boolean } => {
+    if (prHeads === undefined) {
+      prHeads = openPrHeads();
+      if (prHeads === null) {
+        console.error(
+          'gh недоступен: открытые PR не проверены — файл режима обслуживания в worktree задачи остаётся находкой (З11).',
+        );
+      }
+    }
+    return { hasOpenPr: prHeads?.has(`task/${taskId}`) ?? false, prUnknown: prHeads === null };
+  };
+  if (existsSync(path.join(mainRoot, '.claude', 'settings.local.json'))) {
+    files.push({
+      where: mainRoot,
+      main: true,
+      taskId: null,
+      hasOpenPr: false,
+      prUnknown: false,
+      idleHours: null,
+    });
+  }
+  const porcelain = tryGit('worktree', 'list', '--porcelain');
+  if (porcelain === null) {
+    console.error(
+      'git worktree list недоступен: файлы режима обслуживания в чужих worktree не проверены (З11).',
+    );
+    return files;
+  }
+  let currentPath: string | null = null;
+  let currentTask: string | null = null;
+  const flush = (): void => {
+    if (
+      currentPath === null ||
+      currentPath === mainRoot ||
+      !existsSync(path.join(currentPath, '.claude', 'settings.local.json'))
+    ) {
+      return;
+    }
+    if (currentTask === null) {
+      // Worktree не на ветке task/* (released/abandoned, detached): протокол
+      // оператора такое место не покрывает — расхождение безусловно.
+      files.push({
+        where: currentPath,
+        main: false,
+        taskId: null,
+        hasOpenPr: false,
+        prUnknown: false,
+        idleHours: null,
+      });
+      return;
+    }
+    const pr = openPrFor(currentTask);
+    files.push({
+      where: currentPath,
+      main: false,
+      taskId: currentTask,
+      hasOpenPr: pr.hasOpenPr,
+      prUnknown: pr.prUnknown,
+      idleHours: branchAgeHours.get(currentTask) ?? null,
+    });
+  };
+  for (const line of porcelain.split('\n')) {
+    if (line.startsWith('worktree ')) {
+      flush();
+      currentPath = line.slice('worktree '.length);
+      currentTask = null;
+    } else if (line.startsWith('branch refs/heads/task/')) {
+      currentTask = line.slice('branch refs/heads/task/'.length);
+    }
+  }
+  flush();
+  return files;
+}
+
 function commandDoctor(source: BoardSource): void {
   const claims = [...claimedIds()].toSorted();
   const openIds = new Set(source.tasks.filter((task) => !task.done).map((task) => task.id));
@@ -510,6 +716,7 @@ function commandDoctor(source: BoardSource): void {
     claimedIds: new Set(claims),
     mergedIds,
     branchAgeHours,
+    maintenanceFiles: maintenanceFiles(branchAgeHours),
   });
   const blocking = findings.filter((finding) => finding.blocking);
   const warnings = findings.filter((finding) => !finding.blocking);
@@ -532,7 +739,16 @@ function commandDoctor(source: BoardSource): void {
 
 // --- Вход ------------------------------------------------------------------------
 
-const [command, id] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const operator = argv.includes('--operator');
+const unknownFlags = argv.filter((arg) => arg.startsWith('--') && arg !== '--operator');
+if (unknownFlags.length > 0) {
+  die(
+    `Неизвестный флаг: ${unknownFlags.join(', ')}. Единственный флаг доски — --operator (ADR 0009).`,
+  );
+}
+const positional = argv.filter((arg) => arg !== '--operator');
+const [command, id] = positional;
 const source = loadBoard();
 const cycles = dependencyCycles(source.tasks);
 if (cycles.length > 0) {
@@ -544,7 +760,7 @@ if (
   !['list', 'next', 'start', 'close', 'resume', 'release', 'doctor'].includes(command)
 ) {
   die(
-    'Команды доски (ADR 0007):\n  pnpm backlog list\n  pnpm backlog next\n  pnpm backlog start <id>\n  pnpm backlog close <id>    — закрыть: перенос файла в done/ тем же PR\n  pnpm backlog resume <id>\n  pnpm backlog release <id>  — только человек\n  pnpm backlog doctor        — расхождения «смержена — доска не знает»',
+    'Команды доски (ADR 0007):\n  pnpm backlog list\n  pnpm backlog next\n  pnpm backlog start <id>\n  pnpm backlog close <id>    — закрыть: перенос файла в done/ тем же PR\n  pnpm backlog resume <id>\n  pnpm backlog release <id>  — только человек\n  pnpm backlog doctor        — расхождения «смержена — доска не знает»\nФлаг оператора (ADR 0009):\n  pnpm backlog next --operator        — следующая задача оператора\n  pnpm backlog start <id> --operator  — захват задачи режима обслуживания или needs_human «оператор: …»',
   );
 }
 
@@ -565,13 +781,13 @@ switch (command) {
     break;
   }
   case 'next':
-    commandNext(source);
+    commandNext(source, operator);
     break;
   case 'start':
     if (!id) {
       die('Укажи id: pnpm backlog start <id>');
     }
-    commandStart(id, source);
+    commandStart(id, source, operator);
     break;
   case 'close':
     if (!id) {
@@ -586,7 +802,7 @@ switch (command) {
     if (!id) {
       die('Укажи id: pnpm backlog resume <id>');
     }
-    commandResume(id, source);
+    commandResume(id, source, operator);
     break;
   case 'release':
     if (!id) {
