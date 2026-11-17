@@ -10,13 +10,15 @@
  *
  * CLI: `node tools/e2e-select.ts --from-stdin` (изменённые пути построчно)
  * или `node tools/e2e-select.ts <path>…`; печатает `all` или список фич
- * через запятую — значение для env `E2E_FEATURES` в CI (job e2e).
+ * через запятую — значение для env `E2E_FEATURES` в CI (job e2e). CI диффует
+ * с `--no-renames`: переименование между фичами отдаёт оба пути, старая фича
+ * тоже попадает в прогон (инвариант «ошибаться только в сторону больше»).
  *
  * «@critical идут всегда»: конфиг Playwright не игнорирует каталог незаданной
  * фичи, если в его исходниках есть литерал `@critical` — файл гоняется целиком
  * (перебор внутри файла разрешён правилом «больше»).
  */
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
 const APP_FEATURE_RE = /^apps\/web\/src\/features\/([^/]+)(?:\/|$)/;
@@ -29,10 +31,19 @@ export interface E2eSelection {
 
 const ALL: E2eSelection = { mode: 'all', features: [] };
 
-export const E2E_FEATURES_ENV = 'E2E_FEATURES';
-
 function repoRoot(): string {
   return resolve(import.meta.dirname, '..');
+}
+
+/**
+ * Имя фичи: только lowercase-буквы, цифры и дефис (L1-ревью: произвольное имя
+ * каталога — это glob в testIgnore; метасимволы в имени позволили бы отсечь
+ * чужие файлы). Иное имя — не фича: выбор уходит в «всё» (fail-safe).
+ */
+const FEATURE_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+export function isFeatureName(name: string): boolean {
+  return FEATURE_NAME_RE.test(name);
 }
 
 /** Каталоги фич в e2e/features: фича содержит хотя бы один *.spec.ts или *.visual.ts. */
@@ -42,8 +53,13 @@ export function e2eFeatureDirs(root: string = repoRoot()): string[] {
     return [];
   }
   return readdirSync(dir)
-    .filter((name) => !name.startsWith('.') && statSync(join(dir, name)).isDirectory())
+    .filter((name) => !name.startsWith('.') && isFeatureName(name) && isRealDir(join(dir, name)))
     .filter((name) => hasTestSource(join(dir, name)));
+}
+
+/** Каталог, а не симлинк (L2-ревью: симлинк-фича — вектор спуфинга выбора). */
+function isRealDir(path: string): boolean {
+  return lstatSync(path).isDirectory();
 }
 
 /** Рекурсивно: есть ли *.spec.ts или *.visual.ts (helpers без тестов — не фича, L2). */
@@ -75,14 +91,18 @@ export function selectE2eFeatures(
     }
     const app = APP_FEATURE_RE.exec(file);
     if (app?.[1] !== undefined) {
+      // Имя вне чарсета — не признанная фича (L1): неизвестная поверхность — всё.
+      if (!isFeatureName(app[1])) {
+        return ALL;
+      }
       selected.add(app[1]);
       appFeatures.add(app[1]);
       continue;
     }
     const e2e = E2E_FEATURE_RE.exec(file);
     if (e2e?.[1] !== undefined) {
-      // Не-фича под e2e/features (helpers, пустой каталог) — общая кодовая база
-      // E2E: её изменение может затронуть любую фичу — гоняем всё.
+      // Не-фича под e2e/features (helpers, симлинк, имя вне чарсета) — общая
+      // кодовая база E2E: её изменение может затронуть любую фичу — гоняем всё.
       if (!knownE2eFeatures.includes(e2e[1])) {
         return ALL;
       }
@@ -120,7 +140,6 @@ export function parseE2eFeaturesEnv(
   return { mode: 'subset', features: [...new Set(features)].toSorted() };
 }
 
-/** Рекурсивно: есть ли в каталоге .ts-исходник с литералом «@critical». */
 /** Каталоги фич продукта apps/web/src/features: имена каталогов. */
 export function appFeatureDirs(root: string = repoRoot()): string[] {
   const dir = join(root, 'apps', 'web', 'src', 'features');
@@ -128,7 +147,7 @@ export function appFeatureDirs(root: string = repoRoot()): string[] {
     return [];
   }
   return readdirSync(dir).filter(
-    (name) => !name.startsWith('.') && statSync(join(dir, name)).isDirectory(),
+    (name) => !name.startsWith('.') && isFeatureName(name) && isRealDir(join(dir, name)),
   );
 }
 

@@ -141,7 +141,9 @@ jobs:
       - name: e2e feature selection
         if: github.event_name == 'pull_request'
         run: |
-          CHANGED=$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)
+          # --no-renames: переименование между фичами отдаёт оба пути — старая
+          # фича тоже попадает в прогон (инвариант «ошибаться в сторону больше»).
+          CHANGED=$(git diff --no-renames --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)
           SELECTION=$(printf '%s\n' "$CHANGED" | node tools/e2e-select.ts --from-stdin)
           echo "E2E_FEATURES=$SELECTION" >> "$GITHUB_ENV"
       - run: pnpm turbo run e2e $AFFECTED --output-logs=errors-only

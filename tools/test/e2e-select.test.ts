@@ -4,7 +4,7 @@
  * некритичные тесты не отсечены, мусор в env → не «всё») пинятся здесь; проводку
  * конфига держит тест-привязка внизу файла + канарейка в gate-canaries.ts.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -80,6 +80,21 @@ describe('selectE2eFeatures', () => {
 
   it('не-фича под e2e/features (helpers) — общая кодовая база E2E: всё', () => {
     expect(selectE2eFeatures(['e2e/features/helpers/util.ts'], known)).toEqual(ALL);
+  });
+
+  it('переименование между фичами: обе стороны пути выбирают обе фичи (M4, CI диффует с --no-renames)', () => {
+    expect(
+      selectE2eFeatures(
+        ['apps/web/src/features/a11y/new.ts', 'apps/web/src/features/tasks/old.ts'],
+        known,
+      ),
+    ).toEqual({ mode: 'subset', features: ['a11y', 'tasks'] });
+  });
+
+  it('имя фичи вне чарсета (L1) — не признанная фича: всё', () => {
+    for (const name of ['a11?', 'evil{a,b}', '../escape', 'has space']) {
+      expect(selectE2eFeatures([`apps/web/src/features/${name}/x.ts`], known)).toEqual(ALL);
+    }
   });
 
   it('windows-разделители и ./ префикс нормализуются', () => {
@@ -189,6 +204,17 @@ describe('functionalTestIgnore (на фикстурном дереве)', () => 
     writeFileSync(join(root, 'e2e', 'features', 'helpers', 'util.ts'), 'export const x = 1;\n');
     mkdirSync(join(root, 'e2e', 'features', 'empty'), { recursive: true });
     expect(e2eFeatureDirs(root)).toEqual(['real']);
+  });
+
+  it('симлинк-каталог — не фича (L2-ревью, security): выбор уходит в «всё»', () => {
+    root = join(mkdtempSync(join(tmpdir(), 'e2e-select-')), 'repo');
+    mkdirSync(join(root, 'e2e', 'features', 'real'), { recursive: true });
+    writeFileSync(join(root, 'e2e', 'features', 'real', 'a.spec.ts'), "test('a', () => {});\n");
+    mkdirSync(join(root, 'apps', 'web', 'src', 'features', 'tasks'), { recursive: true });
+    symlinkSync(join(root, 'e2e', 'features', 'real'), join(root, 'e2e', 'features', 'tasks2'));
+    // tasks2 — симлинк: не фича; изменение по его пути — неизвестная поверхность.
+    expect(e2eFeatureDirs(root)).toEqual(['real']);
+    expect(selectE2eFeatures(['e2e/features/tasks2/a.spec.ts'], e2eFeatureDirs(root))).toEqual(ALL);
   });
 
   it('на живом репозитории игнорируется только фича с app-каталогом (tasks)', () => {
