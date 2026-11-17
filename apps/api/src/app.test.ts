@@ -337,6 +337,21 @@ describe('tasks.remove access over both transports', () => {
     expect((await tasks.list()).map((task) => task.id)).toContain(created.id);
   });
 
+  it('answers FORBIDDEN, not NOT_FOUND, for repeated deletion by the owner', async () => {
+    const { clientFor, ownedTask } = setupWithOwnedTask();
+    const created = await ownedTask();
+
+    await expect(clientFor('owner-1').tasks.remove({ id: created.id })).resolves.toBeUndefined();
+
+    // Задачи больше нет — владельца нет — тот же отказ FORBIDDEN: оракула
+    // существования нет (решение из ревью плана C2.3)
+    const error = await clientFor('owner-1')
+      .tasks.remove({ id: created.id })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: 'FORBIDDEN' });
+  });
+
   it('records the acting actor as the owner of the created task', async () => {
     const { tasks, clientFor } = setupWithOwnedTask();
     const created = await clientFor('creator-7').tasks.create({ title: 'Mine' });
