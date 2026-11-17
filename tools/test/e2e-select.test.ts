@@ -214,8 +214,11 @@ describe('functionalTestIgnore (на фикстурном дереве)', () => 
       resolve(import.meta.dirname, '../../e2e/playwright.config.ts'),
       'utf8',
     );
-    expect(config).toContain("from '../tools/e2e-select.ts'");
-    expect(config).toContain("parseE2eFeaturesEnv(process.env['E2E_FEATURES']");
-    expect(config).toContain('testIgnore: e2eIgnore');
+    // Короткие ассерты (урок канарейки прокси): toContain на большом конфиге
+    // печатает дифф на сотни строк, название теста вылетает из хвоста вывода
+    // verify, и expect канарейки не находит якорь-заголовок.
+    expect(config.includes("from '../tools/e2e-select.ts'")).toBe(true);
+    expect(config.includes("parseE2eFeaturesEnv(process.env['E2E_FEATURES']")).toBe(true);
+    expect(config.includes('testIgnore: e2eIgnore')).toBe(true);
   });
 });
