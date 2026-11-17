@@ -216,6 +216,36 @@ jobs:
         env: { JOB: perf }
         run: echo "duration $JOB — $(( $(date +%s) - ${JOB_START:-0} ))s" >> "$GITHUB_STEP_SUMMARY"
 
+  # Дельта-гейт бандла (A6 PR-2, ADR 0013). Вне needs у gate намеренно: job
+  # исполняет код PR (сборка), а его определение для pull_request берётся из
+  # merge-ref — PR может его переписать. Блокирует merge доверенный required
+  # check bundle-approval из gate-integrity.yml (определение из base, код PR
+  # не исполняется); сверх этого подделка замера требует правки .github/** или
+  # tools/** — оба пути защищены (gate-change-approved).
+  bundle-delta:
+    name: bundle-delta
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup
+      - name: start clock
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+      - run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
+      - run: pnpm bundle:delta --base "${{ github.event.pull_request.base.sha }}"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bundle-delta-report
+          path: reports/bundle-delta.json
+          if-no-files-found: ignore
+      - name: duration to summary
+        if: always()
+        env: { JOB: bundle-delta }
+        run: echo "duration $JOB — $(( $(date +%s) - ${JOB_START:-0} ))s" >> "$GITHUB_STEP_SUMMARY"
+
   # Единственный required check в ruleset: имя стабильно, пропущенные affected-джобы не блокируют.
   gate:
     name: gate

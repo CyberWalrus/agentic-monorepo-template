@@ -32,18 +32,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Remove gate-change-approved older than this push
+      - name: Remove approvals older than this push
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           # DELETE без предварительного GET: чтение label отдаёт кэшированный 404
           # сразу после установки (eventual consistency) — доверять ему нельзя.
-          if gh api -X DELETE "repos/${{ github.repository }}/issues/$PR_NUMBER/labels/gate-change-approved"; then
-            echo "Снят label gate-change-approved: новый push требует нового одобрения."
-          else
-            echo "Label не стоял (DELETE вернул 404) — снимать нечего."
-          fi
+          # Оба одобрения (гейт и рост бандла, ADR 0013) действуют только до
+          # следующего push: новый head-коммит обнуляет их.
+          for LABEL in gate-change-approved bundle-growth-approved; do
+            if gh api -X DELETE "repos/${{ github.repository }}/issues/$PR_NUMBER/labels/$LABEL"; then
+              echo "Снят label $LABEL: новый push требует нового одобрения."
+            else
+              echo "Label $LABEL не стоял (DELETE вернул 404) — снимать нечего."
+            fi
+          done
 
   integrity:
     name: gate-integrity
@@ -104,7 +108,78 @@ jobs:
           APPROVED: ${{ steps.approval.outputs.approved }}
         run: node tools/check-protected-paths.ts --api-files files.json ${{ env.APPROVED == 'true' && '--approved' || '' }}
 
-  # Единственный job на merge_group. В очереди определение workflow — из временной
+  # Дельта-гейт бандла: доверенное одобрение роста (A6 PR-2, ADR 0013).
+  # Определение из base (pull_request_target), код PR не исполняется — по
+  # образцу ADR 0002: замер делает ci-job bundle-delta (untrusted, merge-ref),
+  # решение — здесь, по GitHub API. Fail-closed: check-run не найден, не
+  # завершён, отменён или одобрение невалидно — красный.
+  bundle-approval:
+    name: bundle-approval
+    if: always() && github.event_name == 'pull_request_target'
+    needs: [unlabel-stale-approval]
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Fail-closed (З4): если job снятия label упал, состоянию label нельзя
+      # доверять — падаем, а не пропускаем. Симметрично job'у integrity.
+      - name: Fail if unlabel job failed
+        if: needs.unlabel-stale-approval.result == 'failure'
+        run: |
+          echo "unlabel-stale-approval упал: состояние label недостоверно, проверка блокируется."
+          exit 1
+
+      # Только base.sha. Никогда не checkout head PR и merge ref (код PR под токеном
+      # этого события — паттерн pwn request). Локальный экшен тоже резолвится из базы.
+      - name: Checkout trusted base
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+      - uses: ./.github/actions/setup
+
+      - name: Fetch PR facts and check runs from GitHub API
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels,headRefOid > pr.json
+          HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json headRefOid --jq .headRefOid)
+          gh api "repos/${{ github.repository }}/commits/$HEAD_SHA" > head-commit.json
+          # Лента событий отстаёт от свежепоставленного label (eventual consistency):
+          # опрашиваем до минуты, иначе сценарий «поставили label — перезапустился run»
+          # ловит пустую ленту и честно отказывает в одобрении.
+          for _ in 1 2 3 4; do
+            gh api --paginate "repos/${{ github.repository }}/issues/$PR_NUMBER/events" > events.json
+            if grep -q 'bundle-growth-approved' events.json; then
+              break
+            fi
+            echo "События labeled для bundle-growth-approved ещё нет в ленте — ждём 15 с."
+            sleep 15
+          done
+          # bundle-delta (ci.yml, merge-ref) мог ещё не завершиться к началу job'а:
+          # ждём до 15 минут. queued/in_progress — ждать; если за окно не завершился
+          # или не появился вовсе — fail-closed, ремонт: перезапустить job
+          # bundle-approval (ADR 0013, «красный по таймауту ≠ рост»).
+          for _ in $(seq 1 60); do
+            gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs" > check-runs.json
+            TOTAL=$(jq '[.check_runs[] | select(.name == "bundle-delta")] | length' check-runs.json)
+            PENDING=$(jq '[.check_runs[] | select(.name == "bundle-delta" and .status != "completed")] | length' check-runs.json)
+            if [ "$TOTAL" -gt 0 ] && [ "$PENDING" -eq 0 ]; then
+              break
+            fi
+            echo "bundle-delta ещё не завершён (total=$TOTAL, pending=$PENDING) — ждём 15 с."
+            sleep 15
+          done
+          gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs" > check-runs.json
+
+      - name: Bundle growth gate
+        # Кандидаты CODEOWNERS в порядке приоритета GitHub (как в integrity).
+        run: node tools/check-bundle-gate.ts check-runs.json pr.json events.json head-commit.json .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS
+
+  # Job'ы merge_group. В очереди определение workflow — из временной
   # ветки с изменениями PR, повторная проверка не из доверенной базы; PR попадает
   # в очередь только после зелёного gate-integrity и ревью по ruleset (ADR 0002).
   # Имя обязано совпадать с required check, иначе очередь будет ждать вечно.
@@ -116,3 +191,12 @@ jobs:
     steps:
       - name: Acknowledge merge queue entry
         run: echo "gate-integrity проверен на head SHA до попадания в очередь."
+
+  bundle-ack:
+    name: bundle-approval
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Acknowledge merge queue entry
+        run: echo "bundle-delta проверен на head SHA до попадания в очередь (ADR 0013)."
