@@ -33,8 +33,17 @@ const app = createApp({
   ...(env.instanceId === undefined ? {} : { instanceId: env.instanceId }),
 });
 
-// host фиксирован: URL гейтов — 127.0.0.1 (tools/ports.ts), localhost
-// двусмысленен (Node любит ::1, слушатель может оказаться только на IPv4).
-serve({ fetch: app.fetch, port: env.port, hostname: '127.0.0.1' }, (info) => {
-  console.warn(`api listening on http://127.0.0.1:${info.port}`);
+// Хост — из окружения (server-config.ts): локально 127.0.0.1 (URL гейтов —
+// 127.0.0.1, localhost двусмысленен: Node любит ::1), в контейнере 0.0.0.0.
+const server = serve({ fetch: app.fetch, port: env.port, hostname: env.host }, (info) => {
+  console.warn(`api listening on http://${env.host}:${info.port}`);
 });
+
+// SIGTERM — docker stop, SIGINT — Ctrl+C: слушатель закрывается, активные
+// запросы доигрывают; принудительный таймаут — дело оркестратора (docker -t).
+const shutdown = (signal: string): void => {
+  console.warn(`api received ${signal}, closing`);
+  server.close(() => process.exit(0));
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

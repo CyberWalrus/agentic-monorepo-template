@@ -9,5 +9,5 @@
     // TanStack Start: verbatimModuleSyntax может протащить серверный код в клиентский бандл.
     "verbatimModuleSyntax": false
   },
-  "include": ["src", "*.config.ts"]
+  "include": ["src", "*.config.ts", "server.ts"]
 }

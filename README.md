@@ -16,6 +16,32 @@ pnpm dev           # web и api на портах из worktree (выбор — 
 
 Скриншот-тесты требуют Docker: `pnpm visual`.
 
+## Production-запуск
+
+```bash
+# api: Node 26 запускает TS напрямую (readiness: GET /health)
+PORT=3877 pnpm --filter @repo/api start
+
+# web: production-entry на Node — статика dist/client + прокси /rpc + SSR
+# (readiness: GET /healthz); перед запуском нужна сборка
+pnpm --filter @repo/web build
+PORT=3876 API_URL=http://127.0.0.1:3877 pnpm --filter @repo/web start:prod
+```
+
+Окружение валидируется при старте (fail-closed): без `PORT` (и без `API_URL` у web) процесс не поднимется. Хост привязки — `HOST` (дефолт `127.0.0.1`, в контейнере `0.0.0.0`). Модель запуска и образы — [ADR 0012](docs/adr/0012-production-server.md).
+
+```bash
+# Образы (контекст — корень репозитория; рантайм non-root, readiness в HEALTHCHECK)
+docker build -f apps/api/Dockerfile -t template-api .
+docker build -f apps/web/Dockerfile -t template-web .
+docker run -p 3000:3000 template-api
+# host.docker.internal есть в Docker Desktop (macOS/Windows); на Linux добавьте --add-host:
+docker run -p 3000:3000 -e API_URL=http://host.docker.internal:3877 template-web
+docker run --add-host=host.docker.internal:host-gateway -p 3000:3000 -e API_URL=http://host.docker.internal:3877 template-web
+```
+
+E2E и перф пока гоняют `vite preview` (защищённый `e2e/playwright.config.ts`); перевод их на production-entry — задача C3.4, CI-сборка образов — C3.3.
+
 ## Стек
 
 Node (`.nvmrc`) · pnpm (`packageManager`) · Turborepo · TypeScript · Oxlint + Oxfmt · Vite (Rolldown) · React + TanStack Start + TanStack Query · Hono + oRPC + Zod · Vitest browser mode · Playwright · dependency-cruiser · Knip · sherif · StrykerJS · Lefthook.

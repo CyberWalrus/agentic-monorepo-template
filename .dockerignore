@@ -1,0 +1,14 @@
+# Контекст сборки образов (ADR 0012): в сборку не должно попадать ничего,
+# кроме исходников и манифестов. dist собирается внутри образа.
+.git
+.gitignore
+**/node_modules
+**/dist
+**/coverage
+**/reports
+**/test-results
+**/playwright-report
+**/.turbo
+**/.stryker-tmp
+**/__screenshots__
+**/.env

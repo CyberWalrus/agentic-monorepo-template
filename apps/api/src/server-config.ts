@@ -28,6 +28,21 @@ const portSchema = z
 // отказ при старте, а не молчаливое «выключено».
 const flagSchema = z.stringbool({ truthy: ['1', 'true'], falsy: ['0', 'false'] }).default(false);
 
+// Хост привязки слушателя. Локально (pnpm dev, E2E, перф) — 127.0.0.1: URL
+// гейтов — 127.0.0.1 (ADR 0005). Контейнеру нужен 0.0.0.0 — это ENV образа
+// (Dockerfile, ADR 0012), а не дефолт кода: локальный сервер не должен
+// случайно вылезти на все интерфейсы. Пустое значение и whitespace —
+// конфигурация, а не «как получится»: отказ при старте.
+const hostSchema = z
+  .string()
+  .refine((host) => host.length > 0, {
+    error: 'HOST is empty: pass a host to bind, e.g. 0.0.0.0 inside a container',
+  })
+  .refine((host) => !/\s/.test(host), {
+    error: 'HOST must not contain whitespace: pass a host to bind, e.g. 0.0.0.0 inside a container',
+  })
+  .default('127.0.0.1');
+
 // Пустая строка равна отсутствующей (DATABASE_URL='' — in-memory, как и раньше).
 const optionalStringSchema = z
   .string()
@@ -37,6 +52,7 @@ const optionalStringSchema = z
 const serverEnvSchema = z
   .object({
     PORT: portSchema,
+    HOST: hostSchema,
     ENABLE_TEST_API: flagSchema,
     ENABLE_TEST_API_WITH_DATABASE: flagSchema,
     INSTANCE_ID: optionalStringSchema,
@@ -56,6 +72,8 @@ const serverEnvSchema = z
 
 export interface ServerEnv {
   port: number;
+  /** Хост привязки слушателя: 127.0.0.1 локально, 0.0.0.0 в контейнере. */
+  host: string;
   instanceId: string | undefined;
   databaseUrl: string | undefined;
   enableTestApi: boolean;
@@ -84,6 +102,7 @@ export function loadServerEnv(source: Record<string, string | undefined> = proce
   const raw = parsed.data;
   return {
     port: raw.PORT,
+    host: raw.HOST,
     instanceId: raw.INSTANCE_ID,
     databaseUrl: raw.DATABASE_URL,
     enableTestApi: raw.ENABLE_TEST_API,
