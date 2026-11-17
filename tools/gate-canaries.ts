@@ -310,6 +310,23 @@ export const CANARIES: GateCanary[] = [
     },
   },
   {
+    // Поля needs_human (ADR 0009): непустое значение начинается с «оператор:»,
+    // «отложено:» или «человек:» — иначе агент не отличает делегируемое от
+    // неделегируемого. Плохое изменение — произвольный текст: шаг docs краснеет
+    // invalidNeedsHuman в tools/check-docs.ts (правило для открытых задач).
+    name: 'needs_human без допустимого префикса',
+    steps: 'docs',
+    failedStep: 'docs',
+    expect: /needs_human/,
+    apply: (root) => {
+      write(
+        root,
+        'backlog/evil-human-probe.md',
+        `---\ntitle: probe\ntype: change\npriority: low\ndepends_on:\nneeds_human: выбери вариант сам и продолжай\n---\n# probe\n\n## Журнал\n`,
+      );
+    },
+  },
+  {
     name: 'рассинхрон З10-пары',
     steps: 'sandbox',
     failedStep: 'sandbox',

@@ -15,6 +15,7 @@ import path from 'node:path';
 import {
   dependencyCycles,
   ID_RE,
+  invalidNeedsHuman,
   invalidTouch,
   parseTask,
   type TaskFile,
@@ -425,6 +426,15 @@ async function checkBoard(): Promise<void> {
         findings.push(
           `backlog/${task.done ? 'done/' : ''}${task.id}.md: depends_on ссылается на несуществующую задачу «${dep}»`,
         );
+      }
+    }
+    // Правило префиксов применяется к открытым задачам: файлы в done/ — архив,
+    // их needs_human никого больше не блокирует, а правка чужих файлов доски
+    // на ветке задачи запрещена (boardBranchRule) — историю не переписываем.
+    if (!task.done && task.needsHuman !== '') {
+      const problem = invalidNeedsHuman(task.needsHuman);
+      if (problem) {
+        findings.push(`backlog/${task.id}.md: needs_human: ${problem}`);
       }
     }
     for (const touch of task.touches) {
