@@ -51,10 +51,13 @@ export const post: Step[] = [
 
 // E2E → e2e-report → perf идут последовательно: perf перезаписывает отчёт
 // reports/e2e.json, который читает e2e-report; переставлять шаги нельзя.
-// Порты у шагов больше не общие: выводятся из worktree (З9, A5 PR-3).
+// bundle-delta стоит после build и bundle: читает их dist и строит базу
+// merge-base с общим кэшем turbo (A6 PR-2, ADR 0013). Порты у шагов больше
+// не общие: выводятся из worktree (З9, A5 PR-3).
 export const slow: Step[] = [
   turbo('build'),
   { name: 'bundle', command: 'pnpm', args: ['bundle'] },
+  { name: 'bundle-delta', command: 'pnpm', args: ['bundle:delta'] },
   turbo('e2e'),
   {
     name: 'e2e-report',
