@@ -26,9 +26,9 @@ import { stateDir } from '../snapshot.ts';
 const repoDir = resolve(import.meta.dirname, '..', '..');
 
 const COPIED_FILES = [
-  '.claude/hooks/lib.ts',
   '.claude/hooks/stop-verify.ts',
-  '.claude/hooks/stop-verify.main.ts',
+  'tools/hooks/lib.ts',
+  'tools/hooks/stop-verify.ts',
   'tools/snapshot.ts',
   'tools/protected-paths.ts',
 ];

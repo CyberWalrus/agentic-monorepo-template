@@ -6,8 +6,12 @@
  * триажа в __screenshots__, settings.local.json создаёт сам Claude Code).
  * Отсутствие снимка не притворяется успехом — сообщается как слепая проверка.
  */
-import { projectDir, readHookInput } from './lib.ts';
-import { reconcile } from '../../tools/snapshot.ts';
+import { failClosedExit, projectDir, readHookInput } from './lib.ts';
+
+// Прямой вызов CLI наследует fail-closed: необработанный сбой — exit 2 (З4, C10.1).
+process.on('uncaughtException', failClosedExit);
+process.on('unhandledRejection', failClosedExit);
+import { reconcile } from '../snapshot.ts';
 
 const input = await readHookInput();
 const isStop = input.hook_event_name === 'Stop';
