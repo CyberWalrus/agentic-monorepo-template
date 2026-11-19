@@ -592,6 +592,37 @@ export const CANARIES: GateCanary[] = [
     },
   },
   {
+    // Одобрение визуальных базлайнов (b3.1, ADR 0015): доверенный workflow
+    // visual-approve обязан валидировать команду мейнтейнера чекером
+    // tools/check-visual-approval.ts (автор из CODEOWNERS + SHA + свежесть).
+    // Плохое изменение — срыв привязки (вызов чекера удалён из workflow):
+    // команда одобрялась бы без проверки автора/SHA, а wiring-тест в
+    // tools/test/visual-approval краснеет. Проводка живёт в test:hooks:
+    // issue_comment workflow исполняется только на main и не является шагом
+    // verify. Якорь — заголовок wiring-блока.
+    name: 'одобрение базлайнов отвязано от чекера',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /проводка: визуальное одобрение в доверенном workflow и CI/,
+    apply: (root) => {
+      const path = join(root, '.github/workflows/visual-approve.yml');
+      const source = readFileSync(path, 'utf8');
+      const stripped = source.replace(
+        '\n' +
+          '      - name: Validate approve-visual command\n' +
+          '        id: approval\n' +
+          "        if: success() && steps.facts.outputs.approved != 'false'\n" +
+          '        run: |\n' +
+          '          node tools/check-visual-approval.ts comment.json pr.json pushed-check-runs.json .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS\n',
+        '\n',
+      );
+      if (stripped === source) {
+        throw new Error('canary anchor not found: visual-approve.yml has no approval validator');
+      }
+      writeFileSync(path, stripped);
+    },
+  },
+  {
     // Классы защиты tools/ (ADR 0014, e9): шаг verify → pnpm tool-class:check.
     // Плохое изменение — срыв проводки script→гейт (tool-class:check удалён из
     // package.json): шаг verify ломается, замыкание tools/ перестаёт

@@ -93,6 +93,9 @@ const KNOWN_GATES: readonly string[] = [
   'tools/verify.ts',
   'tools/visual-guard.ts',
   'tools/visual-inner.sh',
+  'tools/visual-ci.sh',
+  'tools/check-visual-approval.ts',
+  'tools/visual-approval-core.ts',
 ];
 
 /** Встроенные команды pnpm: не имена скриптов (разбор строки прерывается). */

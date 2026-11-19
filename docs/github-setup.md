@@ -37,8 +37,8 @@ gh label create nightly-failure --color D93F0B --description "Nightly checks fai
 
 GitHub с 2026-12-02 блокирует `pull_request_target` в публичных репозиториях без явной политики. Создайте (Settings → Actions → Policies):
 
-- таргет: только `.github/workflows/gate-integrity.yml`;
-- Restrict events → allowed: `pull_request_target`, `merge_group`.
+- таргет: `.github/workflows/gate-integrity.yml` и `.github/workflows/visual-approve.yml` ([ADR 0015](adr/0015-visual-baselines-approval.md), b3.1 — добавляет человек после мёржа);
+- Restrict events → allowed: `pull_request_target`, `merge_group`, `issue_comment`.
 
 Любое расширение триггеров этого workflow — через правку политики тем же процессом, что и правка гейтов ([ADR 0002](adr/0002-gate-integrity.md)).
 
