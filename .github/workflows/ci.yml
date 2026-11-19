@@ -186,7 +186,12 @@ jobs:
       # затем перезапись только разошедшихся базлайнов и сборка артефакта
       # visual-actuals для одобрения командой /approve-visual.
       - run: bash tools/visual-ci.sh
-        env: { CI: 'true' }
+        env:
+          CI: 'true'
+          # head SHA PR (не merge-ref): манифест артефакта сверяется с ним в
+          # visual-approve (b3.1, ADR 0015); на workflow_dispatch пусто —
+          # повторный прогон идёт уже по исправленному дереву.
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -199,6 +204,7 @@ jobs:
         with:
           name: visual-report
           path: |
+            visual-diff/
             e2e/playwright-report/
             e2e/test-results/
             packages/ui/.vitest/

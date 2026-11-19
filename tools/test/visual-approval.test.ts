@@ -8,11 +8,7 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import {
-  evaluateVisualApproval,
-  isApproveCommand,
-  type CommentEvent,
-} from '../visual-approval-core.ts';
+import { evaluateVisualApproval, type CommentEvent } from '../visual-approval-core.ts';
 
 const MAINTAINERS = new Set(['CyberWalrus']);
 const HEAD = 'a'.repeat(40);
@@ -98,11 +94,6 @@ describe('evaluateVisualApproval', () => {
     const verdict = evaluateVisualApproval({ comment: undefined, pull, maintainers: MAINTAINERS });
     expect(verdict.approved).toBe(false);
   });
-
-  it('isApproveCommand: намерение команды видно даже при кривой форме', () => {
-    expect(isApproveCommand('/approve-visual abc')).toBe(true);
-    expect(isApproveCommand('обсуждение /approve-visual')).toBe(false);
-  });
 });
 
 describe('проводка: визуальное одобрение в доверенном workflow и CI', () => {
@@ -111,8 +102,10 @@ describe('проводка: визуальное одобрение в дове�
   const ci = readFileSync(join(repoRoot, '.github/workflows/ci.yml'), 'utf8');
 
   it('workflow вызывает чекер одобрения на тех же кандидатах CODEOWNERS', () => {
-    expect(workflow).toMatch(/node tools\/check-visual-approval\.ts/);
-    expect(workflow).toMatch(/\.github\/CODEOWNERS CODEOWNERS docs\/CODEOWNERS/);
+    // toBe(true), а не toMatch: провал toMatch печатает весь файл и вытесняет
+    // заголовок теста из 60-строчного хвоста verify — канарейка не засчитывается.
+    expect(workflow.includes('node tools/check-visual-approval.ts')).toBe(true);
+    expect(workflow.includes('.github/CODEOWNERS CODEOWNERS docs/CODEOWNERS')).toBe(true);
   });
 
   it('CI собирает артефакт visual-actuals, workflow его потребляет', () => {

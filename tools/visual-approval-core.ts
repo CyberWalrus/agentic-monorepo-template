@@ -34,11 +34,6 @@ export interface VisualVerdict {
 
 const COMMAND_RE = /^\/approve-visual\s+([0-9a-f]{40})\s*$/;
 
-/** Это вообще команда одобрения (даже если кривая)? — для ответа в PR. */
-export function isApproveCommand(body: string): boolean {
-  return body.trim().startsWith('/approve-visual');
-}
-
 /**
  * Одобрение действительно, только если одновременно: текст комментария —
  * ровно `/approve-visual <sha>`; SHA совпадает с текущим head PR; комментарий

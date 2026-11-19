@@ -6,7 +6,7 @@
 #
 # ЗАПРЕЩЕНО менять без режима обслуживания и ревью мейнтейнера. Запрещено:
 # - исполнять что-либо из PR (npm/pnpm/node-скрипты дерева PR);
-# - коммитить пути вне канонических базлайнов: e2e/**/__screenshots__/*.png и
+# - коммитить пути вне канонических базлайнов: e2e/**/__screenshots__/*.webp,
 #   packages/ui/**/__screenshots__/*.png из артефакта;
 # - коммитить в ветку, отличную от head-ветки PR, или не на одобренный SHA.
 #
@@ -16,7 +16,7 @@ name: visual-approve
 
 on:
   issue_comment:
-    types: [created, edited]
+    types: [created]
 
 concurrency:
   group: visual-approve-${{ github.event.issue.number }}
@@ -40,6 +40,8 @@ jobs:
     steps:
       # Только дефолтная ветка (github.sha события): CODEOWNERS и tools валидатора.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup
 
       - name: Fetch comment and PR facts from GitHub API
@@ -51,11 +53,19 @@ jobs:
           # Комментарий перечитывается из API: payload события редактируем, а
           # решение должно опираться на серверное состояние (З2).
           gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" > comment.json
-          gh pr view "${PR_NUMBER}" --repo "${REPO}" --json headRefOid,headRefName > pr.json
+          gh pr view "${PR_NUMBER}" --repo "${REPO}" --json headRefOid,headRefName,isCrossRepository > pr.json
+          # Fork-PR: head-ветка живёт в чужом репозитории — push в «ветку с тем
+          # же именем» базового репо и диспатч её ci.yml недопустимы (security-
+          # ревью b3.1, major 2).
+          if jq -e '.isCrossRepository == true' pr.json >/dev/null; then
+            echo "approved=false" >> "$GITHUB_OUTPUT"
+            echo "reply=PR из форка: head-ветка вне этого репозитория — базлайны коммитятся только в ветки этого репозитория" >> "$GITHUB_OUTPUT"
+          fi
           # Время последнего push — тот же прокси, что в gate-integrity: min
-          # started_at check-run'ов на head-коммите (ставит GitHub).
+          # started_at check-run'ов на head-коммите (ставит GitHub). Пагинация:
+          # check-run'ов может быть больше 100 (minor 8 security-ревью).
           HEAD_SHA=$(jq -r .headRefOid pr.json)
-          gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" > pushed-check-runs.json
+          gh api --paginate "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" > pushed-check-runs.json
 
       - name: Validate approve-visual command
         id: approval
@@ -86,6 +96,9 @@ jobs:
           git checkout "$HEAD_SHA"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Symlink-каталоги в дереве PR: коммит-симлинк мог бы увести запись
+          # копирования вовне worktree (minor 3 security-ревью b3.1).
+          find e2e packages/ui -type l -delete 2>/dev/null || true
 
       - name: Download and verify visual-actuals artifact
         if: steps.approval.outputs.approved == 'true'
@@ -93,12 +106,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           HEAD_SHA=$(jq -r .headRefOid pr.json)
-          RUNS=$(gh api "repos/${REPO}/actions/runs?head_sha=${HEAD_SHA}&status=completed&per_page=100")
-          RUN_ID=$(printf '%s' "$RUNS" | jq '[.workflow_runs[] | select(.name == "CI")] | sort_by(.id) | last | .id // empty')
-          if [ -z "$RUN_ID" ]; then
-            echo "CI-прогон для ${HEAD_SHA} не найден — артефакту неоткуда взяться (fail-closed)" >&2
+          # Прогон для PR event'а исполняется на merge-ref с другим SHA: прогон
+          # артефакта ищем по check-run'у "visual" на head SHA (авторитетная
+          # связь коммит->job, major 1 architecture/security-ревью b3.1).
+          VISUAL_JOB=$(gh api --paginate "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" | jq -r '.check_runs[] | select(.name == "visual") | .details_url' | tail -1)
+          if [ -z "$VISUAL_JOB" ]; then
+            echo "check-run visual на ${HEAD_SHA} не найден — диффа не было, одобрять нечего (fail-closed)" >&2
             exit 1
           fi
+          JOB_ID=${VISUAL_JOB##*/}
+          RUN_ID=$(gh api "repos/${REPO}/actions/jobs/${JOB_ID}" --jq .run_id)
           ARTIFACT_ID=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" | jq -r '.artifacts[] | select(.name == "visual-actuals" and .expired == false) | .id' | tail -1)
           if [ -z "$ARTIFACT_ID" ]; then
             echo "Артефакт visual-actuals в прогоне ${RUN_ID} не найден — visual job не собирал базлайны (fail-closed)" >&2
@@ -115,7 +132,7 @@ jobs:
           jq -r '.files[]' actuals/manifest.json > actuals/files.txt
           while IFS= read -r file; do
             case "$file" in
-              e2e/*__screenshots__/*.png|packages/ui/*__screenshots__/*.png) ;;
+              e2e/*__screenshots__/*.png|e2e/*__screenshots__/*.webp|packages/ui/*__screenshots__/*.png) ;;
               *) echo "Путь вне канонических базлайнов: ${file}" >&2; exit 1 ;;
             esac
             case "$file" in
@@ -129,20 +146,26 @@ jobs:
         if: steps.approval.outputs.approved == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          COMMENT_LOGIN: ${{ github.event.comment.user.login }}
         run: |
           HEAD_SHA=$(jq -r .headRefOid pr.json)
           BRANCH=$(jq -r .headRefName pr.json)
+          LOGIN=$(jq -r .user.login comment.json)
+          case "$BRANCH" in
+            *[!A-Za-z0-9._/-]*|*..*) echo "Небезопасное имя ветки: ${BRANCH}" >&2; exit 1 ;;
+          esac
           while IFS= read -r file; do
             mkdir -p "$(dirname "$file")"
             cp "actuals/${file}" "$file"
             git add "$file"
           done < actuals/files.txt
-          git commit -m "visual baselines from CI (approved by ${COMMENT_LOGIN} on ${HEAD_SHA})"
+          git commit -m "visual baselines from CI (approved by @${LOGIN} on ${HEAD_SHA})"
           # Push ровно в head-ветку PR. GITHUB_TOKEN push события не рождает —
-          # CI на новый head SHA диспатчит следующий шаг (З4: без него merge
-          # ждал бы check'и, которых не будет).
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "HEAD:refs/heads/${BRANCH}"
+          # CI на новый head SHA диспатчит следующий шаг. Полные гейты (в т.ч.
+          # gate-integrity на новый SHA) человек запускает одним synchronize
+          # (пустой push / Update branch): бот-коммит трогает __screenshots__
+          # (deny) — свежий gate-change-approved потребуется заново
+          # (ADR 0015, известное ограничение).
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "HEAD:refs/heads/${BRANCH}""
 
       - name: Trigger CI for the new head SHA
         if: steps.approval.outputs.approved == 'true'
@@ -157,10 +180,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.issue.number }}
-          COMMENT_LOGIN: ${{ github.event.comment.user.login }}
+          LOGIN: ${{ github.event.comment.user.login }}
         run: |
           FILES=$(sed 's/^/- /' actuals/files.txt)
           gh pr comment "$PR_NUMBER" --repo "$REPO" \
-            --body '✅ Базлайны из CI закоммичены в ветку PR (одобрил @'"${COMMENT_LOGIN}"'):
+            --body '✅ Базлайны из CI закоммичены в ветку PR (одобрил @'"${LOGIN}"'):
           '"${FILES}"'
-          CI перезапущен для нового head SHA; отчёт диффа — в артефактах job "visual".'
+          CI перезапущен диспатчем (fast-часть гейтов). Полные гейты — после synchronize: пустой push (git commit --allow-empty) или кнопка Update branch; бот-коммит трогает __screenshots__ (deny) — после прогона поставьте gate-change-approved как обычно. Отчёт диффа — в артефактах job "visual".'
