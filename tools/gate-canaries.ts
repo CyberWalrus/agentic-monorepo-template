@@ -558,6 +558,39 @@ export const CANARIES: GateCanary[] = [
       writeFileSync(path, stripped);
     },
   },
+  {
+    // Канарейка копии шаблона (d8.3): раннер живёт в хвосте скрипта canaries,
+    // а не в этой таблице — он позитивная проверка (копия собирается и зелёная),
+    // а не негативный контроль шага verify; без copier он уходит в громкий skip
+    // (З5-исключение: PyPI вне allowlist песочницы, ADR 0004). Плохое изменение —
+    // отвязать раннер от pnpm canaries: wiring-тест в tools/test/template-copy
+    // краснеет, шаг test:hooks с ним падает. Якорь — заголовок wiring-теста
+    // (хвост вывода режет текст ассерта).
+    name: 'канарейка копии отвязана от canaries',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /канарейка копии/,
+    apply: (root) => {
+      const path = join(root, 'package.json');
+      const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      if (!isRecord(parsed)) {
+        throw new Error('canary anchor not found: package.json is not an object');
+      }
+      const scripts = parsed['scripts'];
+      if (!isRecord(scripts) || typeof scripts['canaries'] !== 'string') {
+        throw new Error('canary anchor not found: no canaries script');
+      }
+      const stripped = scripts['canaries'].replace(
+        ' && node tools/run-template-copy-canary.ts',
+        '',
+      );
+      if (stripped === scripts['canaries']) {
+        throw new Error('canary anchor not found: canaries script has no copy canary');
+      }
+      scripts['canaries'] = stripped;
+      writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
+    },
+  },
 ];
 // Вывод портов (З9, A5 PR-3) канарейки шага не имеет: рантайм читает записанный
 // reports/ports.json (read-first — иначе зонд после старта серверов уезжал на

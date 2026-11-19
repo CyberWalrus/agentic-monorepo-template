@@ -24,6 +24,13 @@ on:
       - e2e/playwright.config.ts
       - '**/stryker.config.json'
       - .nvmrc
+      # Файлы шаблона (d8.3): bad-change в copier.yml обязан красить канарейку
+      # копии на PR, а не только в nightly.
+      - copier.yml
+      - .github/rulesets/**
+      - tools/copier-version.txt
+      - .github/CODEOWNERS.jinja
+      - docs/CODEOWNERS
   # Правки самих workflow (.github/workflows/**) канарейки не перезапускают —
   # их защиту обеспечивает gate-integrity (pull_request_target из base, З2).
   workflow_dispatch:
@@ -55,4 +62,8 @@ jobs:
       # Установка в корневом чекауте греет pnpm store — install в worktree
       # линкуется из него, а не качает с нуля.
       - run: pnpm install --frozen-lockfile
+      # Канарейка копии (d8.3) гоняет copier: PyPI вне allowlist песочницы
+      # агента (ADR 0004, З5-исключение) — её гоняют CI и человек. Версия —
+      # один источник tools/copier-version.txt (З10).
+      - run: pipx install "copier==$(cat tools/copier-version.txt)"
       - run: pnpm canaries
