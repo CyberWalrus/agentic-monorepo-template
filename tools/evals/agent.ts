@@ -53,10 +53,10 @@ export function buildAgentInvocation(
 }
 
 /**
- * Разбор финального JSON Claude Code (`-p --output-format json` печатает один
- * объект результата). Расход токенов — сумма всех числовых полей usage
- * (вход, выход, кэш), итерации — num_turns. Шум до/после JSON (предупреждения
- * CLI) переживает поиск внешних фигурных скобок.
+ * Разбор финального JSON Claude Code (`-p --output-format json` печатает
+ * массив сообщений [system, assistant, result] — берём последний элемент с
+ * type: 'result'; одиночный объект результата тоже принимается). Шум до/после
+ * JSON (предупреждения CLI) переживает поиск внешних скобок.
  */
 export function parseAgentResult(run: RunResult): AgentMetrics {
   const text = run.stdout.trim();
@@ -76,10 +76,12 @@ export function parseAgentResult(run: RunResult): AgentMetrics {
       throw new Error('агент вернул вывод, не разбираемый как JSON результата');
     }
   }
-  if (!isRecord(payload)) {
-    throw new Error('JSON результата агента — не объект');
+  const record = Array.isArray(payload)
+    ? payload.findLast((item) => isRecord(item) && item['type'] === 'result')
+    : payload;
+  if (!isRecord(record)) {
+    throw new Error('в выводе агента нет результата (type: result)');
   }
-  const record = payload;
   return {
     iterations: numberOrNull(record['num_turns']),
     tokens: usageTotal(record['usage']),
@@ -98,20 +100,29 @@ function numberOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * Канонические поля расхода токенов: вход, выход и оба кэша. Прочие поля и
+ * вложенные объекты usage (детали.reasoning, server_tool_use, служебные
+ * метки) в сумму не входят — иначе одно и то же считалось бы дважды.
+ */
+const USAGE_TOKEN_KEYS = [
+  'input_tokens',
+  'output_tokens',
+  'cache_creation_input_tokens',
+  'cache_read_input_tokens',
+] as const;
+
 function usageTotal(usage: unknown): number | null {
-  if (typeof usage !== 'object' || usage === null) {
+  if (!isRecord(usage)) {
     return null;
   }
   let total = 0;
   let seen = false;
-  const stack: unknown[] = [usage];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (typeof node === 'number' && Number.isFinite(node)) {
-      total += node;
+  for (const key of USAGE_TOKEN_KEYS) {
+    const value = usage[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      total += value;
       seen = true;
-    } else if (typeof node === 'object' && node !== null) {
-      stack.push(...Object.values(node));
     }
   }
   return seen ? total : null;

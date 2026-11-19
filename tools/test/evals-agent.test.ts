@@ -27,12 +27,34 @@ describe('parseAgentResult', () => {
 
     expect(metrics).toMatchObject({
       iterations: 12,
-      tokens: 1000 + 200 + 300 + 4000 + 2,
+      tokens: 1000 + 200 + 300 + 4000,
       cliTimeMs: 123_456,
       model: 'claude-test',
       isError: false,
       resultText: 'готово',
     });
+  });
+
+  it('reads the result message from the array format (claude -p --output-format json)', () => {
+    const payload = JSON.stringify([
+      { type: 'system', subtype: 'init', session_id: 's1' },
+      { type: 'assistant', message: { role: 'assistant' } },
+      {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        num_turns: 5,
+        usage: greenResult.usage,
+      },
+    ]);
+
+    expect(parseAgentResult(asRun(payload))).toMatchObject({ iterations: 5, tokens: 5500 });
+  });
+
+  it('array without a result message fails loudly', () => {
+    const payload = JSON.stringify([{ type: 'system', subtype: 'init' }]);
+
+    expect(() => parseAgentResult(asRun(payload))).toThrow(/result/);
   });
 
   it('flags an agent-reported error', () => {
