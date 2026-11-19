@@ -611,6 +611,7 @@ export const CANARIES: GateCanary[] = [
         '\n' +
           '      - name: Validate approve-visual command\n' +
           '        id: approval\n' +
+          "        if: success() && steps.facts.outputs.approved != 'false'\n" +
           '        run: |\n' +
           '          node tools/check-visual-approval.ts comment.json pr.json pushed-check-runs.json .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS\n',
         '\n',
