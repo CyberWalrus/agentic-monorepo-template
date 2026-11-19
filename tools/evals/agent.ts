@@ -6,7 +6,7 @@
  * Метрики — из финального JSON агента; доверие к ним ограничено: pass раннер
  * считает сам запуском verify (run.ts), а не самоотчётом агента.
  */
-import type { RunResult } from './exec.ts';
+import { type runProcess, type RunResult } from './exec.ts';
 
 /** Время wall-clock вокруг агента считает раннер; это — собственный замер CLI (диагностика расхождения). */
 export interface AgentMetrics {

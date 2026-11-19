@@ -209,6 +209,12 @@ function die(message: string): never {
   process.exit(1);
 }
 
+/** Значение строкового флага или undefined (boolean-флаги и отсутствие — не строка). */
+function stringArg(args: Record<string, string | boolean>, flag: string): string | undefined {
+  const value = args[flag];
+  return typeof value === 'string' ? value : undefined;
+}
+
 function parseArgs(argv: string[]): Record<string, string | boolean> {
   const parsed: Record<string, string | boolean> = {};
   const flagsWithValues = new Set([
@@ -263,27 +269,25 @@ export async function main(argv: string[]): Promise<number> {
   }
   const timeoutRaw = args['--timeout-minutes'];
   const timeoutMinutes =
-    timeoutRaw === undefined ? DEFAULT_TIMEOUT_MINUTES : Number.parseInt(timeoutRaw, 10);
+    timeoutRaw === undefined
+      ? DEFAULT_TIMEOUT_MINUTES
+      : Number.parseInt(stringArg(args, '--timeout-minutes') ?? '', 10);
   if (!Number.isInteger(timeoutMinutes) || timeoutMinutes <= 0) {
     die(`--timeout-minutes: целое число минут, получено «${String(timeoutRaw)}»`);
   }
+  const model = stringArg(args, '--model');
+  const agentCommand = stringArg(args, '--agent-command');
   const { report, reportPath, exitCode } = await runEvals({
     root,
     scenarios: names,
-    outDir: typeof args['--out'] === 'string' ? args['--out'] : 'reports/evals',
-    model: typeof args['--model'] === 'string' ? args['--model'] : undefined,
+    outDir: stringArg(args, '--out') ?? 'reports/evals',
+    ...(model === undefined ? {} : { model }),
     timeoutMinutes,
     keepWorktree: args['--keep'] === true,
-    agentPreset: typeof args['--agent'] === 'string' ? args['--agent'] : 'claude',
-    agentCommand: typeof args['--agent-command'] === 'string' ? args['--agent-command'] : undefined,
-    installCommand:
-      typeof args['--install-command'] === 'string'
-        ? args['--install-command']
-        : 'pnpm install --frozen-lockfile',
-    verifyCommand:
-      typeof args['--verify-command'] === 'string'
-        ? args['--verify-command']
-        : 'pnpm verify --full',
+    agentPreset: stringArg(args, '--agent') ?? 'claude',
+    ...(agentCommand === undefined ? {} : { agentCommand }),
+    installCommand: stringArg(args, '--install-command') ?? 'pnpm install --frozen-lockfile',
+    verifyCommand: stringArg(args, '--verify-command') ?? 'pnpm verify --full',
     runId: new Date().toISOString(),
   });
   process.stdout.write(`${summaryLines(report).join('\n')}\nотчёт: ${reportPath}\n`);
