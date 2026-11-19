@@ -110,6 +110,15 @@ export async function runEvals(options: RunEvalsOptions): Promise<RunEvalsResult
   return { report, reportPath, exitCode };
 }
 
+/** Хвост текста для отчёта: разделитель, если пусто — null (не «пустая строка»). */
+function tailOf(text: string, maxChars: number): string | null {
+  const trimmed = text.trim();
+  if (trimmed === '') {
+    return null;
+  }
+  return trimmed.length <= maxChars ? trimmed : trimmed.slice(-maxChars);
+}
+
 async function runScenario(
   options: RunEvalsOptions,
   agentCommand: string,
@@ -127,6 +136,8 @@ async function runScenario(
     tokens: null,
     agentExitCode: null,
     verifyExitCode: null,
+    verifyTail: null,
+    agentResultTail: null,
     invalid: null,
     error: null,
   };
@@ -173,6 +184,7 @@ async function runScenario(
     }
     outcome.iterations = metrics.iterations;
     outcome.tokens = metrics.tokens;
+    outcome.agentResultTail = tailOf(metrics.resultText, 400);
     if (metrics.isError) {
       outcome.error = `агент отчитался об ошибке: ${metrics.resultText.slice(0, 200)}`;
       return outcome;
@@ -183,6 +195,7 @@ async function runScenario(
       timeoutMs: VERIFY_TIMEOUT_MS,
     });
     outcome.verifyExitCode = verify.code;
+    outcome.verifyTail = tailOf(`${verify.stderr}\n${verify.stdout}`, 2000);
     outcome.pass = verify.code === 0;
     if (verify.code !== 0) {
       outcome.error = `verify красный (код ${verify.code}) — см. ${worktree.path}`;

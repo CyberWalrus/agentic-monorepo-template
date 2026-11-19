@@ -126,6 +126,8 @@ describe('runEvals', () => {
       tokens: 120,
       agentExitCode: 0,
       verifyExitCode: 0,
+      verifyTail: null,
+      agentResultTail: 'готово',
       invalid: null,
       error: null,
     });
@@ -142,8 +144,10 @@ describe('runEvals', () => {
     rmSync(reportDir, { recursive: true, force: true });
   });
 
-  it('red verify makes the scenario fail with a red exit code', async () => {
-    const { result } = await withFakeRepo({ verifyCommand: 'exit 7' });
+  it('red verify makes the scenario fail and keeps the verify output tail', async () => {
+    const { result } = await withFakeRepo({
+      verifyCommand: "echo 'traceability: AC tag unknown'; exit 7",
+    });
 
     expect(result.exitCode).toBe(1);
     expect(result.report.results[0]).toMatchObject({
@@ -151,6 +155,7 @@ describe('runEvals', () => {
       verifyExitCode: 7,
       iterations: 7,
     });
+    expect(result.report.results[0]?.verifyTail ?? '').toContain('AC tag unknown');
   });
 
   it('an agent without a JSON result is a loud error, verify stays untouched', async () => {

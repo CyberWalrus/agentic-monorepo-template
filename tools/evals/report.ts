@@ -23,6 +23,10 @@ export interface ScenarioOutcome {
   tokens: number | null;
   agentExitCode: number | null;
   verifyExitCode: number | null;
+  /** Хвост вывода verify: worktree на FAIL удаляется, без этого причина невосстановима. */
+  verifyTail: string | null;
+  /** Финальное сообщение агента (самоотчёт — не метрика pass, но диагностике помогает). */
+  agentResultTail: string | null;
   invalid: string | null;
   error: string | null;
 }
