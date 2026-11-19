@@ -26,7 +26,7 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { matchesGlob } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { parseProtectedPaths } from './protected-paths.ts';
 
@@ -615,8 +615,30 @@ export function checkToolClass(input: ToolClassInput): ToolClassReport {
     }
   }
 
-  // Значения скриптов: литеральные ссылки tools/… обязаны резолвиться (в).
-  for (const text of inlineSources) {
+  // Значения скриптов — транзитивно (shell→shell и pnpm→pnpm: значение скрипта
+  // может звать другой скрипт, его значение сканируется так же); литеральные
+  // ссылки tools/… обязаны резолвиться (в).
+  const inlineQueue = [...inlineSources];
+  const seenInline = new Set<string>();
+  while (inlineQueue.length > 0) {
+    const text = inlineQueue.pop() ?? '';
+    if (seenInline.has(text)) {
+      continue;
+    }
+    seenInline.add(text);
+    for (const call of extractScriptCalls(text)) {
+      const holder = scriptHolder(index, call);
+      if (holder === null) {
+        problems.push(`(в) цепочка скриптов: --filter ${call.pkg ?? ''}: пакет не найден`);
+        continue;
+      }
+      const value = holder.get(call.name);
+      if (value === undefined) {
+        problems.push(`(в) цепочка скриптов ведёт к несуществующему скрипту: ${call.name}`);
+        continue;
+      }
+      inlineQueue.push(value);
+    }
     for (const literal of extractToolLiterals(text)) {
       if (literal.includes('*') || isFile(root, literal)) {
         entryFiles.push(literal);
@@ -667,6 +689,10 @@ export function checkToolClass(input: ToolClassInput): ToolClassReport {
         continue;
       }
       // Пробники канареек (tools/evil-probe.ts) не существуют — не узлы графа.
+      // Литерал извлекается из любой строки файла замыкания, не только из
+      // позиций spawn: упоминание tools/… в сообщении втягивает файл в
+      // замыкание — пере-аппроксимация в консервативную сторону (deny, не
+      // review), осознанная (находка architecture-ревью e9).
       if (isFile(root, literal) && !visited.has(literal)) {
         queue.push(literal);
       }
@@ -716,6 +742,17 @@ export function checkToolClass(input: ToolClassInput): ToolClassReport {
       );
     }
   }
+  // Симметричный якорь: каждая точная deny-запись внутри tools/ обязана быть
+  // известным гейтом — иначе новый гейт, внесённый в deny без KNOWN_GATES,
+  // молча сужает защиту от поломки вывода. Только в режиме репозитория: в
+  // синтетических деревьях список известных гейтов передаётся опцией.
+  if (input.knownGates === undefined) {
+    for (const entry of deny) {
+      if (entry.startsWith('tools/') && !entry.includes('*') && !knownGates.includes(entry)) {
+        problems.push(`fail-closed: deny-запись ${entry} вне KNOWN_GATES — добавь её туда же (З4)`);
+      }
+    }
+  }
 
   return { problems, closure };
 }
@@ -744,7 +781,7 @@ function resolveImport(root: string, fromFile: string, specifier: string): strin
 
 // --- CLI ---------------------------------------------------------------------------
 
-const repoRootFromHere = new URL('..', import.meta.url).pathname;
+const repoRootFromHere = fileURLToPath(new URL('..', import.meta.url));
 const invokedDirectly =
   process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url;
 
