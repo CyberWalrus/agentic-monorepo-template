@@ -32,7 +32,10 @@ const TREE: Record<string, string> = {
 ];
 export const post = [];
 export const slow = [];\n`,
-  'tools/check-docs.ts': `import { model } from './board-model.ts';\nexport const use = model;\n`,
+  // Литерал делает tools/protected-paths.json членом замыкания — как в
+  // настоящем репозитории (gate-canaries, hooks), чтобы (б) проверялся с
+  // цикличностью на месте.
+  'tools/check-docs.ts': `import { model } from './board-model.ts';\nexport const use = model;\nexport const config = 'tools/protected-paths.json';\n`,
   'tools/board-model.ts': `export const model = { rules: 1 };\n`,
   'tools/hooks/lib.ts': `export const hookLib = true;\n`,
   'tools/test/board.test.ts': `import { expect, it } from 'vitest';\nit('stub', () => {\n  expect(1).toBe(1);\n});\n`,
@@ -44,6 +47,7 @@ const DENY = [
   'tools/verify-steps.ts',
   'tools/check-docs.ts',
   'tools/board-model.ts',
+  'tools/protected-paths.json',
   'tools/hooks/**',
   'tools/test/**',
 ];

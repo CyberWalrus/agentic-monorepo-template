@@ -645,13 +645,17 @@ export function checkToolClass(input: ToolClassInput): ToolClassReport {
     // Литералы в тестах — фикстуры (строки-примеры путей), не рёбра графа;
     // импорты тестов остаются рёбрами: они определяют класс импортируемого.
     const literalsMatter = !relative.startsWith('tools/test/') && !relative.startsWith('e2e/');
-    for (const specifier of extractImports(text)) {
+    // protected-paths.json — член замыкания (его читает контур), но данных-
+    // источник, не код: его deny-записи не могут сеять сами себя в замыкание,
+    // иначе проверка (б) «лишняя deny-запись» ослепнет (цикличность).
+    const importsMatter = relative !== 'tools/protected-paths.json';
+    for (const specifier of importsMatter ? extractImports(text) : []) {
       const resolved = resolveImport(root, relative, specifier);
       if (resolved !== null && !visited.has(resolved)) {
         queue.push(resolved);
       }
     }
-    const literals = literalsMatter ? extractToolLiterals(text) : [];
+    const literals = literalsMatter && importsMatter ? extractToolLiterals(text) : [];
     for (const literal of literals) {
       if (literal.includes('*')) {
         // Глоб в тексте (tools/** в paths:-фильтре workflow) — не ссылка на
