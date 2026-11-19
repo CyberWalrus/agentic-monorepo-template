@@ -78,6 +78,9 @@ jobs:
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
       - run: pnpm install --frozen-lockfile
+      # Канарейка копии (d8.3): copier из PyPI (З5-исключение, ADR 0004),
+      # версия — один источник tools/copier-version.txt (З10).
+      - run: pipx install "copier==$(cat tools/copier-version.txt)"
       - run: pnpm canaries
 
   verify-budgets:
