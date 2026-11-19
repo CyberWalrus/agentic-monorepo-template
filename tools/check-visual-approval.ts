@@ -32,8 +32,17 @@ if (positionals.length < 4) {
   );
   process.exit(2);
 }
-const [commentPath, prPath, checkRunsPath] = positionals;
+const [commentPathRaw, prPathRaw, checkRunsPathRaw] = positionals;
 const codeownersCandidates = positionals.slice(3);
+const commentPath = commentPathRaw ?? '';
+const prPath = prPathRaw ?? '';
+const checkRunsPath = checkRunsPathRaw ?? '';
+if (!commentPath || !prPath || !checkRunsPath) {
+  console.error(
+    'Использование: node tools/check-visual-approval.ts <comment.json> <pr.json> <pushed-check-runs.json> <CODEOWNERS...>',
+  );
+  process.exit(2);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
