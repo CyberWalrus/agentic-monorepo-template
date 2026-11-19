@@ -57,6 +57,8 @@ jobs:
       # пишет job unit): корневые хуки не остаются без проверки числа тестов.
       - run: pnpm test:count
       - run: pnpm sandbox:check
+      # Классы защиты tools/ (ADR 0014): замыкание == deny protected-paths.json.
+      - run: pnpm tool-class:check
       - run: pnpm docs:check
       - run: pnpm --filter @repo/contracts openapi:check
       - name: duration to summary

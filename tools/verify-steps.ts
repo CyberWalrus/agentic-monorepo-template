@@ -29,6 +29,8 @@ export const fast: Step[] = [
   { name: 'test-integrity', command: 'pnpm', args: ['test:integrity'] },
   { name: 'test:hooks', command: 'pnpm', args: ['test:hooks'] },
   { name: 'sandbox', command: 'pnpm', args: ['sandbox:check'] },
+  // Классы защиты tools/ (ADR 0014): замыкание гейтов == deny protected-paths.json.
+  { name: 'tool-class', command: 'pnpm', args: ['tool-class:check'] },
   { name: 'docs', command: 'pnpm', args: ['docs:check'] },
   { name: 'sherif', command: 'pnpm', args: ['sherif'] },
   // Версия Docker-образа Playwright == каталог @playwright/test (З4/A8).

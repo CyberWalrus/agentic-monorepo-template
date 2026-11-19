@@ -591,6 +591,30 @@ export const CANARIES: GateCanary[] = [
       writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
     },
   },
+  {
+    // Классы защиты tools/ (ADR 0014, e9): шаг verify → pnpm tool-class:check.
+    // Плохое изменение — срыв привязки (шаг tool-class удалён из verify-steps):
+    // замыкание tools/ перестаёт проверяться на каждом verify молча, а
+    // wiring-тест в tools/test/check-tool-class краснеет. Проводка живёт в
+    // test:hooks по образцу B4.1: логика чекера канареечится фикстурами того
+    // же файла, здесь — только её подключение к шагу.
+    name: 'шаг check-tool-class отвязан от verify',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /проводка: шаг tool-class в verify/,
+    apply: (root) => {
+      const path = join(root, 'tools/verify-steps.ts');
+      const source = readFileSync(path, 'utf8');
+      const stripped = source.replace(
+        "  // Классы защиты tools/ (ADR 0014): замыкание гейтов == deny protected-paths.json.\n  { name: 'tool-class', command: 'pnpm', args: ['tool-class:check'] },\n",
+        '',
+      );
+      if (stripped === source) {
+        throw new Error('canary anchor not found: verify-steps.ts has no tool-class step');
+      }
+      writeFileSync(path, stripped);
+    },
+  },
 ];
 // Вывод портов (З9, A5 PR-3) канарейки шага не имеет: рантайм читает записанный
 // reports/ports.json (read-first — иначе зонд после старта серверов уезжал на

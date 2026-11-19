@@ -85,7 +85,7 @@ beforeAll(() => {
   mkdirSync(join(repo, 'backlog'), { recursive: true });
   writeFileSync(
     join(repo, 'backlog', 'e.md'),
-    taskFile('e', { priority: 'high', touches: 'tools/**' }),
+    taskFile('e', { priority: 'high', touches: 'tools/verify.ts' }),
   );
   writeFileSync(
     join(repo, 'backlog', 'm2.md'),

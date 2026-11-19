@@ -40,7 +40,13 @@ export const slow = [];\n`,
   'tools/loose.ts': `export const loose = 1;\n`,
 };
 
-const DENY = ['tools/check-docs.ts', 'tools/board-model.ts', 'tools/hooks/**', 'tools/test/**'];
+const DENY = [
+  'tools/verify-steps.ts',
+  'tools/check-docs.ts',
+  'tools/board-model.ts',
+  'tools/hooks/**',
+  'tools/test/**',
+];
 
 function writeTree(deny: string[]): void {
   mkdirSync(tmp, { recursive: true });

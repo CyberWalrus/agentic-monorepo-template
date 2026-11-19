@@ -64,12 +64,48 @@
         ".github/CODEOWNERS.jinja",
         "docs/CODEOWNERS",
         "CODEOWNERS",
-        "tools/copier-version.txt",
         ".github/**",
         ".claude/settings.json",
         ".claude/settings.local.json",
         ".claude/hooks/**",
-        "tools/**"
+        "tools/analyze-command.ts",
+        "tools/backlog-board.ts",
+        "tools/backlog-doctor.ts",
+        "tools/check-bundle-delta.ts",
+        "tools/check-bundle-gate.ts",
+        "tools/check-bundle.ts",
+        "tools/check-docs.ts",
+        "tools/check-gate-approval.ts",
+        "tools/check-protected-paths.ts",
+        "tools/check-sandbox-paths.ts",
+        "tools/check-template-copy.ts",
+        "tools/check-test-count.ts",
+        "tools/check-test-integrity.ts",
+        "tools/check-test-report.ts",
+        "tools/check-tool-class.ts",
+        "tools/check-visual-image.ts",
+        "tools/copier-version.txt",
+        "tools/e2e-select.ts",
+        "tools/gate-approval-core.ts",
+        "tools/gate-canaries.ts",
+        "tools/instance.ts",
+        "tools/measure-bundle.ts",
+        "tools/perf-budgets.ts",
+        "tools/perf-lock.ts",
+        "tools/perf-metrics.ts",
+        "tools/ports.ts",
+        "tools/protected-paths.json",
+        "tools/protected-paths.ts",
+        "tools/run-gate-canaries.ts",
+        "tools/run-template-copy-canary.ts",
+        "tools/snapshot.ts",
+        "tools/verify-budgets-loader.ts",
+        "tools/verify-steps.ts",
+        "tools/verify.ts",
+        "tools/visual-guard.ts",
+        "tools/visual-inner.sh",
+        "tools/hooks/**",
+        "tools/test/**"
       ],
       "allowWrite": ["~/Library/pnpm/store"]
     },
@@ -79,11 +115,25 @@
       "allowedDomains": ["registry.npmjs.org"]
     },
     "credentials": {
-      "files": [{ "path": "~/.ssh", "mode": "deny" }],
+      "files": [
+        {
+          "path": "~/.ssh",
+          "mode": "deny"
+        }
+      ],
       "envVars": [
-        { "name": "NPM_TOKEN", "mode": "deny" },
-        { "name": "GH_TOKEN", "mode": "deny" },
-        { "name": "GITHUB_TOKEN", "mode": "deny" }
+        {
+          "name": "NPM_TOKEN",
+          "mode": "deny"
+        },
+        {
+          "name": "GH_TOKEN",
+          "mode": "deny"
+        },
+        {
+          "name": "GITHUB_TOKEN",
+          "mode": "deny"
+        }
       ]
     }
   },

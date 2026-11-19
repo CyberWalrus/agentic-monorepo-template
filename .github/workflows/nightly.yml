@@ -120,7 +120,9 @@ jobs:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
-      - run: pnpm backlog doctor
+      # Гейт целостности доски — deny-модуль напрямую (ADR 0014): ночной контур
+      # не зависит от review-класса CLI доски.
+      - run: node tools/backlog-doctor.ts
         env:
           GH_TOKEN: ${{ github.token }}
 
