@@ -23,7 +23,7 @@ Merge queue, если доступна на вашем тарифе, стоит 
 
 ## 2. Labelы для гейтов
 
-Создайте labelы: `gate-change-approved` (одобрение изменения гейтов мейнтейнером, действует только после последнего push — `gate-integrity` снимает label на новом push), `bundle-growth-approved` (одобрение роста бандла сверх 5 КБ за PR, тот же механизм снятия и свежести — [ADR 0013](adr/0013-bundle-delta-gate.md)), `perf-regression` (открытое issue ночной регрессии времени — по нему тренд-чекер дедуплицирует, [ADR 0006](adr/0006-perf-strategy.md)) и `nightly-failure`.
+Создайте labelы: `gate-change-approved` (одобрение изменения гейтов мейнтейнером, действует только после последнего push — `gate-integrity` снимает label на новом push), `bundle-growth-approved` (одобрение роста бандла сверх 5 КБ за PR, тот же механизм снятия и свежести — [ADR 0013](adr/0013-bundle-delta-gate.md)), `perf-regression` (открытое issue ночной регрессии времени; тренд-чекер дедуплицирует по заголовку и комментирует существующее issue, [ADR 0006](adr/0006-perf-strategy.md)) и `nightly-failure`.
 
 ```sh
 gh label create gate-change-approved --color 0E8A16 --description "Gate change approved by maintainer"

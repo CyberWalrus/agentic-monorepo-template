@@ -84,13 +84,20 @@ interface RunInfo {
   createdAt: string;
 }
 
-/** Успешные nightly-прогоны, новейшие первыми. */
+/**
+ * Успешные nightly-прогоны main, новейшие первыми. --branch main: инвариант
+ * «база = последний зелёный main» — без фильтра workflow_dispatch на ветке
+ * задачи подсовывал бы веточный SHA в ночные сравнения без всякого сигнала
+ * (находка sanity-ревью A6.1).
+ */
 function successfulNightlyRuns(): RunInfo[] {
   const raw = ghJson([
     'run',
     'list',
     '--workflow',
     'Nightly',
+    '--branch',
+    'main',
     '--status',
     'success',
     '--limit',
@@ -189,6 +196,7 @@ function issueBody(args: {
     args.detail,
     '',
     'Регрессию чинит код, не порог ([ADR 0006](docs/adr/0006-perf-strategy.md)).',
+    'Лечащий зелёный nightly базу обновит — issue можно закрыть (автозакрытия нет).',
   ].join('\n');
 }
 
@@ -244,7 +252,8 @@ function loadBaselineDir(dir: string): { perf: PerfReport; meta: BaselineMeta } 
   return { perf: perf.data, meta };
 }
 
-const trend = loadPerfBudgets().trend;
+const budgets = loadPerfBudgets();
+const trend = budgets.trend;
 const command = process.argv[2];
 const allowedByCommand: { [command: string]: string[] | undefined } = {
   'fetch-baseline': ['--out', '--exclude-run', '--create-issue', '--run-url', '--help'],
@@ -255,7 +264,6 @@ const allowedByCommand: { [command: string]: string[] | undefined } = {
     '--create-issue',
     '--head-sha',
     '--run-url',
-    '--help',
   ],
   'write-meta': ['--out', '--sha', '--run-id'],
 };
@@ -285,32 +293,51 @@ if (command === 'fetch-baseline') {
     process.exit(1);
   }
   const candidates = runs.filter((run) => String(run.id) !== excludeRun);
-  let foundRun: RunInfo | undefined;
-  for (const run of candidates) {
-    if (hasBaselineArtifact(run.id)) {
-      foundRun = run;
-      break;
-    }
-  }
-  if (!foundRun) {
+  const withArtifact = candidates.filter((run) => hasBaselineArtifact(run.id));
+  if (withArtifact.length === 0) {
     console.log(
       'perf-trend: baseline не найден ни у одного успешного прогона — первый запуск (none)',
     );
     process.exit(3);
   }
 
+  // Идём от новейшего артефакта к старшему: битый по схеме артефакт свежего
+  // прогона (дрейф формы отчёта) больше не клинит канал в вечный красный —
+  // берём предыдущий (находка arch-ревью A6.1).
   const downloadDir = mkdtempSync(join(tmpdir(), 'perf-baseline-'));
   try {
-    gh(['run', 'download', String(foundRun.id), '-n', BASELINE_ARTIFACT, '-D', downloadDir]);
-    const meta = parseMeta(
-      JSON.parse(readFileSync(join(downloadDir, 'meta.json'), 'utf8')),
-      'meta.json',
-    );
-    const perf = PerfReportSchema.safeParse(
-      JSON.parse(readFileSync(join(downloadDir, 'perf.json'), 'utf8')),
-    );
-    if (!perf.success) {
-      throw new Error(`базлайн не прошёл схему — ${perf.error.message}`);
+    let foundRun: RunInfo | undefined;
+    let meta: BaselineMeta | undefined;
+    let perf: PerfReport | undefined;
+    for (const run of withArtifact) {
+      rmSync(downloadDir, { recursive: true, force: true });
+      mkdirSync(downloadDir, { recursive: true });
+      try {
+        gh(['run', 'download', String(run.id), '-n', BASELINE_ARTIFACT, '-D', downloadDir]);
+        meta = parseMeta(
+          JSON.parse(readFileSync(join(downloadDir, 'meta.json'), 'utf8')),
+          'meta.json',
+        );
+        const parsed = PerfReportSchema.safeParse(
+          JSON.parse(readFileSync(join(downloadDir, 'perf.json'), 'utf8')),
+        );
+        if (!parsed.success) {
+          throw new Error(`отчёт не прошёл схему — ${parsed.error.message}`);
+        }
+        perf = parsed.data;
+        foundRun = run;
+        break;
+      } catch (error) {
+        console.error(
+          `артефакт прогона ${run.id} не читается (${error instanceof Error ? error.message : String(error)}) — пробуем старше`,
+        );
+      }
+    }
+    if (!foundRun || !meta || !perf) {
+      console.error(
+        '✗ perf-trend: ни один perf-baseline не читается — сравнение невозможно (fail-closed)',
+      );
+      process.exit(1);
     }
     const greenRunsAfter = runs.filter(
       (run) => run.id !== foundRun.id && Date.parse(run.createdAt) > Date.parse(foundRun.createdAt),
@@ -322,17 +349,26 @@ if (command === 'fetch-baseline') {
       trend,
     });
     if (decision.kind === 'stale' && createIssue) {
-      createOrCommentIssue(
-        ISSUE_TITLE_STALE,
-        issueBody({
-          kind: 'stale',
-          baseline: meta,
-          headSha: undefined,
-          runUrl,
-          detail: `Базлайн протух: ${decision.reason}. Сравнение пойдёт по старой базе; зелёный прогон обновит базу и снимет stale.`,
-        }),
-        true,
-      );
+      try {
+        // stale — не регрессия: без label perf-regression
+        // (находка arch/security-ревью A6.1).
+        createOrCommentIssue(
+          ISSUE_TITLE_STALE,
+          issueBody({
+            kind: 'stale',
+            baseline: meta,
+            headSha: undefined,
+            runUrl,
+            detail: `Базлайн протух: ${decision.reason}. Сравнение пойдёт по старой базе; зелёный прогон обновит базу и снимет stale. Закрывать issue руками после зелёного nightly.`,
+          }),
+          false,
+        );
+      } catch (error) {
+        // Сбой issue-API не отменяет валидную базу: сравнение продолжается.
+        console.error(
+          `stale-issue создать не удалось (${error instanceof Error ? error.message : String(error)})`,
+        );
+      }
     }
     mkdirSync(out, { recursive: true });
     renameSync(join(downloadDir, 'perf.json'), join(out, 'perf.json'));
@@ -365,6 +401,10 @@ if (command === 'compare') {
   const createIssue = hasFlag('--create-issue');
   const headSha = parseFlag(['--head-sha']);
   const runUrl = parseFlag(['--run-url']);
+  if (headSha && !SHA_RE.test(headSha)) {
+    console.error(`compare: --head-sha должен быть hex40, получено «${headSha}»`);
+    process.exit(2);
+  }
   if (!candidatePath || !baselineDir) {
     console.error('compare: нужны --candidate PERF.json и --baseline DIR');
     process.exit(2);
@@ -384,7 +424,7 @@ if (command === 'compare') {
         timePct: trend.timePct,
         clsSlack: trend.clsSlack,
         longTasksSlack: trend.longTasksSlack,
-        maxBytesSlackKb: loadPerfBudgets().web.bundle.maxPrGrowthKb,
+        maxBytesSlackKb: budgets.web.bundle.maxPrGrowthKb,
       });
     }
   } catch (error) {

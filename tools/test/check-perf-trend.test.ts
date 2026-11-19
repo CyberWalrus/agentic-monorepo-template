@@ -124,7 +124,7 @@ it('cls и longTasks: в пределах допуска зелёные, све�
   expect(compare(longOver).status).toBe('regression');
 });
 
-it('нет секции/битая метрика — invalid на уровне схемы (z.number() отвергает NaN)', () => {
+it('лишние поля отчёта не ломают сравнение (invalid-ветка покрыта CLI-тестом ниже)', () => {
   const broken = baseReport() as PerfReport & { extra?: unknown };
   // Схема PerfReportSchema не пропустит лишних/битых отчётов; здесь проверяем
   // честность допустков: NaN нельзя передать через типы, поэтому invalid-ветка

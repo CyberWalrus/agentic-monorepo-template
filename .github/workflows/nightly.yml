@@ -54,14 +54,16 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
-      - name: perf
-        id: perf
-        run: pnpm --filter @repo/e2e exec playwright test --project=perf --repeat-each=3
-        env: { CI: 'true' }
+      # build/bundle ДО perf: perf-конфиг поднимает webServer = vite preview,
+      # которому нужен dist (turbo-задача perf зависит от ^build — как в PR).
       - name: build
         run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
       - name: bundle
         run: pnpm bundle
+      - name: perf
+        id: perf
+        run: pnpm --filter @repo/e2e exec playwright test --project=perf --repeat-each=3
+        env: { CI: 'true' }
       - uses: actions/upload-artifact@v7
         # Диагностический артефакт тренда — всегда, даже с красного прогона.
         if: always()
@@ -137,9 +139,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          if ! gh run download "${{ github.run_id }}" -n perf-baseline -D baseline; then
-            echo "perf-baseline ещё не существует (первый запуск) — инверсия пропустится"
+          # Различаем «артефакта нет» (первый запуск или база не обновилась —
+          # см. perf-trend) и «ошибка API/скачивания» (красный: канарейка —
+          # единственный самоконтроль детектора, молчать он не имеет права).
+          if ! ARTIFACT=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" --jq 'first(.artifacts[] | select(.name == "perf-baseline" and .expired != true) | .name)' 2>/dev/null); then
+            echo "✗ артефактное API недоступно"; exit 1
           fi
+          if [ -z "$ARTIFACT" ]; then
+            echo "perf-baseline у этого прогона нет (база не обновилась — см. job perf-trend) — инверсия пропускается"
+            exit 0
+          fi
+          gh run download "${{ github.run_id }}" -n perf-baseline -D baseline
       - name: apply 200 ms canary patch
         run: node tools/perf-canary-patch.ts
       - run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
