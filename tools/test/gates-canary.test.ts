@@ -18,8 +18,11 @@ const slowNames = new Set(slow.map((step) => step.name));
 // test-count — warning-only (exit 0 по контракту), e2e-report — тяжёлый,
 // его время покрывают бюджеты nightly (architecture.md З6). e2e канареечится
 // с ADR 0005 (прокси /rpc), perf — с A6 PR-1 (лишний /rpc-запрос), в вайтлист
-// больше не входят.
-const CANARY_EXEMPT_STEPS = new Set(['test-count', 'e2e-report']);
+// больше не входят. tool-class — образец B4.1: удаление шага делает
+// `verify --only` красным без JSON-отчёта, поэтому логика чекера канареечится
+// фикстурами tools/test/check-tool-class, а проводка — wiring-канарейкой на
+// test:hooks (ADR 0014, e9).
+const CANARY_EXEMPT_STEPS = new Set(['test-count', 'e2e-report', 'tool-class']);
 
 describe('таблица канареек гейтов', () => {
   const known = new Set(allStepNames);

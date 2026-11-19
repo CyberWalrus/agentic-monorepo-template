@@ -11,6 +11,7 @@
     "test-integrity": 5,
     "test:hooks": 45,
     "sandbox": 5,
+    "tool-class": 10,
     "docs": 10,
     "sherif": 10,
     "visual-image": 5,

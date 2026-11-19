@@ -140,8 +140,13 @@ describe('statusOf', () => {
   });
 
   it('touches под deny требует режим обслуживания, review — нет', () => {
+    // ADR 0014: deny внутри tools/ — точное замыкание гейтов, blanket tools/**
+    // теперь review — инструмент разработки задачу режима не открывает.
     expect(
-      statusOf(base({ touches: ['tools/evil.ts'] }), facts([base({ touches: ['tools/evil.ts'] })])),
+      statusOf(
+        base({ touches: ['tools/check-docs.ts'] }),
+        facts([base({ touches: ['tools/check-docs.ts'] })]),
+      ),
     ).toBe('maintenance');
     expect(
       statusOf(base({ touches: ['lefthook.yml'] }), facts([base({ touches: ['lefthook.yml'] })])),
@@ -322,7 +327,7 @@ describe('invalidNeedsHuman', () => {
 
 describe('isOperatorTask', () => {
   it('touches под deny защищённых путей — задача оператора', () => {
-    expect(isOperatorTask(withTouches('op1', ['tools/backlog.ts']))).toBe(true);
+    expect(isOperatorTask(withTouches('op1', ['tools/verify.ts']))).toBe(true);
     expect(isOperatorTask(withTouches('op2', ['.github/workflows/**']))).toBe(true);
   });
 
