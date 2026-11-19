@@ -608,7 +608,11 @@ export const CANARIES: GateCanary[] = [
       const path = join(root, '.github/workflows/visual-approve.yml');
       const source = readFileSync(path, 'utf8');
       const stripped = source.replace(
-        /\n {2}- name: Validate approve-visual command\n {4}id: approval\n {4}run: \|\n {10}node tools\/check-visual-approval\.ts[^\n]*\n/,
+        '\n' +
+          '      - name: Validate approve-visual command\n' +
+          '        id: approval\n' +
+          '        run: |\n' +
+          '          node tools/check-visual-approval.ts comment.json pr.json pushed-check-runs.json .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS\n',
         '\n',
       );
       if (stripped === source) {
