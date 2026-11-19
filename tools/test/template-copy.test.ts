@@ -8,6 +8,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -290,6 +291,12 @@ describe('проводка канарейки копии', () => {
   });
 
   it('дрейф списков: каждый dev-паттерн _exclude покрыт FORBIDDEN_IN_COPY', () => {
+    // Тест читает шаблонную пару «copier.yml ↔ чекер»: в копии шаблона
+    // copier.yml нет (_exclude), проверять нечего. В шаблоне отсутствие
+    // copier.yml красит саму канарейку копии (checkTemplateSide).
+    if (!existsSync(join(repoRoot, 'copier.yml'))) {
+      return;
+    }
     const text = readFileSync(join(repoRoot, 'copier.yml'), 'utf8');
     const section = text.slice(text.indexOf('_exclude:'));
     const entries = [...section.matchAll(/^\s+- '?([^'\n]+)'?$/gm)]

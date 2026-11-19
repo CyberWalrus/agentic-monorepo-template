@@ -127,6 +127,23 @@ try {
     console.log('содержимое копии — ok');
   }
 
+  // Копия становится git-репозиторием — как будет реальный проект: git-вызовы
+  // гейтов (docs:check) и lefthook install работают как вживую, а не тише.
+  for (const step of [
+    ['git', 'init', '-b', 'main'],
+    ['git', 'config', 'user.email', 'copy-canary@example.invalid'],
+    ['git', 'config', 'user.name', 'copy-canary'],
+    ['git', 'add', '-A'],
+    ['git', 'commit', '-m', 'copy canary init'],
+  ]) {
+    const done = run(step, copyDir, 120_000);
+    if (done.status !== 0) {
+      throw new CanaryFailure(
+        `git init в копии failed (${step.join(' ')}):\n${done.output.slice(-1500)}`,
+      );
+    }
+  }
+
   // Установка и verify в копии: pnpm store общий с чекаутом (в CI прогревается
   // установкой шаблона), порты выводятся из пути копии (З9).
   console.log('pnpm install в копии…');
