@@ -102,7 +102,6 @@ const PNPM_BUILTINS = new Set([
   'add',
   'remove',
   'uninstall',
-  'run',
   'exec',
   'dlx',
   'test',
@@ -214,11 +213,117 @@ function stripCodeComments(text: string): string {
   return out.join('');
 }
 
-/** Срезает комментарии # в yml/sh (строки с # в значении в репозитории не встречаются). */
+/**
+ * Срезает комментарии # в yml/sh по yaml-семантике: # начинает комментарий
+ * только вне кавычек значения (# внутри кавычек срезал бы реальное ребро,
+ * minor security-ревью e9).
+ */
+/**
+ * Маска «код / не код» (строка или комментарий) — длина равна длине текста.
+ * Импорты ищутся только на код-позициях: import-текст внутри строки (пробник
+ * канарейки, ассерт теста) — не ребро, а реальный импорт с юникод-экранами
+ * живёт в коде и попадает в фильтр нераспознанных (security-ревью e9,
+ * major-2).
+ */
+function buildCodeMask(text: string): boolean[] {
+  const mask: boolean[] = [];
+  let state: 'code' | 'line' | 'block' | 'single' | 'double' | 'template' = 'code';
+  let i = 0;
+  const push = (code: boolean, count: number): void => {
+    for (let k = 0; k < count; k += 1) {
+      mask.push(code);
+    }
+  };
+  while (i < text.length) {
+    const ch = text[i] ?? '';
+    const next = text[i + 1] ?? '';
+    if (state === 'code') {
+      if (ch === '/' && next === '/') {
+        state = 'line';
+        push(false, 2);
+        i += 2;
+        continue;
+      }
+      if (ch === '/' && next === '*') {
+        state = 'block';
+        push(false, 2);
+        i += 2;
+        continue;
+      }
+      if (ch === "'" || ch === '"' || ch === '`') {
+        state = ch === "'" ? 'single' : ch === '"' ? 'double' : 'template';
+        push(true, 1);
+        i += 1;
+        continue;
+      }
+      push(true, 1);
+      i += 1;
+      continue;
+    }
+    if (state === 'line') {
+      const code = ch === '\n';
+      push(code, 1);
+      if (code) {
+        state = 'code';
+      }
+      i += 1;
+      continue;
+    }
+    if (state === 'block') {
+      if (ch === '*' && next === '/') {
+        state = 'code';
+        push(false, 2);
+        i += 2;
+        continue;
+      }
+      push(false, 1);
+      i += 1;
+      continue;
+    }
+    if (ch === '\\') {
+      push(false, 2);
+      i += 2;
+      continue;
+    }
+    const closing =
+      (state === 'single' && (ch === "'" || ch === '\n')) ||
+      (state === 'double' && ch === '"') ||
+      (state === 'template' && ch === '`');
+    if (closing) {
+      state = 'code';
+      push(true, 1);
+    } else {
+      // Содержимое строки — не код: import-текст внутри строки не ребро.
+      push(false, 1);
+    }
+    i += 1;
+  }
+  return mask;
+}
+
 function stripHashComments(text: string): string {
   return text
     .split('\n')
-    .map((line) => line.replace(/(^|\s)#.*$/, '$1'))
+    .map((line) => {
+      let quote: string | null = null;
+      for (let i = 0; i < line.length; i += 1) {
+        const ch = line[i] ?? '';
+        if (quote !== null) {
+          if (ch === quote) {
+            quote = null;
+          }
+          continue;
+        }
+        if (ch === "'" || ch === '"') {
+          quote = ch;
+          continue;
+        }
+        if (ch === '#' && (i === 0 || /\s/.test(line[i - 1] ?? ''))) {
+          return line.slice(0, i);
+        }
+      }
+      return line;
+    })
     .join('\n');
 }
 
@@ -243,7 +348,12 @@ function walkFiles(root: string): string[] {
     for (const entry of entries) {
       const relative = dir === '' ? entry.name : `${dir}/${entry.name}`;
       if (entry.isDirectory()) {
-        if (!IGNORED_DIRS.has(entry.name)) {
+        // node_modules/.git игнорируются везде, остальные — только в корне:
+        // tools/dist/ и tools/reports/ — реальные файлы контура, а не мусор
+        // (minor security-ревью e9).
+        const ignoredAnywhere = entry.name === 'node_modules' || entry.name === '.git';
+        const ignoredAtRoot = dir === '' && IGNORED_DIRS.has(entry.name);
+        if (!ignoredAnywhere && !ignoredAtRoot) {
           stack.push(relative);
         }
         continue;
@@ -271,6 +381,8 @@ export interface ScriptCall {
   name: string;
   /** Пакет для --filter (имя из package.json), undefined — корневой. */
   pkg?: string;
+  /** Нераспознанный вызов (npx/npm/неизвестный токен после pnpm) — красный. */
+  unknown?: string;
 }
 
 /**
@@ -280,10 +392,23 @@ export interface ScriptCall {
 function extractScriptCalls(text: string): ScriptCall[] {
   const calls: ScriptCall[] = [];
   for (const line of text.split('\n')) {
+    // npm/npx в контурном файле — нераспознанный вызов внешнего раннера:
+    // красный (fail-closed, З4), а не молчаливый пропуск ребра (security-ревью
+    // e9, major-3). Легитимных npm/npx-вызовов в контуре нет.
+    for (const match of line.matchAll(/\b(?:npm|npx)\s+run\s+([a-zA-Z0-9:@/._-]+)/g)) {
+      calls.push({ name: match[1] ?? '', unknown: `npm run ${match[1] ?? ''}` });
+    }
+    if (/\bnpx\s+\S/.test(line)) {
+      calls.push({ name: '', unknown: line.trim().slice(0, 80) });
+    }
+    if (/\bnpm\s+(?!run\b)\S/.test(line)) {
+      calls.push({ name: '', unknown: line.trim().slice(0, 80) });
+    }
     for (const match of line.matchAll(/\bpnpm\s+([^\n'"`;|]+)/g)) {
       const words = (match[1] ?? '').split(/\s+/).filter(Boolean);
       let pkg: string | undefined;
       let found: string | undefined;
+      let unknown: string | undefined;
       for (let index = 0; index < words.length; index += 1) {
         const word = words[index] ?? '';
         if (word === '--filter' || word === '-F') {
@@ -297,6 +422,9 @@ function extractScriptCalls(text: string): ScriptCall[] {
         if (word.startsWith('-')) {
           continue;
         }
+        if (word === 'run') {
+          continue; // прозрачный токен: pnpm run X — скрипт X (major-3)
+        }
         if (word === 'turbo') {
           break; // задачи turbo — не скрипты package.json
         }
@@ -307,10 +435,13 @@ function extractScriptCalls(text: string): ScriptCall[] {
           found = word;
           break;
         }
+        unknown = `pnpm ${words.join(' ')}`;
         break;
       }
       if (found !== undefined) {
         calls.push(pkg === undefined ? { name: found } : { name: found, pkg });
+      } else if (unknown !== undefined) {
+        calls.push({ name: '', unknown });
       }
     }
   }
@@ -350,21 +481,33 @@ function parseVerifySteps(text: string): { scripts: ScriptCall[]; tasks: string[
     }
   }
   const tasks = [...text.matchAll(/\bturbo\(\s*'([^']+)'/g)].map((match) => match[1] ?? '');
-  if (scripts.length + tasks.length === 0) {
+  // Паритет: каждая запись таблицы шагов должна распознаться — иначе дрейф
+  // формата молча сужает инференс и (в)-валидацию (minor security-ревью e9).
+  const nameEntries = [...text.matchAll(/\bname:\s*'/g)].length;
+  if (scripts.length + tasks.length === 0 || nameEntries !== scripts.length) {
     return null; // не распарсилось — fail-closed (З4)
   }
   return { scripts, tasks };
 }
 
-/** Относительные импорты из кода без комментариев. */
+/**
+ * Относительные импорты из кода: совпадение засчитывается, только если его
+ * ключевое слово стоит на код-позиции (не внутри строки/комментария).
+ */
 function extractImports(text: string): string[] {
+  const mask = buildCodeMask(text);
   const specifiers: string[] = [];
-  for (const pattern of [
-    /\bfrom\s*['"]([^'"]+)['"]/g,
-    /\bimport\s*\(\s*['"]([^'"]+)['"]/g,
-    /\bimport\s+['"]([^'"]+)['"]/g,
-  ]) {
-    for (const match of text.matchAll(pattern)) {
+  const patterns = [
+    String.raw`\bfrom\s*['"]([^'"]+)['"]`,
+    String.raw`\bimport\s*\(\s*['"]([^'"]+)['"]`,
+    String.raw`\bimport\s+['"]([^'"]+)['"]`,
+  ];
+  for (const source of patterns) {
+    for (const match of text.matchAll(new RegExp(source, 'g'))) {
+      const keywordIndex = match.index ?? -1;
+      if (keywordIndex < 0 || !(mask[keywordIndex] ?? false)) {
+        continue;
+      }
       const specifier = match[1] ?? '';
       if (specifier.startsWith('.')) {
         specifiers.push(specifier);
@@ -587,6 +730,10 @@ export function checkToolClass(input: ToolClassInput): ToolClassReport {
       continue;
     }
     for (const call of extractScriptCalls(text)) {
+      if (call.unknown !== undefined) {
+        problems.push(`(в) ${relative}: нераспознанный вызов в контурном файле: ${call.unknown}`);
+        continue;
+      }
       const holder = scriptHolder(index, call);
       if (holder === null) {
         problems.push(`(в) ${relative}: --filter ${call.pkg ?? ''}: пакет не найден в workspace`);
@@ -627,6 +774,10 @@ export function checkToolClass(input: ToolClassInput): ToolClassReport {
     }
     seenInline.add(text);
     for (const call of extractScriptCalls(text)) {
+      if (call.unknown !== undefined) {
+        problems.push(`(в) цепочка скриптов: нераспознанный вызов: ${call.unknown}`);
+        continue;
+      }
       const holder = scriptHolder(index, call);
       if (holder === null) {
         problems.push(`(в) цепочка скриптов: --filter ${call.pkg ?? ''}: пакет не найден`);
@@ -667,16 +818,27 @@ export function checkToolClass(input: ToolClassInput): ToolClassReport {
       (isFile(root, relative)
         ? stripComments(readFileSync(`${root}/${relative}`, 'utf8'), relative)
         : '');
-    // Литералы в тестах — фикстуры (строки-примеры путей), не рёбра графа;
-    // импорты тестов остаются рёбрами: они определяют класс импортируемого.
-    const literalsMatter = !relative.startsWith('tools/test/') && !relative.startsWith('e2e/');
+    // Литералы в тестах tools/test/ — фикстуры (строки-примеры путей), не
+    // рёбра графа; импорты тестов остаются рёбрами: они определяют класс
+    // импортируемого. В e2e литералы — рёбра: сценарии исполняются контуром
+    // (perf-гейт), ссылка на tools/… там — реальная цель запуска (minor
+    // security-ревью e9).
+    const literalsMatter = !relative.startsWith('tools/test/');
     // protected-paths.json — член замыкания (его читает контур), но данных-
     // источник, не код: его deny-записи не могут сеять сами себя в замыкание,
     // иначе проверка (б) «лишняя deny-запись» ослепнет (цикличность).
     const importsMatter = relative !== 'tools/protected-paths.json';
     for (const specifier of importsMatter ? extractImports(text) : []) {
       const resolved = resolveImport(root, relative, specifier);
-      if (resolved !== null && !visited.has(resolved)) {
+      if (resolved === null) {
+        // Нераспознанный относительный импорт — красный, не молчаливый
+        // пропуск: юникод-экранирование или опечатка не должны прятать ребро
+        // (security-ревью e9, major-2; runtime резолвит экраны, чекер видит
+        // сырую строку — расхождение громкое в обе стороны).
+        problems.push(`нераспознанный относительный импорт в ${relative}: ${specifier}`);
+        continue;
+      }
+      if (!visited.has(resolved)) {
         queue.push(resolved);
       }
     }

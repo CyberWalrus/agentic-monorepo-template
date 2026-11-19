@@ -139,6 +139,91 @@ describe('check-tool-class: логика на синтетическом дер�
     const report = checkToolClass({ root: tmp, knownGates: ['tools/ghost-gate.ts'] });
     expect(report.problems.join('\n')).toMatch(/ghost-gate\.ts/);
   });
+
+  it('(major-1) цепочка скриптов pnpm→pnpm→tools-файл попадает в замыкание', () => {
+    writeFileSync(
+      join(tmp, 'package.json'),
+      `${JSON.stringify(
+        {
+          scripts: {
+            'docs:check': 'pnpm inner:check',
+            'inner:check': 'node tools/hidden-gate.ts',
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    writeFileSync(join(tmp, 'tools/hidden-gate.ts'), `export const gate = 1;\n`);
+    // Замыкание изменилось: docs:check больше не ведёт к check-docs.ts —
+    // его deny-записи убраны, иначе (б) честно красит устаревший список.
+    writeProtected(tmp, [
+      'tools/verify-steps.ts',
+      'tools/hooks/**',
+      'tools/test/**',
+      'tools/hidden-gate.ts',
+    ]);
+    const report = checkToolClass({ root: tmp, knownGates: ['tools/hidden-gate.ts'] });
+    expect(report.problems).toEqual([]);
+    expect(report.closure).toContain('tools/hidden-gate.ts');
+  });
+
+  it('(major-1) tools-файл из цепочки скриптов без deny — красит', () => {
+    writeFileSync(
+      join(tmp, 'package.json'),
+      `${JSON.stringify(
+        {
+          scripts: {
+            'docs:check': 'pnpm inner:check',
+            'inner:check': 'node tools/hidden-gate.ts',
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    writeFileSync(join(tmp, 'tools/hidden-gate.ts'), `export const gate = 1;\n`);
+    const report = checkToolClass({ root: tmp, knownGates: ['tools/check-docs.ts'] });
+    expect(report.problems.join('\n')).toMatch(/hidden-gate\.ts/);
+  });
+
+  it('(major-2) нераспознанный относительный импорт — красит', () => {
+    writeFileSync(
+      join(tmp, 'tools/check-docs.ts'),
+      `import { helper } from './ghost-helper.ts';\nimport { model } from './board-model.ts';\nexport const use = model;\n`,
+    );
+    const report = checkToolClass({ root: tmp, knownGates: ['tools/check-docs.ts'] });
+    expect(report.problems.join('\n')).toMatch(/нераспознанный относительный импорт.*ghost-helper/);
+  });
+
+  it('(major-2) import-текст внутри строки — не ребро и не красит', () => {
+    // Пробник канарейки: import-текст в строке записываемого файла; литерал
+    // protected-paths.json сохранён — json остаётся членом замыкания.
+    writeFileSync(
+      join(tmp, 'tools/check-docs.ts'),
+      `import { model } from './board-model.ts';\nexport const config = 'tools/protected-paths.json';\nexport const probe = "import { x } from '../tasks/use-tasks';";\nexport const use = model;\n`,
+    );
+    const report = checkToolClass({ root: tmp, knownGates: ['tools/check-docs.ts'] });
+    expect(report.problems).toEqual([]);
+  });
+
+  it('(major-3) npx в контурном файле — красит', () => {
+    writeFileSync(
+      join(tmp, 'lefthook.yml'),
+      `pre-commit:\n  commands:\n    x:\n      run: npx evil-tool\n`,
+    );
+    const report = checkToolClass({ root: tmp, knownGates: ['tools/check-docs.ts'] });
+    expect(report.problems.join('\n')).toMatch(/нераспознанный вызов/);
+  });
+
+  it('(major-3) pnpm run — прозрачный токен, скрипт резолвится', () => {
+    writeFileSync(
+      join(tmp, 'lefthook.yml'),
+      `pre-commit:\n  commands:\n    x:\n      run: pnpm run docs:check\n`,
+    );
+    const report = checkToolClass({ root: tmp, knownGates: ['tools/check-docs.ts'] });
+    expect(report.problems).toEqual([]);
+  });
 });
 
 // --- Проводка шага на настоящем репозитории (B4.1) -------------------------------
