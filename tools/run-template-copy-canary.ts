@@ -152,16 +152,33 @@ try {
     throw new CanaryFailure(`pnpm install в копии failed:\n${installed.output.slice(-3000)}`);
   }
   console.log('pnpm verify в копии…');
-  const verified = spawnSync('pnpm', ['verify'], {
-    encoding: 'utf8',
-    cwd: copyDir,
-    timeout: 600_000,
-    env: { ...process.env, CI: '1', TURBO_TELEMETRY_DISABLED: '1' },
-  });
-  const verifyOutput =
-    verified.error !== undefined ? String(verified.error) : `${verified.stdout}${verified.stderr}`;
+  const verifyInCopy = (): { status: number | null; output: string } => {
+    const attempt = spawnSync('pnpm', ['verify'], {
+      encoding: 'utf8',
+      cwd: copyDir,
+      timeout: 600_000,
+      env: { ...process.env, CI: '1', TURBO_TELEMETRY_DISABLED: '1' },
+    });
+    return {
+      status: attempt.error !== undefined ? -1 : attempt.status,
+      output:
+        attempt.error !== undefined ? String(attempt.error) : `${attempt.stdout}${attempt.stderr}`,
+    };
+  };
+  let verified = verifyInCopy();
+  // Первый прогон копии — холодный transform vite: тестер browser-режима может
+  // не уложиться в дефолтные 60 с готовности iframe (browser.connectTimeout).
+  // Тёплый повтор один — по образцу retry-по-сигналу в run-gate-canaries:
+  // латентность холодного старта — не вердикт гейта, а ошибка кода копии
+  // (падающий импорт в браузере) остаётся красной и на тёплом прогоне.
+  if (verified.status !== 0 && verified.output.includes('did not become ready within')) {
+    console.error(
+      'тестер browser-режима не уложился в 60 с на холодном transform копии — повтор на тёплых кэшах',
+    );
+    verified = verifyInCopy();
+  }
   if (verified.status !== 0) {
-    throw new CanaryFailure(`pnpm verify в копии failed:\n${verifyOutput.slice(-3000)}`);
+    throw new CanaryFailure(`pnpm verify в копии failed:\n${verified.output.slice(-3000)}`);
   }
   if (contentOk) {
     console.log(`канарейка копии — ok (copier ${pinnedVersion}, ${copyDir})`);
