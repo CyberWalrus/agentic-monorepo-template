@@ -68,6 +68,7 @@ const KNOWN_GATES: readonly string[] = [
   'tools/check-visual-image.ts',
   'tools/copier-version.txt',
   'tools/e2e-select.ts',
+  'tools/evals/run.ts',
   'tools/gate-approval-core.ts',
   'tools/gate-canaries.ts',
   'tools/hooks/guard-bash.ts',

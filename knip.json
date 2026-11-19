@@ -2,7 +2,13 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["tools/*.ts", ".claude/hooks/*.ts", "tools/test/*.test.ts", "vitest.config.ts"],
+      "entry": [
+        "tools/*.ts",
+        "tools/evals/*.ts",
+        ".claude/hooks/*.ts",
+        "tools/test/*.test.ts",
+        "vitest.config.ts"
+      ],
       // Пробник прямого теста CLI lint-changed-file (C10.1): существует только
       // во время теста, а шаги verify идут параллельно — без ignore knip ловит
       // «Unused files» в момент жизни пробника.
