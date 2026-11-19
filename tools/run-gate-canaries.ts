@@ -200,7 +200,11 @@ try {
       );
     }
     // Возврат worktree в чистое состояние (правки + untracked probe-файлы).
-    // reports/ (в .gitignore) переживает revert намеренно: канарейки его не читают.
+    // reports/ (в .gitignore) переживает revert по умолчанию, но отчёты бандла
+    // и перфа удаляются: их перезаписывают только одноимённые шаги, и после
+    // канарейки «бандл сверх бюджета» там остаётся раздутый замер — тест
+    // инварианта порогов (gates-canary.test) читает эти файлы, когда они
+    // существуют, и ложнокраснил бы все последующие test:hooks-канарейки.
     for (const revert of [
       ['git', 'checkout', '--', '.'],
       ['git', 'clean', '-fdq'],
@@ -209,6 +213,9 @@ try {
       if (reverted.status !== 0) {
         throw new Error(`revert failed (${revert.join(' ')}):\n${reverted.output}`);
       }
+    }
+    for (const stale of ['reports/bundle.json', 'e2e/reports/perf.json']) {
+      rmSync(join(worktreeDir, stale), { force: true });
     }
   }
 } finally {

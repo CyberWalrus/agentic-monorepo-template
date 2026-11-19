@@ -593,26 +593,31 @@ export const CANARIES: GateCanary[] = [
   },
   {
     // Классы защиты tools/ (ADR 0014, e9): шаг verify → pnpm tool-class:check.
-    // Плохое изменение — срыв привязки (шаг tool-class удалён из verify-steps):
-    // замыкание tools/ перестаёт проверяться на каждом verify молча, а
-    // wiring-тест в tools/test/check-tool-class краснеет. Проводка живёт в
-    // test:hooks по образцу B4.1: логика чекера канареечится фикстурами того
-    // же файла, здесь — только её подключение к шагу.
-    name: 'шаг check-tool-class отвязан от verify',
+    // Плохое изменение — срыв проводки script→гейт (tool-class:check удалён из
+    // package.json): шаг verify ломается, замыкание tools/ перестаёт
+    // проверяться, wiring-тест в tools/test/check-tool-class краснеет.
+    // Проводка живёт в test:hooks по образцу B4.1: логика чекера канареечится
+    // фикстурами того же файла, здесь — только её подключение. Срывается
+    // именно скрипт, а не шаг verify-steps: удаление шага роняет соседние
+    // инвариант-тесты (verify-budgets, gates-canary), их шум вытесняет якорь
+    // из 60-строчного хвоста отчёта — канарейка не засчитывается (наблюдение
+    // первого прогона e9).
+    name: 'tool-class:check отвязан от package.json',
     steps: 'test:hooks',
     failedStep: 'test:hooks',
     expect: /проводка: шаг tool-class в verify/,
     apply: (root) => {
-      const path = join(root, 'tools/verify-steps.ts');
-      const source = readFileSync(path, 'utf8');
-      const stripped = source.replace(
-        "  // Классы защиты tools/ (ADR 0014): замыкание гейтов == deny protected-paths.json.\n  { name: 'tool-class', command: 'pnpm', args: ['tool-class:check'] },\n",
-        '',
-      );
-      if (stripped === source) {
-        throw new Error('canary anchor not found: verify-steps.ts has no tool-class step');
+      const path = join(root, 'package.json');
+      const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      if (!isRecord(parsed) || !isRecord(parsed['scripts'])) {
+        throw new Error('canary anchor not found: package.json scripts');
       }
-      writeFileSync(path, stripped);
+      const scripts = parsed['scripts'];
+      if (scripts['tool-class:check'] !== 'node tools/check-tool-class.ts') {
+        throw new Error('canary anchor not found: no tool-class:check script');
+      }
+      delete scripts['tool-class:check'];
+      writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
     },
   },
 ];
