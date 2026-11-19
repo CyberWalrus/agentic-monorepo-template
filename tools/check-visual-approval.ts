@@ -74,6 +74,21 @@ if (!headSha) {
   console.error('check-visual-approval: в pr.json нет headRefOid');
   process.exit(2);
 }
+// Fork-PR: head-ветка вне репозитория — base-гвардия до остальной валидации
+// (security-ревью b3.1, major 2: push в «ветку с тем же именем» базового репо).
+if (isRecord(pr) && pr['isCrossRepository'] === true) {
+  console.log(
+    'visual-approval: NOT approved — PR из форка: head-ветка вне этого репозитория, базлайны коммитятся только в ветки этого репозитория',
+  );
+  if (process.env['GITHUB_OUTPUT']) {
+    appendFileSync(process.env['GITHUB_OUTPUT'], 'approved=false\n');
+    appendFileSync(
+      process.env['GITHUB_OUTPUT'],
+      'reply=PR из форка: head-ветка вне этого репозитория — базлайны коммитятся только в ветки этого репозитория\n',
+    );
+  }
+  process.exit(0);
+}
 
 // Время последнего push — тот же прокси, что в gate-integrity: самое раннее
 // started_at check-run'а на head-коммите; нет ни одного — fail-closed.

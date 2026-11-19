@@ -118,4 +118,10 @@ describe('проводка: визуальное одобрение в дове�
     expect(workflow).toMatch(/ci\.yml\/dispatches/);
     expect(ci).toMatch(/workflow_dispatch:/);
   });
+
+  it('fork-PR отвергается: гвардия в workflow и в валидаторе (defense-in-depth)', () => {
+    expect(workflow).toMatch(/isCrossRepository/);
+    const validator = readFileSync(join(repoRoot, 'tools/check-visual-approval.ts'), 'utf8');
+    expect(validator.includes('isCrossRepository')).toBe(true);
+  });
 });
