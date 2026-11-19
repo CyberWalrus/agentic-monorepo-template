@@ -107,7 +107,7 @@ Worktree: в новом worktree сначала `pnpm install` (хранилищ
 **Никогда:**
 
 - Не меняй защищённые пути из [tools/protected-paths.json](tools/protected-paths.json): скриншот-базлайны, `perf-budgets.json`, конфиги линтеров, границ и CI, пороги покрытия и мутаций, гейты `tools/` — замыкание гейт-контурa, его считает гейт `check-tool-class` ([ADR 0014](docs/adr/0014-tools-protection-classes.md)). Новый гейт попадает в `deny` тем же PR — иначе `pnpm verify` красный шагом `tool-class`. Хук заблокирует запись, CI заблокирует PR. Если гейт мешает, чини код. Если считаешь, что неправ сам гейт, остановись и объясни человеку. Исключение — оператор в задаче режима обслуживания ([ADR 0009](docs/adr/0009-operator-delegation.md)). Запрет выше не покрывает инструменты разработчика (`dev.ts`, `visual.sh`, `playwright-agents*`, `backlog.ts` в `tools/`, а также `package.json`) — у них класс review, границей служит обязательное ревью CODEOWNERS.
-- Не обновляй скриншот-базлайны (`pnpm visual:update`, `--update-snapshots`, `vitest -u`). Это делает человек после просмотра диффа.
+- Не обновляй скриншот-базлайны (`pnpm visual:update`, `--update-snapshots`, `vitest -u`). После мёржа b3.1 их пишет CI: при диффе в job `visual` человек одобряет команду `/approve-visual <sha>` в PR ([ADR 0015](docs/adr/0015-visual-baselines-approval.md)).
 - Не ослабляй тест, чтобы он прошёл. Не добавляй `.only`, `.skip`, `.fixme`, `test.fail`.
 - Не подавляй ошибки: никаких `any`, `@ts-ignore`, `oxlint-disable`, `eslint-disable`. Допустим `@ts-expect-error -- <причина>` с объяснением.
 - Не импортируй код между фичами (`features/a` → `features/b`), между приложениями и из пакетов в приложения. Общее выноси в `src/lib` или `packages/`.

@@ -104,6 +104,9 @@
         "tools/verify.ts",
         "tools/visual-guard.ts",
         "tools/visual-inner.sh",
+        "tools/visual-ci.sh",
+        "tools/check-visual-approval.ts",
+        "tools/visual-approval-core.ts",
         "tools/hooks/**",
         "tools/test/**"
       ],

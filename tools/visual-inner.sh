@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Визуальные тесты внутри образа mcr.microsoft.com/playwright (локально через tools/visual.sh, в CI напрямую).
-# VISUAL_UPDATE=1 — перезаписать базлайны (делает только человек).
+# VISUAL_UPDATE=1 — перезаписать базлайны (делает только человек; в CI —
+# фаза перезаписи tools/visual-ci.sh, ADR 0015). PLAYWRIGHT_UPDATE_MODE —
+# режим Playwright: по умолчанию all (локальный поток человека), CI перезаписи
+# передаёт changed (только разошедшиеся снимки, без churn неизменных).
 set -euo pipefail
 
 if [[ "${VISUAL_UPDATE:-}" == "1" ]]; then
   vitest_flags=(--update)
-  playwright_flags=(--update-snapshots=all)
+  playwright_flags=(--update-snapshots="${PLAYWRIGHT_UPDATE_MODE:-all}")
 else
   vitest_flags=()
   playwright_flags=(--update-snapshots=none)

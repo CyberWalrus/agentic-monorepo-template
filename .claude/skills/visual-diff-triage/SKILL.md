@@ -27,3 +27,7 @@ description: How to triage failing screenshot tests (Vitest toMatchScreenshot an
 ## Запрещено
 
 Любое обновление базлайнов (скрипт обновления, флаги update у Playwright и Vitest), правка файлов в `__screenshots__`, повышение `maxDiffPixels` / `threshold`. Всё это заблокировано хуками и CI.
+
+## Базлайны из CI (b3.1, ADR 0015)
+
+После мёржа b3.1 обновление базлайнов не требует локального Docker: job `visual` в CI собирает артефакт `visual-actuals` с перегенерированными снимками. Мейнтейнер смотрит отчёт диффа в артефактах job и оставляет в PR команду `/approve-visual <head sha>` — доверенный workflow коммитит снимки в ветку и перезапускает CI. `pnpm visual:update` локально остаётся возможным, но больше не единственный путь.
