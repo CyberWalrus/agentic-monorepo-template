@@ -42,7 +42,10 @@ import { createEvalWorktree, headSha, removeEvalWorktree } from './worktree.ts';
 
 const INSTALL_TIMEOUT_MS = 10 * 60_000;
 const VERIFY_TIMEOUT_MS = 20 * 60_000;
-const DEFAULT_TIMEOUT_MINUTES = 45;
+// Калибровка 2026-11-19: полный стек-эталон (контракт→API→UI→E2E) с холодным
+// worktree (без турбо-кэша) занял у агента больше 45 мин — таймаут должен
+// покрывать работу агента и его собственные прогоны verify с запасом.
+const DEFAULT_TIMEOUT_MINUTES = 90;
 
 export interface RunEvalsOptions {
   root: string;

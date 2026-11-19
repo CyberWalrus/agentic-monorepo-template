@@ -36,9 +36,10 @@ jobs:
     name: agent evals
     if: env.EVALS_API_KEY != ''
     runs-on: ubuntu-latest
-    # Бюджет контура (З6): таймаут job. Внутри агент ограничен
-    # --timeout-minutes раннера, verify — собственным лимитом.
-    timeout-minutes: 90
+    # Бюджет контура (З6): таймаут job. Внутри агент ограничен --timeout-minutes
+    # раннера (90 по умолчанию, калибровка 2026-11-19), install и verify —
+    # собственными лимитами; запас job — на установку CLI и хвост verify.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup

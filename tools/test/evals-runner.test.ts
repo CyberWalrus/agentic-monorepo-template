@@ -3,9 +3,19 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { runEvals, type RunEvalsOptions } from '../evals/run.ts';
+
+// Отчётные каталоги живут до ассертов вызывающего теста; красные пути тестов
+// не добираются до своей уборки — префиксную чистку делает afterEach (З9).
+afterEach(() => {
+  for (const name of readdirSync(tmpdir())) {
+    if (name.startsWith('evals-report-dir-')) {
+      rmSync(join(tmpdir(), name), { recursive: true, force: true });
+    }
+  }
+});
 
 // Раннер гоняется на временном мини-репозитории с заглушками агента, установки
 // и verify: интеграционный тест обязан оставаться в бюджете test:hooks (50 с,
