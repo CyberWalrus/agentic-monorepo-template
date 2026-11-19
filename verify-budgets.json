@@ -21,10 +21,11 @@
   "slow": {
     "build": 60,
     "bundle": 10,
+    "bundle-delta": 240,
     "e2e": 150,
     "e2e-report": 15,
     "perf": 240
   },
   "totalFast": 180,
-  "totalSlow": 600
+  "totalSlow": 720
 }

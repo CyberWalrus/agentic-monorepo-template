@@ -29,12 +29,15 @@ function run(
   checkers: string[],
   owners: string[],
   actor: string,
+  label?: string,
+  fixtureLabel?: string,
 ): { status: number | null; output: string } {
+  const approvedLabel = fixtureLabel ?? label ?? 'gate-change-approved';
   const dir = mkdtempSync(join(tmpdir(), 'gate-approval-'));
   dirs.push(dir);
   writeFileSync(
     join(dir, 'pr.json'),
-    JSON.stringify({ labels: [{ name: 'gate-change-approved' }] }),
+    JSON.stringify({ labels: [{ name: approvedLabel }], pushedAt: PUSH_AT }),
   );
   writeFileSync(
     join(dir, 'events.json'),
@@ -43,7 +46,7 @@ function run(
         event: 'labeled',
         actor: { login: actor },
         created_at: LABELED_AT,
-        label: { name: 'gate-change-approved' },
+        label: { name: approvedLabel },
       },
     ]),
   );
@@ -55,9 +58,10 @@ function run(
     mkdirSync(dirname(join(dir, path)), { recursive: true });
     writeFileSync(join(dir, path), owners[index] ?? '');
   }
+  const labelArgs = label === undefined ? [] : ['--label', label];
   const result = spawnSync(
     process.execPath,
-    [checker, 'pr.json', 'events.json', ...CANDIDATES, 'head-commit.json'],
+    [checker, ...labelArgs, 'pr.json', 'events.json', ...CANDIDATES, 'head-commit.json'],
     { cwd: dir, encoding: 'utf8', timeout: 30_000 },
   );
   if (result.error) {
@@ -102,4 +106,39 @@ it('label поставил не владелец — NOT approved', () => {
   expect(result.status).toBe(0);
   expect(result.output).toMatch(/approval: NOT approved/);
   expect(result.output).toMatch(/не входит в глобальных владельцев/);
+});
+
+it('--label: кастомный label считается одобрением вместо дефолта (A6 PR-2)', () => {
+  const result = run(
+    ['docs/CODEOWNERS'],
+    ['* @template-owner\n'],
+    'template-owner',
+    'custom-approved',
+  );
+  expect(result.status).toBe(0);
+  expect(result.output).toMatch(/APPROVED/);
+});
+
+it('--label не передан: кастомный label в фикстуре дефолтом не одобряется', () => {
+  const withDefault = run(
+    ['docs/CODEOWNERS'],
+    ['* @template-owner\n'],
+    'template-owner',
+    undefined,
+    'custom-approved',
+  );
+  expect(withDefault.status).toBe(0);
+  expect(withDefault.output).toMatch(/NOT approved/);
+  expect(withDefault.output).toMatch(/label gate-change-approved не стоит/);
+});
+
+it('неизвестный флаг — exit 2 (fail-closed на мусорном вызове)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gate-approval-'));
+  dirs.push(dir);
+  const result = spawnSync(
+    process.execPath,
+    [checker, '--labels', 'x', 'pr.json', 'events.json', ...CANDIDATES, 'head-commit.json'],
+    { cwd: dir, encoding: 'utf8', timeout: 30_000 },
+  );
+  expect(result.status).toBe(2);
 });

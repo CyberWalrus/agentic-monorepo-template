@@ -1,7 +1,7 @@
 /**
  * Проверка одобрения изменения гейтов для gate-integrity (ADR 0002).
  * Одобрение действительно, только если одновременно:
- *   1) label `gate-change-approved` стоит на PR сейчас;
+ *   1) label стоит на PR сейчас;
  *   2) последнее событие labeled новее даты head-коммита PR (прокси времени push);
  *   3) событие сделал человек из глобальных владельцев CODEOWNERS (строка `*`).
  * Свежесть строки 2 — вторая линия: основной механизм — job, снимающий label на
@@ -9,8 +9,10 @@
  * Любая неопределённость (нет события, нет владельцев, битые данные) — не одобрено.
  * Это fail-closed (З4): упавшая или обойдённая проверка блокирует, а не пропускает.
  *
- *   node tools/check-gate-approval.ts <pr.json> <events.json> <CODEOWNERS...> <head-commit.json>
+ *   node tools/check-gate-approval.ts [--label <имя>] <pr.json> <events.json> <CODEOWNERS...> <head-commit.json>
  *
+ * --label          — какой label считать одобрением (дефолт gate-change-approved;
+ *                    A6 PR-2: bundle-growth-approved для роста бандла, ADR 0013).
  * pr.json          — `gh pr view <n> --json labels,headRefOid`
  * events.json      — `gh api issues/<n>/events`
  * CODEOWNERS...    — кандидаты в порядке приоритета GitHub: `.github/`, корень, `docs/`;
@@ -19,118 +21,86 @@
  * head-commit.json — `gh api commits/<headRefOid>`
  * Вывод: человекочитаемая причина; в $GITHUB_OUTPUT дописывается approved=true|false.
  */
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 
-const LABEL = 'gate-change-approved';
+import { evaluateApproval, maintainersOf } from './gate-approval-core.ts';
+
+const DEFAULT_LABEL = 'gate-change-approved';
+
+const args = process.argv.slice(2);
+
+// Флаги вынимаем до позиционных: неизвестный флаг — exit 2 (fail-closed на
+// мусорном вызове), а не тихое игнорирование.
+let label = DEFAULT_LABEL;
+const positionals: string[] = [];
+for (let index = 0; index < args.length; index += 1) {
+  const arg = args[index];
+  if (arg === undefined) {
+    continue;
+  }
+  if (arg === '--label') {
+    const value = args[index + 1];
+    if (!value) {
+      console.error('check-gate-approval: --label требует значение <имя>');
+      process.exit(2);
+    }
+    label = value;
+    index += 1;
+    continue;
+  }
+  if (arg.startsWith('--')) {
+    console.error(`check-gate-approval: неизвестный флаг «${arg}» (известен только --label <имя>)`);
+    process.exit(2);
+  }
+  positionals.push(arg);
+}
+
+const prPath = positionals[0];
+const eventsPath = positionals[1];
+const headCommitPath = positionals.at(-1);
+const codeownersCandidates = positionals.slice(2, -1);
+if (!prPath || !eventsPath || codeownersCandidates.length === 0 || !headCommitPath) {
+  console.error(
+    'Использование: node tools/check-gate-approval.ts [--label <имя>] <pr.json> <events.json> <CODEOWNERS...> <head-commit.json>',
+  );
+  process.exit(2);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function stringOf(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
-}
-
-interface LabeledEvent {
-  actor: string;
-  createdAt: string;
-}
-
-/** Глобальные владельцы CODEOWNERS: логины из строки с паттерном `*`. */
-function maintainersOf(codeownersCandidates: string[]): Set<string> {
-  const codeownersPath = codeownersCandidates.find((candidate) => existsSync(candidate));
-  if (!codeownersPath) {
-    return new Set();
-  }
-  return new Set(
-    readFileSync(codeownersPath, 'utf8')
-      .split('\n')
-      .filter((line) => {
-        const token = line.trim();
-        return token.length > 0 && !token.startsWith('#') && token.split(/\s+/)[0] === '*';
-      })
-      .flatMap((line) => line.trim().split(/\s+/).slice(1))
-      .map((mention) => mention.replace(/^@/, ''))
-      .filter((login) => login.length > 0),
-  );
-}
-
-/** Последнее по времени событие labeled для нужного label. */
-function lastLabeledEvent(events: unknown[]): LabeledEvent | undefined {
-  let latest: LabeledEvent | undefined;
-  for (const entry of events) {
-    if (!isRecord(entry)) {
-      continue;
-    }
-    if (stringOf(entry['event']) !== 'labeled') {
-      continue;
-    }
-    const label = isRecord(entry['label']) ? stringOf(entry['label']['name']) : undefined;
-    if (label !== LABEL) {
-      continue;
-    }
-    const actor = isRecord(entry['actor']) ? stringOf(entry['actor']['login']) : undefined;
-    const createdAt = stringOf(entry['created_at']);
-    if (!actor || !createdAt) {
-      continue;
-    }
-    if (!latest || Date.parse(createdAt) > Date.parse(latest.createdAt)) {
-      latest = { actor, createdAt };
-    }
-  }
-  return latest;
-}
-
-const args = process.argv.slice(2);
-const headCommitPath = args.at(-1);
-const codeownersCandidates = args.slice(2, -1);
-if (!args[0] || !args[1] || codeownersCandidates.length === 0 || !headCommitPath) {
-  console.error(
-    'Использование: node tools/check-gate-approval.ts <pr.json> <events.json> <CODEOWNERS...> <head-commit.json>',
-  );
-  process.exit(2);
-}
-
-const pr: unknown = JSON.parse(readFileSync(args[0], 'utf8'));
-const events: unknown = JSON.parse(readFileSync(args[1], 'utf8'));
+const pr: unknown = JSON.parse(readFileSync(prPath, 'utf8'));
+const events: unknown = JSON.parse(readFileSync(eventsPath, 'utf8'));
 const headCommit: unknown = JSON.parse(readFileSync(headCommitPath, 'utf8'));
 const maintainers = maintainersOf(codeownersCandidates);
 
-let approved = false;
-let reason: string;
-
-const labels = isRecord(pr) && Array.isArray(pr['labels']) ? pr['labels'] : [];
-const hasLabel =
-  isRecord(pr) && labels.some((label) => isRecord(label) && stringOf(label['name']) === LABEL);
-// commit.committer.date — время создания head-коммита (прокси времени push).
+const prLabels =
+  isRecord(pr) && Array.isArray(pr['labels'])
+    ? pr['labels'].flatMap((labelEntry) =>
+        isRecord(labelEntry) && typeof labelEntry['name'] === 'string' ? [labelEntry['name']] : [],
+      )
+    : [];
 const commitData = isRecord(headCommit) ? headCommit['commit'] : undefined;
-const pushedAt =
-  isRecord(commitData) && isRecord(commitData['committer'])
-    ? stringOf(commitData['committer']['date'])
-    : undefined;
+const committer = isRecord(commitData) ? commitData['committer'] : undefined;
+// Время push берём из pr.json (поле pushedAt ставит GitHub, подделать нельзя);
+// committer.date head-коммита — только фолбэк: автор контролирует её
+// (GIT_COMMITTER_DATE), доверять можно лишь при отсутствии лучшего источника
+// (находка security-ревью A6 PR-2).
+const prPushedAt = isRecord(pr) && typeof pr['pushedAt'] === 'string' ? pr['pushedAt'] : undefined;
+const commitDate =
+  isRecord(committer) && typeof committer['date'] === 'string' ? committer['date'] : undefined;
+const pushedAt = prPushedAt ?? commitDate;
 
-if (!maintainers.size) {
-  reason =
-    'в CODEOWNERS (кандидаты: .github/, корень, docs/) нет файла со строкой `*` — некому доверять одобрение';
-} else if (!hasLabel) {
-  reason = `label ${LABEL} не стоит на PR`;
-} else if (!pushedAt || Number.isNaN(Date.parse(pushedAt))) {
-  reason = 'не удалось определить время head-коммита PR';
-} else {
-  const event = lastLabeledEvent(Array.isArray(events) ? events : []);
-  if (!event) {
-    reason = `нет события labeled для ${LABEL} (истёк срок хранения API) — поставить заново`;
-  } else if (!maintainers.has(event.actor)) {
-    reason = `label поставил @${event.actor}, который не входит в глобальных владельцев CODEOWNERS`;
-  } else if (Date.parse(event.createdAt) <= Date.parse(pushedAt)) {
-    reason = `label поставлен ${event.createdAt}, до последнего push (head-коммит ${pushedAt})`;
-  } else {
-    approved = true;
-    reason = `label поставлен @${event.actor} (владелец CODEOWNERS) после последнего push (head-коммит ${pushedAt})`;
-  }
-}
+const verdict = evaluateApproval({
+  label,
+  prLabels,
+  events: Array.isArray(events) ? events : [],
+  pushedAt,
+  maintainers,
+});
 
-console.log(`approval: ${approved ? 'APPROVED' : 'NOT approved'} — ${reason}`);
+console.log(`approval: ${verdict.approved ? 'APPROVED' : 'NOT approved'} — ${verdict.reason}`);
 if (process.env['GITHUB_OUTPUT']) {
-  appendFileSync(process.env['GITHUB_OUTPUT'], `approved=${approved}\n`);
+  appendFileSync(process.env['GITHUB_OUTPUT'], `approved=${verdict.approved}\n`);
 }

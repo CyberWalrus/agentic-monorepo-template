@@ -72,6 +72,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        # Полная история: bundle-delta (канарейка и негатив-проверки) строит базу
+        # от merge-base(HEAD, origin/main) (A6 PR-2, ADR 0013).
+        with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
       - run: pnpm install --frozen-lockfile
@@ -85,10 +88,14 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        # Полная история: шаг bundle-delta строит базу от merge-base(HEAD,
+        # origin/main) (A6 PR-2, ADR 0013); на main база == HEAD — шаг быстрый.
+        with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
       # З6/B1: бюджеты времени enforce только здесь (ubuntu-раннер — та же
-      # калибровка, что в verify-budgets.json). Длительности шагов — тренд-данные.
+      # калибровка, первый прогон с bundle-delta покажет фактическое время;
+      # калибровка порога — по тренд-данным, подъём — человеческим PR (З7).
       - run: mkdir -p reports && pnpm verify --full --enforce-budgets --json > reports/verify-durations.json
         env: { CI: 'true' }
       - uses: actions/upload-artifact@v7

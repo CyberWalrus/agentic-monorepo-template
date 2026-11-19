@@ -19,6 +19,7 @@
     "knip": "knip",
     "sherif": "sherif",
     "bundle": "node tools/check-bundle.ts",
+    "bundle:delta": "node tools/check-bundle-delta.ts",
     "visual": "tools/visual.sh",
     "visual:update": "VISUAL_UPDATE=1 tools/visual.sh",
     "verify": "node tools/verify.ts",

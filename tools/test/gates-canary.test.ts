@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BLOAT, CANARIES } from '../gate-canaries.ts';
+import { BLOAT, BLOAT_DELTA, CANARIES } from '../gate-canaries.ts';
 import { allStepNames, fast, post, slow } from '../verify-steps.ts';
 
 const slowNames = new Set(slow.map((step) => step.name));
@@ -135,3 +135,97 @@ function findCheckTotal(report: Record<string, unknown>): number | undefined {
   }
   return typeof total['value'] === 'number' ? total['value'] : undefined;
 }
+
+const BUDGETS_PATH = resolve(import.meta.dirname, '..', '..', 'perf-budgets.json');
+const BUNDLE_REPORT = resolve(import.meta.dirname, '..', '..', 'reports', 'bundle.json');
+const PERF_REPORT = resolve(import.meta.dirname, '..', '..', 'e2e', 'reports', 'perf.json');
+
+/** Читает perf-budgets.json или бросает: битый порог не должен молча отключать проверку. */
+function readBudgets(): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(readFileSync(BUDGETS_PATH, 'utf8'));
+  if (!isRecord(parsed)) {
+    throw new Error('perf-budgets.json: ожидается объект');
+  }
+  return parsed;
+}
+
+function requireThreshold(budgets: Record<string, unknown>): number {
+  const threshold = getNumberAt(budgets, ['web', 'bundle', 'maxPrGrowthKb']);
+  if (typeof threshold !== 'number') {
+    throw new Error('perf-budgets.json: нет web.bundle.maxPrGrowthKb');
+  }
+  return threshold;
+}
+
+/** Ищет в checks отчёта бандла метрику по имени; нет — бросает (fail-closed). */
+function requireCheckMetric(report: Record<string, unknown>, metric: string): number {
+  const checks = report['checks'];
+  const found = Array.isArray(checks)
+    ? checks.find((item) => isRecord(item) && item['metric'] === metric)
+    : undefined;
+  if (!isRecord(found) || typeof found['value'] !== 'number') {
+    throw new Error(
+      `reports/bundle.json: нет метрики «${metric}» — инвариант порогов не проверяется`,
+    );
+  }
+  return found['value'];
+}
+
+describe('дельта-канарейка и инвариант порогов (A6 PR-2, ADR 0013)', () => {
+  it('дельта канарейки перекрывает порог роста с запасом', () => {
+    // Если базовый бандл похудеет или порог поднимут, дельта канарейки
+    // перестанет превышать maxPrGrowthKb и канарейка молча перестанет ловить.
+    const canary = CANARIES.find((item) => item.failedStep === 'bundle-delta');
+    expect(canary, 'дельта-канарейка в таблице').toBeDefined();
+    const threshold = requireThreshold(readBudgets());
+    const canaryDeltaKb = gzipSync(Buffer.from(BLOAT_DELTA, 'utf8')).length / 1024;
+    expect(canaryDeltaKb, 'gzip дельты канарейки против maxPrGrowthKb').toBeGreaterThan(threshold);
+  });
+
+  it('запас каждого абсолютного бандл-потолка больше дельта-порога', () => {
+    // Иначе абсолют краснеет раньше дельта-гейта, и label
+    // bundle-growth-approved не разблокирует рост (находка sanity-ревью A6
+    // PR-2). Факты — из отчётов последнего прогона; нет отчёта (свежий клон) —
+    // проверка пропускается.
+    const budgets = readBudgets();
+    const threshold = requireThreshold(budgets);
+    if (!existsSync(BUNDLE_REPORT) || !existsSync(PERF_REPORT)) {
+      return;
+    }
+    const bundle: unknown = JSON.parse(readFileSync(BUNDLE_REPORT, 'utf8'));
+    if (!isRecord(bundle)) {
+      return;
+    }
+    const total = requireCheckMetric(bundle, 'total JS (gzip, KB)');
+    const totalCeiling = getNumberAt(budgets, ['web', 'bundle', 'maxTotalJsGzipKb']);
+    if (typeof totalCeiling !== 'number') {
+      throw new Error('perf-budgets.json: нет web.bundle.maxTotalJsGzipKb');
+    }
+    expect(
+      totalCeiling - total,
+      `запас total JS (${totalCeiling} − ${total.toFixed(1)}) больше дельта-порога ${threshold}`,
+    ).toBeGreaterThan(threshold);
+    const largest = requireCheckMetric(bundle, 'largest JS chunk (gzip, KB)');
+    const largestCeiling = getNumberAt(budgets, ['web', 'bundle', 'maxLargestJsChunkGzipKb']);
+    if (typeof largestCeiling !== 'number') {
+      throw new Error('perf-budgets.json: нет web.bundle.maxLargestJsChunkGzipKb');
+    }
+    expect(
+      largestCeiling - largest,
+      `запас крупнейшего чанка (${largestCeiling} − ${largest.toFixed(1)}) больше дельта-порога ${threshold}`,
+    ).toBeGreaterThan(threshold);
+    const perf: unknown = JSON.parse(readFileSync(PERF_REPORT, 'utf8'));
+    const page = isRecord(perf) ? perf['page:/'] : undefined;
+    if (!isRecord(page) || typeof page['jsWireKb'] !== 'number') {
+      throw new Error('e2e/reports/perf.json: нет page:/.jsWireKb');
+    }
+    const wireCeiling = getNumberAt(budgets, ['web', 'pages', '/', 'maxJsWireKb']);
+    if (typeof wireCeiling !== 'number') {
+      throw new Error('perf-budgets.json: нет web.pages./.maxJsWireKb');
+    }
+    expect(
+      wireCeiling - page['jsWireKb'],
+      `запас wire-байт (${wireCeiling} − ${page['jsWireKb'].toFixed(1)}) больше дельта-порога ${threshold}`,
+    ).toBeGreaterThan(threshold);
+  });
+});

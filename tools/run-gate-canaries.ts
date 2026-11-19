@@ -144,9 +144,17 @@ try {
   // Негатив-контроль: на чистом worktree все шаги набора зелёные — иначе
   // канарейки «пролетают» на уже красной базе. Slow-шаги вне быстрого контроля:
   // `verify --only` с slow-шагом без --full сам выходит с ошибкой.
+  // bundle-delta вне негатив-контроля (A6 PR-2, ADR 0013): PR с одобренным
+  // ростом бандла легитимно красит его на чистом дереве — контроль уронил бы
+  // весь прогон ложной тревогой. Всегда-красный (сломанный) гейт это не
+  // скрывает: CI-job bundle-delta красный на каждом PR, а канарейка ниже
+  // требует конкретной причины красноты (/bundle-growth-approved/).
+  const NEGATIVE_CONTROL_EXEMPT = new Set(['bundle-delta']);
   const slowNames = new Set(slowSteps.map((step) => step.name));
   const allCovered = [...new Set(CANARIES.flatMap((canary) => canary.steps.split(',')))];
-  const union = allCovered.filter((step) => !slowNames.has(step)).join(',');
+  const union = allCovered
+    .filter((step) => !slowNames.has(step) && !NEGATIVE_CONTROL_EXEMPT.has(step))
+    .join(',');
   const control = verifyInWorktreeWithSignalRetry(union, false);
   if (control.json === null || !control.json.ok) {
     throw new Error(
@@ -156,7 +164,11 @@ try {
   console.log(`negative control: ${union} — ok`);
   // Отдельный контроль slow-шагов, покрытых канарейками (build,bundle,e2e):
   // slow-канарейки не должны стрелять вакуумно на красной базе.
-  const slowUnion = [...new Set(allCovered.filter((step) => slowNames.has(step)))].join(',');
+  const slowUnion = [
+    ...new Set(
+      allCovered.filter((step) => slowNames.has(step) && !NEGATIVE_CONTROL_EXEMPT.has(step)),
+    ),
+  ].join(',');
   const slowControl = verifyInWorktreeWithSignalRetry(slowUnion, true);
   if (slowControl.json === null || !slowControl.json.ok) {
     throw new Error(

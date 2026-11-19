@@ -1,86 +1,34 @@
 /**
  * Бюджет размера клиентского бандла web (gzip). Пороги — /perf-budgets.json.
  * Требует собранного apps/web (`pnpm build`). Отчёт: reports/bundle.json.
+ * Замер общий с дельта-гейтом (tools/measure-bundle.ts, A6 PR-2): гуарды
+ * детерминизма — там, здесь только пороги и отчёт.
  */
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { gzipSync } from 'node:zlib';
 
+import { assetsDirUnder, measureBundle, type BundleSizes } from './measure-bundle.ts';
 import { loadPerfBudgets } from './perf-budgets.ts';
 
 const root = new URL('..', import.meta.url).pathname;
-const assetsDir = join(root, 'apps/web/dist/client/assets');
 const budget = loadPerfBudgets().web.bundle;
 
-const files = await readdir(assetsDir).catch(() => {
-  console.error(`No build output at ${assetsDir}. Run \`pnpm build\` first.`);
-  process.exit(1);
-});
-
-const sizes = await Promise.all(
-  files
-    .filter((file) => file.endsWith('.js') || file.endsWith('.css'))
-    .map(async (file) => ({
-      file,
-      gzipKb: gzipSync(await readFile(join(assetsDir, file))).length / 1024,
-    })),
-);
-
-// Детерминизм сборки (ADR 0005): адрес API не должен запекаться в клиентский
-// бандл — иначе dist зависит от окружения сборки, кэш turbo между worktree
-// (разные порты API) промахивается, а браузер стучится мимо прокси. Все
-// loopback-формы: имя хоста, IPv4-петля, wildcard и IPv6-петля.
-const jsFiles = files.filter((file) => file.endsWith('.js'));
-const bakedAddresses: string[] = [];
-for (const file of jsFiles) {
-  const source = await readFile(join(assetsDir, file), 'utf8');
-  for (const match of source.matchAll(/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):\d+/g)) {
-    bakedAddresses.push(`${file}: ${match[0]}`);
-  }
-}
-if (bakedAddresses.length > 0) {
-  console.error(
-    [
-      '✗ Baked API addresses in the client bundle (ADR 0005): the build must not depend',
-      '  on API_URL. Read the address at runtime: SSR — process.env.API_URL, browser —',
-      '  location.origin (api-client.ts). Do not add localhost literals to client code.',
-      '',
-      ...bakedAddresses.slice(0, 10),
-    ].join('\n'),
-  );
+let sizes: BundleSizes;
+try {
+  sizes = await measureBundle(assetsDirUnder(root));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 }
-
-const js = sizes.filter((s) => s.file.endsWith('.js'));
-const css = sizes.filter((s) => s.file.endsWith('.css'));
-
-// Turbo при cache-hit восстанавливает outputs, не подчищая чужие файлы: после
-// переключения источников рядом с актуальными чанками остаются чанки прошлой
-// сборки, и счётчик удваивается (наблюдалось 2026-11-14: 299.6/160 после
-// патча и отката). Признак смешанной сборки — больше одного entry-чанка.
-const entryChunks = js.filter((s) => /^index-.*\.js$/.test(s.file));
-if (entryChunks.length > 1) {
-  console.error(
-    [
-      `✗ Stale build output: ${entryChunks.length} entry chunks in ${assetsDir}:`,
-      ...entryChunks.map((s) => `  ${s.file} (${s.gzipKb.toFixed(1)} KB gzip)`),
-      '  Turbo cache restore does not prune files left by other builds.',
-      '  Rebuild clean: pnpm turbo run build --filter=@repo/web --force',
-    ].join('\n'),
-  );
-  process.exit(1);
-}
-
-const sum = (items: { gzipKb: number }[]) => items.reduce((total, item) => total + item.gzipKb, 0);
 
 const checks = [
-  { metric: 'total JS (gzip, KB)', value: sum(js), limit: budget.maxTotalJsGzipKb },
+  { metric: 'total JS (gzip, KB)', value: sizes.totalJsKb, limit: budget.maxTotalJsGzipKb },
   {
     metric: 'largest JS chunk (gzip, KB)',
-    value: Math.max(0, ...js.map((s) => s.gzipKb)),
+    value: sizes.largestJsKb,
     limit: budget.maxLargestJsChunkGzipKb,
   },
-  { metric: 'total CSS (gzip, KB)', value: sum(css), limit: budget.maxTotalCssGzipKb },
+  { metric: 'total CSS (gzip, KB)', value: sizes.totalCssKb, limit: budget.maxTotalCssGzipKb },
 ];
 
 for (const check of checks) {
@@ -93,7 +41,7 @@ for (const check of checks) {
 await mkdir(join(root, 'reports'), { recursive: true });
 await writeFile(
   join(root, 'reports/bundle.json'),
-  `${JSON.stringify({ checks, files: sizes }, null, 2)}\n`,
+  `${JSON.stringify({ checks, files: sizes.files }, null, 2)}\n`,
 );
 
 if (checks.some((check) => check.value > check.limit)) {
