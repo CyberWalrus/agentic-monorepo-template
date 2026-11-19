@@ -30,7 +30,7 @@ Merge queue для этого репозитория недоступна (пу�
 
 Живёт в `pnpm canaries` (хвост скрипта) и в CI: canaries.yml — по изменению `copier.yml`, `.github/rulesets/**`, пары CODEOWNERS и `tools/copier-version.txt` — и в nightly. Из песочницы агента не запускается: copier ставится из PyPI, вне allowlist доменов (ADR 0004; З5-исключение — [architecture.md](architecture.md)). Локальный прогон человеком:
 
-1. `pipx install copier==$(cat tools/copier-version.txt)` — версия из одного источника (З10).
+1. `pipx install --force copier==$(cat tools/copier-version.txt)` — версия из одного источника (З10); `--force` переустанавливает при смене пина.
 2. Закоммитить работу — канарейка копирует закоммиченный HEAD (`--vcs-ref=HEAD`).
 3. `pnpm canaries` — в хвосте: `copier copy`, проверка содержимого копии, `pnpm install && pnpm verify` в ней.
 

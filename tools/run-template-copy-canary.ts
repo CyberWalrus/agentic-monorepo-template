@@ -17,7 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { checkTemplateCopy } from './check-template-copy.ts';
+import { checkCopySide, checkTemplateSide } from './check-template-copy.ts';
 
 const repoRoot = resolve(import.meta.dirname, '..');
 const pinnedVersion = readFileSync(join(repoRoot, 'tools/copier-version.txt'), 'utf8').trim();
@@ -57,20 +57,39 @@ class CanaryFailure extends Error {}
 const isCI = process.env['CI'] === '1' || process.env['CI'] === 'true';
 const foundVersion = copierVersion();
 if (foundVersion === null) {
-  console.error(
-    `SKIPPED: копир (copier) не найден — канарейка копии ставит его из PyPI, вне allowlist ` +
-      `доменов песочницы (ADR 0004, З5-исключение). Её гоняют CI (canaries.yml, nightly) и ` +
-      `человек: pipx install copier==${pinnedVersion}`,
-  );
   // В CI copier ставится шагом workflow: отсутствие — сломанная проводка,
-  // а не окружение агента, поэтому fail-closed (З6).
-  process.exit(isCI ? 1 : 0);
+  // а не окружение агента, поэтому fail-closed (З6); локально — громкий skip.
+  const reason =
+    `копир (copier) не найден — канарейка копии ставит его из PyPI, вне allowlist ` +
+    `доменов песочницы (ADR 0004, З5-исключение). Её гоняют CI (canaries.yml, nightly) и ` +
+    `человек: pipx install --force copier==${pinnedVersion}`;
+  if (isCI) {
+    console.error(`FAILED: ${reason}`);
+    process.exit(1);
+  }
+  console.error(`SKIPPED: ${reason}`);
+  process.exit(0);
 }
-if (!foundVersion.includes(pinnedVersion)) {
+// Точное равенство семантической версии, не подстрока: пин «9.1» не должен
+// проходить при установленной «9.19.1» (ревью security/sanity).
+const foundSemver = /\d+\.\d+\.\d+/.exec(foundVersion)?.[0];
+if (foundSemver !== pinnedVersion) {
   console.error(
     `версия copier (${foundVersion}) расходится с tools/copier-version.txt (${pinnedVersion}) — ` +
-      `обновите установку: pipx install copier==${pinnedVersion}`,
+      `обновите установку: pipx install --force copier==${pinnedVersion}`,
   );
+  process.exit(1);
+}
+
+// Шаблонная сторона — до copier copy: детект раньше исполнения (ревью
+// security/sanity). В CI чекаут — закоммиченный HEAD PR; локально раннер
+// читает рабочее дерево — работу сначала commit (как у run-gate-canaries).
+const templateFailures = checkTemplateSide(repoRoot);
+if (templateFailures.length > 0) {
+  for (const failure of templateFailures) {
+    console.error(`✗ [${failure.check}] ${failure.detail}`);
+  }
+  console.error('канарейка копии: шаблон красный до копирования (детали выше)');
   process.exit(1);
 }
 
@@ -99,11 +118,11 @@ try {
     throw new CanaryFailure(`copier copy failed:\n${copied.output.slice(-3000)}`);
   }
 
-  const report = checkTemplateCopy(repoRoot, copyDir);
-  for (const failure of report.failures) {
+  const copyFailures = checkCopySide(repoRoot, copyDir);
+  for (const failure of copyFailures) {
     console.error(`✗ [${failure.check}] ${failure.detail}`);
   }
-  contentOk = report.ok;
+  contentOk = copyFailures.length === 0;
   if (contentOk) {
     console.log('содержимое копии — ok');
   }

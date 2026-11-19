@@ -7,11 +7,24 @@
  * её живость здесь и в CI.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  unlinkSync,
+  symlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { checkTemplateCopy, readOwner, renderCodeowners } from '../check-template-copy.ts';
+import {
+  FORBIDDEN_IN_COPY,
+  checkTemplateCopy,
+  readOwner,
+  renderCodeowners,
+} from '../check-template-copy.ts';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
 
@@ -182,6 +195,21 @@ describe('сторона копии', () => {
     expect(report.ok).toBe(true);
   });
 
+  it('владелец в ответах вне строки _src_path красит (whitelist узкий)', () => {
+    write(
+      'template/copy/.copier-answers.yml',
+      `_commit: abc123\n_src_path: /home/dev/template\nrepo_owner: ${TEMPLATE_OWNER}\n`,
+    );
+    const report = checkTemplateCopy(templateRoot, copyRoot);
+    expect(report.failures.some((f) => f.check === 'владелец')).toBe(true);
+  });
+
+  it('симлинк в копии красит', () => {
+    symlinkSync(join(copyRoot, 'package.json'), join(copyRoot, 'evil-link'));
+    const report = checkTemplateCopy(templateRoot, copyRoot);
+    expect(report.failures.some((f) => f.detail.includes('симлинк'))).toBe(true);
+  });
+
   it('убранный снимок ruleset красит', () => {
     rmSync(join(copyRoot, '.github/rulesets/tags-v.json'));
     const report = checkTemplateCopy(templateRoot, copyRoot);
@@ -198,11 +226,17 @@ describe('сторона копии', () => {
     ).toBe(true);
   });
 
-  it('jinja-снимок правил требует только присутствия (рендерится)', () => {
+  it('.jinja-снимок ищется в копии под именем без суффикса (copier рендерит)', () => {
     write('template/.github/rulesets/custom.json.jinja', 'owner: {{ repo_owner }}\n');
-    write('template/copy/.github/rulesets/custom.json.jinja', 'owner: rendered\n');
-    const report = checkTemplateCopy(templateRoot, copyRoot);
+    write('template/copy/.github/rulesets/custom.json', 'owner: rendered\n');
+    let report = checkTemplateCopy(templateRoot, copyRoot);
     expect(report.failures.filter((f) => f.check === 'rulesets')).toEqual([]);
+    // Рендер не доехал до копии — красит.
+    rmSync(join(copyRoot, '.github/rulesets/custom.json'));
+    report = checkTemplateCopy(templateRoot, copyRoot);
+    expect(
+      report.failures.some((f) => f.check === 'rulesets' && f.detail.includes('custom.json')),
+    ).toBe(true);
   });
 
   it('рендер CODEOWNERS копии расходится с jinja — красит', () => {
@@ -242,6 +276,7 @@ describe('проводка канарейки копии', () => {
     const workflow = readFileSync(join(repoRoot, '.github/workflows/canaries.yml'), 'utf8');
     for (const path of [
       'copier.yml',
+      '.copier-answers.yml.jinja',
       '.github/rulesets/**',
       'tools/copier-version.txt',
       '.github/CODEOWNERS.jinja',
@@ -252,6 +287,27 @@ describe('проводка канарейки копии', () => {
         `канарейка копии не запустится на PR: в paths canaries.yml нет ${path}`,
       ).toContain(path);
     }
+  });
+
+  it('дрейф списков: каждый dev-паттерн _exclude покрыт FORBIDDEN_IN_COPY', () => {
+    const text = readFileSync(join(repoRoot, 'copier.yml'), 'utf8');
+    const section = text.slice(text.indexOf('_exclude:'));
+    const entries = [...section.matchAll(/^\s+- '?([^'\n]+)'?$/gm)]
+      .map((match) => match[1] ?? '')
+      .filter((entry) => entry !== '');
+    // Технические дефолты copier (файлы ОС и VCS) — не файлы разработки.
+    const technical = new Set(['~*', '*.py[co]', '__pycache__', '.DS_Store', '.git', '.svn']);
+    for (const entry of entries) {
+      if (technical.has(entry)) {
+        continue;
+      }
+      const normalized = entry.endsWith('/') ? entry.slice(0, -1) : entry;
+      expect(
+        [...FORBIDDEN_IN_COPY],
+        `паттерн _exclude «${entry}» не покрыт FORBIDDEN_IN_COPY — его утечка в копию будет тихой`,
+      ).toContain(normalized);
+    }
+    expect(entries.length).toBeGreaterThan(5);
   });
 
   it('copier в CI ставится из файла версии (З10)', () => {
@@ -280,6 +336,6 @@ describe('проводка канарейки копии', () => {
       env: { ...process.env, PATH: '/usr/bin:/bin', CI: '1' },
     });
     expect(inCI.status).not.toBe(0);
-    expect(`${inCI.stdout}${inCI.stderr}`).toContain('SKIPPED');
+    expect(`${inCI.stdout}${inCI.stderr}`).toContain('FAILED');
   });
 });
