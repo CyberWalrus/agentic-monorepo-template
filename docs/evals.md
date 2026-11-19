@@ -6,14 +6,14 @@
 
 1. `tools/evals/scenarios/*.md` — эталонные сценарии: front matter (`name`, `description`, `guards-not-present`) + тело — промпт агенту.
 2. `pnpm evals --all` (или `pnpm evals due-date`) — раннер для каждого сценария: проверяет guards отсутствия фичи → создаёт чистый detached worktree от HEAD → `pnpm install --frozen-lockfile` → агент headless с промптом через stdin → `pnpm verify --full` в worktree руками раннера. pass — только зелёный verify, самоотчёт агента не считается.
-3. Отчёт — JSON в `reports/evals/report-<runId>.json`: `pass`, `iterations` (num_turns CLI), `timeMs` (wall-clock раннера), `tokens` (сумма числовых полей usage CLI); `null` = «недоступна», не ноль. В CI — артефакт `evals-<run_id>` (retention 90), единый тренд-отчёт читает его (c9.4).
+3. Отчёт — JSON в `reports/evals/report-<runId>.json`: `pass`, `iterations` (num_turns CLI), `timeMs` (wall-clock раннера), `tokens` (каноническая сумма usage CLI: `input_tokens + output_tokens + cache_creation_input_tokens + cache_read_input_tokens`); `null` = «недоступна», не ноль. В CI — артефакт `evals-<run_id>` (retention 90), единый тренд-отчёт читает его (c9.4). Хвосты вывода verify и самоотчёта агента в отчёте редактируются от секретоподобных строк (`sk-ant-…`), ключ агентного провайдера не наследуется шагами install/verify.
 4. Запуски: push в `main` с путями `.claude/**`, `AGENTS.md`, `tools/**` + понедельник 05:00 UTC + `workflow_dispatch` (workflow `evals.yml`).
 5. Без секрета `ANTHROPIC_API_KEY` job скипается; по cron/dispatch ставит напоминание в tracking-issue «evals: не настроен ANTHROPIC_API_KEY». Секрет ставит человек.
 
 ## Как добавить сценарий
 
 1. Файл `tools/evals/scenarios/<name>.md` — обычный PR (файлы `.md` — review-класс, операторский режим не нужен).
-2. Front matter: `name` (нижнее подчёркивание и цифры: /^[a-z0-9][a-z0-9-]*$/), `description`, **обязательный** `guards-not-present` — идентификаторы фичи, которых не должно быть в продуктовом коде (`apps/<pkg>/src`, `packages/<pkg>/src`, файлы `.ts`/`.tsx`/`.css`). Без guards сценарий не парсится: реализованная обычным PR фича делает сценарий тривиальным и тихо инвертирует смысл метрики. Идентификатор должен однозначно называть фичу (имя поля контракта, экспортируемый символ).
+2. Front matter: `name` (латиница в нижнем регистре, цифры и дефис: /^[a-z0-9][a-z0-9-]*$/), `description`, **обязательный** `guards-not-present` — идентификаторы фичи, которых не должно быть в продуктовом коде (`apps/<pkg>/src`, `packages/<pkg>/src`, файлы `.ts`/`.tsx`/`.css`). Без guards сценарий не парсится: реализованная обычным PR фича делает сценарий тривиальным и тихо инвертирует смысл метрики. Идентификатор должен однозначно называть фичу (имя поля контракта, экспортируемый символ).
 3. Тело — промпт: пользовательская история + требования по слоям (контракт → API → UI → E2E), критерий готовности — зелёный `pnpm verify --full`, прямой запрет менять защищённые пути, ослаблять тесты/гейты, обновлять скриншот-базлайны.
 4. Фича реализована в продукте — сценарий заменяется в том же PR, иначе раннер громко отказывает (guards красные, прогон не засчитывается).
 

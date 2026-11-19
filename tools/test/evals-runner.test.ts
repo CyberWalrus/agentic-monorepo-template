@@ -138,6 +138,8 @@ describe('runEvals', () => {
       failed: 0,
       timeMs: expect.any(Number),
       tokens: 120,
+      timeMeasured: 1,
+      tokensMeasured: 1,
     });
     expect(existsSync(result.reportPath)).toBe(true);
     expect(leftoverWorktrees()).toBe(0);

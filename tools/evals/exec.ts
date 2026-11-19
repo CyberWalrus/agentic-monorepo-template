@@ -21,12 +21,23 @@ export interface RunResult {
 export function runProcess(
   command: string,
   args: string[],
-  options: { cwd: string; input?: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
+  options: {
+    cwd: string;
+    input?: string;
+    timeoutMs: number;
+    env?: NodeJS.ProcessEnv;
+    /** Переменные, которые не наследуются процессом: ключи агента не нужны install/verify (security-ревью C9.1). */
+    omitEnv?: string[];
+  },
 ): Promise<RunResult> {
   return new Promise((resolveRun) => {
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, ...options.env };
+    for (const name of options.omitEnv ?? []) {
+      delete childEnv[name];
+    }
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: options.env === undefined ? process.env : { ...process.env, ...options.env },
+      env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';

@@ -6,7 +6,7 @@
  *   pnpm evals --list                    список сценариев
  *
  * Флаги: --out <каталог> (по умолчанию reports/evals), --model <имя>,
- * --timeout-minutes <N> (лимит агента, по умолчанию 45), --keep (не удалять
+ * --timeout-minutes <N> (лимит агента, по умолчанию 90), --keep (не удалять
  * worktree — отладка), --agent <пресет> (claude), --agent-command <строка>
  * (подмена команды агента целиком), --install-command / --verify-command
  * (подмена шагов — швы для тестов, находка sanity-ревью плана).
@@ -91,7 +91,18 @@ export async function runEvals(options: RunEvalsOptions): Promise<RunEvalsResult
 
   const outcomes: ScenarioOutcome[] = [];
   for (const ref of refs) {
-    outcomes.push(await runScenario(options, agentCommand, ref, baseSha));
+    const outcome = await runScenario(options, agentCommand, ref, baseSha);
+    // Единая точка редактирования: любой текст из вывода агента или verify
+    // (stderr-хвосты в error, хвосты полей) чистится от секретоподобных строк
+    // перед отчётом — артефакт CI читают люди с доступом к репо. null —
+    // «недоступна», не пустая строка (ADR 0016).
+    outcomes.push({
+      ...outcome,
+      invalid: redactSecretsOrNull(outcome.invalid),
+      error: redactSecretsOrNull(outcome.error),
+      verifyTail: redactSecretsOrNull(outcome.verifyTail),
+      agentResultTail: redactSecretsOrNull(outcome.agentResultTail),
+    });
   }
 
   const report = buildReport(outcomes, {
@@ -117,6 +128,23 @@ function tailOf(text: string, maxChars: number): string | null {
     return null;
   }
   return trimmed.length <= maxChars ? trimmed : trimmed.slice(-maxChars);
+}
+
+/** Ключи агентных провайдеров не попадают в артефакт даже из чужого вывода (security-ревью C9.1). */
+const SECRET_PATTERNS = [/sk-ant-[A-Za-z0-9_-]{8,}/g, /sk-[A-Za-z0-9_-]{20,}/g];
+
+function redactSecrets(text: string): string {
+  let result = text;
+  for (const pattern of SECRET_PATTERNS) {
+    result = result.replaceAll(pattern, '[REDACTED]');
+  }
+  return result;
+}
+
+const SECRET_ONLY_ENV = ['ANTHROPIC_API_KEY', 'EVALS_API_KEY'];
+
+function redactSecretsOrNull(text: string | null): string | null {
+  return text === null ? null : redactSecrets(text);
 }
 
 async function runScenario(
@@ -150,9 +178,13 @@ async function runScenario(
 
   const worktree = await createEvalWorktree(options.root, baseSha);
   try {
+    // Ключ агентного провайдера нужен только агенту: install и verify идут без
+    // него (postinstall-скрипты и тесты не должны видеть секрет; находка
+    // security-ревью C9.1).
     const install = await runProcess('/bin/sh', ['-c', options.installCommand], {
       cwd: worktree.path,
       timeoutMs: INSTALL_TIMEOUT_MS,
+      omitEnv: SECRET_ONLY_ENV,
     });
     if (install.code !== 0) {
       outcome.error = `установка зависимостей не удалась (код ${install.code})`;
@@ -193,12 +225,13 @@ async function runScenario(
     const verify = await runProcess('/bin/sh', ['-c', options.verifyCommand], {
       cwd: worktree.path,
       timeoutMs: VERIFY_TIMEOUT_MS,
+      omitEnv: SECRET_ONLY_ENV,
     });
     outcome.verifyExitCode = verify.code;
     outcome.verifyTail = tailOf(`${verify.stderr}\n${verify.stdout}`, 2000);
     outcome.pass = verify.code === 0;
     if (verify.code !== 0) {
-      outcome.error = `verify красный (код ${verify.code}) — см. ${worktree.path}`;
+      outcome.error = `verify красный (код ${verify.code}) — причина в verifyTail отчёта; worktree удалён, --keep сохраняет`;
     }
     return outcome;
   } finally {

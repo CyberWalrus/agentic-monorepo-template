@@ -29,7 +29,9 @@ env:
 
 concurrency:
   group: agent-evals-${{ github.ref }}
-  cancel-in-progress: true
+  # Прогон платит токенами за полный замер: отменять идущий прогон новым merge
+  # нельзя (находка arch-ревью C9.1) — длина ограничена таймаутом job.
+  cancel-in-progress: false
 
 jobs:
   evals:
@@ -41,7 +43,11 @@ jobs:
     # собственными лимитами; запас job — на установку CLI и хвост verify.
     timeout-minutes: 150
     steps:
+      # persist-credentials: false — агент с --dangerously-skip-permissions
+      # работает в worktree с общим git-dir; токен job в .git/config ему не нужен
+      # (находка security-ревью C9.1; прецедент — visual-approve.yml).
       - uses: actions/checkout@v7
+        with: { persist-credentials: false }
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
       # CLI агента: pnpm add — встроенная команда (как pnpm install), гейт

@@ -48,6 +48,9 @@ export interface EvalsReport {
     failed: number;
     timeMs: number;
     tokens: number;
+    /** Сценариев с доступной метрикой: null не схлопывается в 0 при сумме (находка arch-ревью C9.1). */
+    timeMeasured: number;
+    tokensMeasured: number;
   };
   environment: {
     node: string;
@@ -70,6 +73,8 @@ export function buildReport(
       failed,
       timeMs: results.reduce((sum, item) => sum + (item.timeMs ?? 0), 0),
       tokens: results.reduce((sum, item) => sum + (item.tokens ?? 0), 0),
+      timeMeasured: results.filter((item) => item.timeMs !== null).length,
+      tokensMeasured: results.filter((item) => item.tokens !== null).length,
     },
     environment: { node: process.version, platform: process.platform },
   };
