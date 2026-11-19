@@ -21,6 +21,23 @@ const ScenarioBudgetSchema = z.object({
   maxLongTasks: z.number().int().nonnegative(),
 });
 
+// Допуски ночного тренд-сравнения (A6 PR-3): время — max(floor, pct×baseline),
+// floor и pct «заведомо выше шума» по фактам CI из ADR 0006; тонкая калибровка
+// — по тренд-данным ночных прогонов.
+const TrendSchema = z.object({
+  timeFloorMs: z.object({
+    ttfbMs: z.number().nonnegative(),
+    lcpMs: z.number().nonnegative(),
+    lcpNetMs: z.number().nonnegative(),
+    scenarioMs: z.number().nonnegative(),
+  }),
+  timePct: z.number().min(0).max(1),
+  clsSlack: z.number().nonnegative(),
+  longTasksSlack: z.number().int().nonnegative(),
+  baselineMaxAgeDays: z.number().positive(),
+  baselineMaxGreenRuns: z.number().int().positive(),
+});
+
 export const PerfBudgetsSchema = z.object({
   web: z.object({
     bundle: z.object({
@@ -37,6 +54,7 @@ export const PerfBudgetsSchema = z.object({
     maxP95Ms: z.number().positive(),
     maxErrorRate: z.number().min(0).max(1),
   }),
+  trend: TrendSchema,
 });
 
 export type PerfBudgets = z.infer<typeof PerfBudgetsSchema>;

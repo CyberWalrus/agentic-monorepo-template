@@ -35,5 +35,18 @@
   "api": {
     "maxP95Ms": 50,
     "maxErrorRate": 0.01
+  },
+  "trend": {
+    "timeFloorMs": {
+      "ttfbMs": 15,
+      "lcpMs": 25,
+      "lcpNetMs": 30,
+      "scenarioMs": 25
+    },
+    "timePct": 0.35,
+    "clsSlack": 0.01,
+    "longTasksSlack": 1,
+    "baselineMaxAgeDays": 7,
+    "baselineMaxGreenRuns": 20
   }
 }
