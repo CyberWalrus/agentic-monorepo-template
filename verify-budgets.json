@@ -14,6 +14,7 @@
     "sandbox": 5,
     "tool-class": 10,
     "docs": 10,
+    "quarantine": 5,
     "sherif": 10,
     "visual-image": 5,
     "openapi": 15,

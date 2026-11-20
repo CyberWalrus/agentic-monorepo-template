@@ -141,3 +141,19 @@ export function resolveServerStorage(
   }
   return { kind: 'postgres', connectionString: env.databaseUrl };
 }
+
+/**
+ * Дубль-проверка «тестовый API запрещён в production» (c1.7, defence in
+ * depth). Первый рубеж — superRefine схемы в loadServerEnv: отклоняет
+ * комбинацию переменных при старте server.ts. Этот рубеж зовёт createApp:
+ * другой вход, поднимающий приложение мимо loadServerEnv, не сумеет включить
+ * /__test__/* в production. Чтение process.env остаётся в env-модуле (C3.0);
+ * NODE_ENV здесь сырой — до валидации схемой значение может быть любым строкой,
+ * запрет исполняет точное совпадение с 'production', как и superRefine.
+ * Сообщение — то же, что у первого рубежа: один запрет — один текст.
+ */
+export function assertTestApiNotInProduction(enableTestApi: boolean): void {
+  if (enableTestApi && process.env['NODE_ENV'] === 'production') {
+    throw new Error('ENABLE_TEST_API must never be set in production');
+  }
+}

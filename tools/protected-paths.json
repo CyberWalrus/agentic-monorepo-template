@@ -31,6 +31,8 @@
     "tools/check-docs.ts",
     "tools/check-env-example.ts",
     "tools/check-env-usage.ts",
+    "tools/check-flaky-rate.ts",
+    "tools/flaky-quarantine.json",
     "tools/check-gate-approval.ts",
     "tools/check-perf-trend.main.ts",
     "tools/check-perf-trend.ts",
