@@ -17,7 +17,7 @@ Merge queue, если доступна на вашем тарифе, стоит 
 - **с очередью** — очередь сама тестирует PR на смёрженном состоянии; флаг строгой базы можно выключить (лишнее обновление ветки перед каждым merge — только лишние прогоны);
 - **без очереди** (шаблон по умолчанию) — строгая база обязательна: без неё PR проверяется на своей базе, и красный `main` увидит только CI после слияния.
 
-Цена строгой базы без очереди: перед merge ветку нужно обновить до `main` (`gh pr update-branch`, для неё включён repo-setting «Allow updating pull request branches», или merge `main` в ветку), и `gate` прогонится заново. Обновление ветки — это push: по правилам ruleset сбрасываются апрув и, для изменений гейтов, label `gate-change-approved` — нужен повторный приём человеком. Условие пересмотра — задача [A9](../backlog/done/a9.md): обновления, повторные прогоны и переапрувы отнимают у приёмки больше 30 минут в день три дня подряд — тогда merge queue (смена тарифа) или тревога по красному `main` как временная мера.
+Цена строгой базы без очереди: перед merge ветку нужно обновить до `main` (`gh pr update-branch`, для неё включён repo-setting «Allow updating pull request branches», или merge `main` в ветку), и `gate` прогонится заново. Обновление ветки — это push: по правилам ruleset сбрасываются апрув и, для изменений гейтов, label `gate-change-approved` — нужен повторный приём человеком. Условие пересмотра — задача A9 доски шаблона: обновления, повторные прогоны и переапрувы отнимают у приёмки больше 30 минут в день три дня подряд — тогда merge queue (смена тарифа) или тревога по красному `main` как временная мера.
 
 Там же в настройках репозитория (Settings → General → Pull Requests) включите **Automatically delete head branches** (A9): head-ветки смерженных PR удаляются из origin автоматически — чистый origin и поиск по веткам; расчёт статусов доски это не задевает (он читает только локальные ветки). Настройка действует только на будущие merge: существующие лишние ветки удаляются разово вручную (`git branch -r | grep -v main` на момент применения — 2026-11-17 их 14).
 
@@ -38,8 +38,8 @@ gh label create nightly-failure --color D93F0B --description "Nightly checks fai
 
 GitHub с 2026-12-02 блокирует `pull_request_target` в публичных репозиториях без явной политики. Создайте (Settings → Actions → Policies):
 
-- таргет: только `.github/workflows/gate-integrity.yml`;
-- Restrict events → allowed: `pull_request_target`, `merge_group`.
+- таргет: `.github/workflows/gate-integrity.yml` и `.github/workflows/visual-approve.yml` ([ADR 0015](adr/0015-visual-baselines-approval.md), b3.1 — добавляет человек после мёржа);
+- Restrict events → allowed: `pull_request_target`, `merge_group`, `issue_comment`.
 
 Любое расширение триггеров этого workflow — через правку политики тем же процессом, что и правка гейтов ([ADR 0002](adr/0002-gate-integrity.md)).
 

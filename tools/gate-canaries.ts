@@ -558,6 +558,99 @@ export const CANARIES: GateCanary[] = [
       writeFileSync(path, stripped);
     },
   },
+  {
+    // Канарейка копии шаблона (d8.3): раннер живёт в хвосте скрипта canaries,
+    // а не в этой таблице — он позитивная проверка (копия собирается и зелёная),
+    // а не негативный контроль шага verify; без copier он уходит в громкий skip
+    // (З5-исключение: PyPI вне allowlist песочницы, ADR 0004). Плохое изменение —
+    // отвязать раннер от pnpm canaries: wiring-тест в tools/test/template-copy
+    // краснеет, шаг test:hooks с ним падает. Якорь — заголовок wiring-теста
+    // (хвост вывода режет текст ассерта).
+    name: 'канарейка копии отвязана от canaries',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /канарейка копии/,
+    apply: (root) => {
+      const path = join(root, 'package.json');
+      const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      if (!isRecord(parsed)) {
+        throw new Error('canary anchor not found: package.json is not an object');
+      }
+      const scripts = parsed['scripts'];
+      if (!isRecord(scripts) || typeof scripts['canaries'] !== 'string') {
+        throw new Error('canary anchor not found: no canaries script');
+      }
+      const stripped = scripts['canaries'].replace(
+        ' && node tools/run-template-copy-canary.ts',
+        '',
+      );
+      if (stripped === scripts['canaries']) {
+        throw new Error('canary anchor not found: canaries script has no copy canary');
+      }
+      scripts['canaries'] = stripped;
+      writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
+    },
+  },
+  {
+    // Одобрение визуальных базлайнов (b3.1, ADR 0015): доверенный workflow
+    // visual-approve обязан валидировать команду мейнтейнера чекером
+    // tools/check-visual-approval.ts (автор из CODEOWNERS + SHA + свежесть).
+    // Плохое изменение — срыв привязки (вызов чекера удалён из workflow):
+    // команда одобрялась бы без проверки автора/SHA, а wiring-тест в
+    // tools/test/visual-approval краснеет. Проводка живёт в test:hooks:
+    // issue_comment workflow исполняется только на main и не является шагом
+    // verify. Якорь — заголовок wiring-блока.
+    name: 'одобрение базлайнов отвязано от чекера',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /проводка: визуальное одобрение в доверенном workflow и CI/,
+    apply: (root) => {
+      const path = join(root, '.github/workflows/visual-approve.yml');
+      const source = readFileSync(path, 'utf8');
+      const stripped = source.replace(
+        '\n' +
+          '      - name: Validate approve-visual command\n' +
+          '        id: approval\n' +
+          "        if: success() && steps.facts.outputs.approved != 'false'\n" +
+          '        run: |\n' +
+          '          node tools/check-visual-approval.ts comment.json pr.json pushed-check-runs.json .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS\n',
+        '\n',
+      );
+      if (stripped === source) {
+        throw new Error('canary anchor not found: visual-approve.yml has no approval validator');
+      }
+      writeFileSync(path, stripped);
+    },
+  },
+  {
+    // Классы защиты tools/ (ADR 0014, e9): шаг verify → pnpm tool-class:check.
+    // Плохое изменение — срыв проводки script→гейт (tool-class:check удалён из
+    // package.json): шаг verify ломается, замыкание tools/ перестаёт
+    // проверяться, wiring-тест в tools/test/check-tool-class краснеет.
+    // Проводка живёт в test:hooks по образцу B4.1: логика чекера канареечится
+    // фикстурами того же файла, здесь — только её подключение. Срывается
+    // именно скрипт, а не шаг verify-steps: удаление шага роняет соседние
+    // инвариант-тесты (verify-budgets, gates-canary), их шум вытесняет якорь
+    // из 60-строчного хвоста отчёта — канарейка не засчитывается (наблюдение
+    // первого прогона e9).
+    name: 'tool-class:check отвязан от package.json',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /проводка: шаг tool-class в verify/,
+    apply: (root) => {
+      const path = join(root, 'package.json');
+      const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      if (!isRecord(parsed) || !isRecord(parsed['scripts'])) {
+        throw new Error('canary anchor not found: package.json scripts');
+      }
+      const scripts = parsed['scripts'];
+      if (scripts['tool-class:check'] !== 'node tools/check-tool-class.ts') {
+        throw new Error('canary anchor not found: no tool-class:check script');
+      }
+      delete scripts['tool-class:check'];
+      writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
+    },
+  },
 ];
 // Вывод портов (З9, A5 PR-3) канарейки шага не имеет: рантайм читает записанный
 // reports/ports.json (read-first — иначе зонд после старта серверов уезжал на

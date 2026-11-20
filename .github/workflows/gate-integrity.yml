@@ -85,10 +85,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels,headRefOid,pushedAt > pr.json
+          gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels,headRefOid > pr.json
+          HEAD_SHA=$(jq -r .headRefOid pr.json)
           gh api --paginate "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" > files.json
-          HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json headRefOid --jq .headRefOid)
           gh api "repos/${{ github.repository }}/commits/$HEAD_SHA" > head-commit.json
+          # pushedAt gh pr view не отдаёт (Unknown JSON field, поймано на #65):
+          # время последнего push — самое раннее started_at check-run'а на
+          # head-коммите; ставит его GitHub, автор подделать не может.
+          # Нет ни одного check-run — fail-closed (ремонт: перезапуск job).
+          gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > pushed-check-runs.json
+          PUSHED_AT=$(jq -r '[.check_runs[].started_at] | min // empty' pushed-check-runs.json)
+          if [ -z "$PUSHED_AT" ]; then
+            echo "check-run'ов на $HEAD_SHA нет — время последнего push не вычислить" >&2
+            exit 1
+          fi
+          jq --arg pushedAt "$PUSHED_AT" '.pushedAt = $pushedAt' pr.json > pr.json.tmp && mv pr.json.tmp pr.json
           # Лента событий отстаёт от свежепоставленного label (eventual consistency):
           # опрашиваем до минуты, иначе сценарий «поставили label — перезапустился run»
           # ловит пустую ленту и честно отказывает в одобрении.
@@ -152,9 +163,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels,headRefOid,pushedAt > pr.json
-          HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json headRefOid --jq .headRefOid)
+          gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels,headRefOid > pr.json
+          HEAD_SHA=$(jq -r .headRefOid pr.json)
           gh api "repos/${{ github.repository }}/commits/$HEAD_SHA" > head-commit.json
+          # pushedAt gh pr view не отдаёт (Unknown JSON field, поймано на #65):
+          # время последнего push — самое раннее started_at check-run'а на
+          # head-коммите; ставит его GitHub, автор подделать не может.
+          # Нет ни одного check-run — fail-closed (ремонт: перезапуск job).
+          gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > pushed-check-runs.json
+          PUSHED_AT=$(jq -r '[.check_runs[].started_at] | min // empty' pushed-check-runs.json)
+          if [ -z "$PUSHED_AT" ]; then
+            echo "check-run'ов на $HEAD_SHA нет — время последнего push не вычислить" >&2
+            exit 1
+          fi
+          jq --arg pushedAt "$PUSHED_AT" '.pushedAt = $pushedAt' pr.json > pr.json.tmp && mv pr.json.tmp pr.json
           # Лента событий отстаёт от свежепоставленного label (eventual consistency):
           # опрашиваем до минуты, иначе сценарий «поставили label — перезапустился run»
           # ловит пустую ленту и честно отказывает в одобрении.

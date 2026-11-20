@@ -9,6 +9,11 @@ on:
   merge_group:
   push:
     branches: [main]
+  # b3.1 (ADR 0015): push базлайнов доверенным workflow сделан GITHUB_TOKEN,
+  # события он не рождает — CI на новый head SHA запускает visual-approve
+  # диспатчем с ref ветки PR. Определение ci.yml при диспатче берётся из ветки,
+  # как и при pull_request same-repo (merge-ref) — уровень доверия тот же.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -57,6 +62,8 @@ jobs:
       # пишет job unit): корневые хуки не остаются без проверки числа тестов.
       - run: pnpm test:count
       - run: pnpm sandbox:check
+      # Классы защиты tools/ (ADR 0014): замыкание == deny protected-paths.json.
+      - run: pnpm tool-class:check
       - run: pnpm docs:check
       - run: pnpm --filter @repo/contracts openapi:check
       - name: duration to summary
@@ -175,13 +182,29 @@ jobs:
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup
-      - run: bash tools/visual-inner.sh
-        env: { CI: 'true' }
+      # Две фазы (b3.1, ADR 0015): обычный прогон (дифф = красный job и отчёт),
+      # затем перезапись только разошедшихся базлайнов и сборка артефакта
+      # visual-actuals для одобрения командой /approve-visual.
+      - run: bash tools/visual-ci.sh
+        env:
+          CI: 'true'
+          # head SHA PR (не merge-ref): манифест артефакта сверяется с ним в
+          # visual-approve (b3.1, ADR 0015); на workflow_dispatch пусто —
+          # повторный прогон идёт уже по исправленному дереву.
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: visual-actuals
+          path: visual-actuals/
+          if-no-files-found: ignore
+          retention-days: 30
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: visual-report
           path: |
+            visual-diff/
             e2e/playwright-report/
             e2e/test-results/
             packages/ui/.vitest/

@@ -23,7 +23,8 @@
     "visual": "tools/visual.sh",
     "visual:update": "VISUAL_UPDATE=1 tools/visual.sh",
     "verify": "node tools/verify.ts",
-    "canaries": "node tools/run-gate-canaries.ts",
+    "canaries": "node tools/run-gate-canaries.ts && node tools/run-template-copy-canary.ts",
+    "evals": "node tools/evals/run.ts",
     "typecheck:tools": "tsc -p tsconfig.json",
     "test:integrity": "node tools/check-test-integrity.ts",
     "test:hooks": "vitest run --reporter=json --reporter=default --outputFile=reports/vitest-hooks.json",
@@ -31,6 +32,7 @@
     "test:count": "node tools/check-test-count.ts",
     "test:count:update": "node tools/check-test-count.ts --update",
     "sandbox:check": "node tools/check-sandbox-paths.ts",
+    "tool-class:check": "node tools/check-tool-class.ts",
     "docs:check": "node tools/check-docs.ts",
     "visual-image:check": "node tools/check-visual-image.ts",
     "backlog": "node tools/backlog.ts"
