@@ -8,6 +8,9 @@
  * модуля: правка классов посреди 90-минутного прогона на замер не влияет —
  * это осознанная фиксация, а не race (находка ревью плана C9.2).
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { protectionOf } from '../protected-paths.ts';
 import { runProcess } from './exec.ts';
 
@@ -26,13 +29,31 @@ async function git(worktree: string, args: string[]): Promise<string> {
   return run.stdout;
 }
 
-/** Снимок всего дерева worktree (включая untracked) в git-объект; возвращает хеш дерева. */
+/** Снимок дерева worktree в git-объект; возвращает хеш дерева.
+ * Deny-пути добавляются force: gitignored файлы (.claude/settings.local.json
+ * и др.) не могут спрятать ослабление в ignore (находка security-ревью C9.2).
+ * Force — только по pathspec deny-глобов из tools/protected-paths.json:
+ * полный `add -A --force` стейджит node_modules и вешает pre-commit-хуки на
+ * сотни тысяч файлов (урок прогона 2026-11-20T07:38). */
 export async function snapshotTree(worktree: string): Promise<string> {
-  // --force: gitignored deny-пути (.claude/settings.local.json и др.) тоже
-  // входят в дерево — агент не может спрятать ослабление в ignore (находка
-  // security-ревью C9.2).
-  await git(worktree, ['add', '-A', '--force']);
+  await git(worktree, ['add', '-A']);
+  const denyGlobs = denyGlobsOf(worktree);
+  if (denyGlobs.length > 0) {
+    await git(worktree, ['add', '-A', '--force', '--', ...denyGlobs]);
+  }
   return (await git(worktree, ['write-tree'])).trim();
+}
+
+/** Deny-глобы из конфига worktree (та же база baseSha, что и сам замер). */
+function denyGlobsOf(worktree: string): string[] {
+  try {
+    const config = JSON.parse(readFileSync(join(worktree, 'tools/protected-paths.json'), 'utf8'));
+    return typeof config?.deny === 'object' && Array.isArray(config.deny) ? config.deny : [];
+  } catch {
+    // Конфиг не читается — force-фаза пропускается, обычный add -A работает;
+    // matcher классов (protectionOf) при этом продолжает защищать детект.
+    return [];
+  }
 }
 
 /**
