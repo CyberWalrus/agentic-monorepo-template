@@ -165,13 +165,18 @@ describe('gen feature', () => {
     expect(run.status).toBe(0);
     const page = read(root, 'apps/web/src/features/todo-lists/TodoListsPage.tsx');
     expect(page).toContain('<h1>TodoLists</h1>');
-    expect(page).toContain('export function TodoListsPage');
+    expect(page).toContain('export function TodoListsPage({ todoLists, onCreate }');
     expect(read(root, 'apps/web/src/features/todo-lists/use-todo-lists.ts')).toContain(
       'export const todoListsListQuery = orpc.todoLists.list.queryOptions();',
     );
     expect(read(root, 'apps/api/src/authorization.ts')).toContain(
       '  todoLists: TodoListRepository;',
     );
+    expect(read(root, 'apps/api/src/todo-lists/repository.test.ts')).toContain(
+      'const todoList = await repository.create',
+    );
+    // kebab остаётся в путях и текстах, но не в идентификаторах кода
+    expect(page).not.toMatch(/const todo-lists|todoLists: TodoList\b/);
   });
 
   it('generates a second feature next to the first one', () => {

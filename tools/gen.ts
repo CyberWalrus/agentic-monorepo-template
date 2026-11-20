@@ -29,6 +29,13 @@ import { pathToFileURL } from 'node:url';
 
 const capitalize = (part: string): string => part.charAt(0).toUpperCase() + part.slice(1);
 
+/** camelCase из kebab: первая часть строчная, остальные с заглавной (todo-lists → todoLists). */
+const camelOf = (kebab: string): string =>
+  kebab
+    .split('-')
+    .map((part, index) => (index === 0 ? part : capitalize(part)))
+    .join('');
+
 /** Имя фичи во всех формах, которые нужны шаблонам и проводке. */
 interface FeatureNames {
   /** kebab-case как ввели: каталоги, путь контракта, каталог E2E (todo-lists). */
@@ -37,8 +44,10 @@ interface FeatureNames {
   camel: string;
   /** PascalCase коллекции: компоненты, заголовок экрана (TodoLists). */
   pascal: string;
-  /** Сущность в kebab — имя без хвостовой 's' (todo-list). */
+  /** Сущность в kebab — имя без хвостовой 's' (todo-list); только пути и тексты. */
   entity: string;
+  /** camelCase сущности — безопасный идентификатор переменных (todoList). */
+  entityCamel: string;
   /** PascalCase сущности: тип, репозиторий, форма (TodoList). */
   entityPascal: string;
   /** CONSTANT_CASE сущности: константа лимита заголовка (TODO_LIST). */
@@ -60,17 +69,13 @@ function parseFeatureName(raw: string): FeatureNames {
   if (entity.length === 0) {
     throw new Error(`Имя фичи «${name}» не подходит: сущность после отрезания 's' пустая.`);
   }
-  const camel = name
-    .split('-')
-    .map((part, index) => (index === 0 ? part : capitalize(part)))
-    .join('');
-  const entityPascal = entity.split('-').map(capitalize).join('');
   return {
     name,
-    camel,
+    camel: camelOf(name),
     pascal: name.split('-').map(capitalize).join(''),
     entity,
-    entityPascal,
+    entityCamel: camelOf(entity),
+    entityPascal: entity.split('-').map(capitalize).join(''),
     entityConst: entity.replaceAll('-', '_').toUpperCase(),
   };
 }
@@ -184,7 +189,7 @@ export interface ${E}Repository {
   list(): Promise<${E}[]>;
   create(title: string): Promise<${E}>;
   /** Заменяет всё хранилище: сидирование тестовых данных. */
-  reset(${f.name}: readonly ${E}[]): Promise<void>;
+  reset(${f.camel}: readonly ${E}[]): Promise<void>;
 }
 
 /**
@@ -193,7 +198,7 @@ export interface ${E}Repository {
  * интерфейсом (образец: tasks/database.ts и tasks/postgres-repository.ts).
  */
 export class InMemory${E}Repository implements ${E}Repository {
-  readonly #${f.name} = new Map<string, ${E}>();
+  readonly #${f.camel} = new Map<string, ${E}>();
   readonly #now: () => Date;
   readonly #generateId: () => string;
 
@@ -209,24 +214,24 @@ export class InMemory${E}Repository implements ${E}Repository {
   }
 
   async list(): Promise<${E}[]> {
-    const ${f.name} = [...this.#${f.name}.values()];
-    return ${f.name}.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const ${f.camel} = [...this.#${f.camel}.values()];
+    return ${f.camel}.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   async create(title: string): Promise<${E}> {
-    const ${f.entity}: ${E} = {
+    const ${f.entityCamel}: ${E} = {
       id: this.#generateId(),
       title,
       createdAt: this.#now().toISOString(),
     };
-    this.#${f.name}.set(${f.entity}.id, ${f.entity});
-    return ${f.entity};
+    this.#${f.camel}.set(${f.entityCamel}.id, ${f.entityCamel});
+    return ${f.entityCamel};
   }
 
-  async reset(${f.name}: readonly ${E}[]): Promise<void> {
-    this.#${f.name}.clear();
-    for (const ${f.entity} of ${f.name}) {
-      this.#${f.name}.set(${f.entity}.id, ${f.entity});
+  async reset(${f.camel}: readonly ${E}[]): Promise<void> {
+    this.#${f.camel}.clear();
+    for (const ${f.entityCamel} of ${f.camel}) {
+      this.#${f.camel}.set(${f.entityCamel}.id, ${f.entityCamel});
     }
   }
 }
@@ -252,9 +257,9 @@ describe('InMemory${E}Repository', () => {
   it('creates a ${f.entity} with the injected id generator and clock', async () => {
     const repository = createRepository();
 
-    const ${f.entity} = await repository.create('Write tests');
+    const ${f.entityCamel} = await repository.create('Write tests');
 
-    expect(${f.entity}).toEqual({
+    expect(${f.entityCamel}).toEqual({
       id: '00000000-0000-4000-8000-000000000001',
       title: 'Write tests',
       createdAt: '2026-11-01T10:00:00.000Z',
@@ -267,7 +272,7 @@ describe('InMemory${E}Repository', () => {
     await repository.create('second');
     await repository.create('third');
 
-    const titles = (await repository.list()).map((${f.entity}) => ${f.entity}.title);
+    const titles = (await repository.list()).map((${f.entityCamel}) => ${f.entityCamel}.title);
 
     expect(titles).toEqual(['third', 'second', 'first']);
   });
@@ -340,11 +345,11 @@ import { Create${E}Form } from './Create${E}Form.tsx';
  * же появляется состояние загрузки.
  */
 export interface ${f.pascal}PageProps {
-  ${f.name}: readonly ${E}[];
+  ${f.camel}: readonly ${E}[];
   onCreate: (title: string) => Promise<void>;
 }
 
-export function ${f.pascal}Page({ ${f.name}: ${f.entity}s, onCreate }: ${f.pascal}PageProps) {
+export function ${f.pascal}Page({ ${f.camel}, onCreate }: ${f.pascal}PageProps) {
   const [error, setError] = useState<string | null>(null);
   // До гидратации клик по SSR-разметке теряется: React вернёт серверное состояние.
   const interactive = useHydrated();
@@ -359,12 +364,12 @@ export function ${f.pascal}Page({ ${f.name}: ${f.entity}s, onCreate }: ${f.pasca
       <h1>${f.pascal}</h1>
       <Create${E}Form onCreate={handleCreate} disabled={!interactive} />
       {error ? <p role="alert">{error}</p> : null}
-      {${f.entity}s.length === 0 ? (
+      {${f.camel}.length === 0 ? (
         <p>Nothing here yet. Add your first ${f.entity} above.</p>
       ) : (
         <ul aria-label="${f.pascal}">
-          {${f.entity}s.map((${f.entity}) => (
-            <li key={${f.entity}.id}>{${f.entity}.title}</li>
+          {${f.camel}.map((${f.entityCamel}) => (
+            <li key={${f.entityCamel}.id}>{${f.entityCamel}.title}</li>
           ))}
         </ul>
       )}
@@ -382,7 +387,7 @@ import { render } from 'vitest-browser-react';
 
 import { ${f.pascal}Page } from './${f.pascal}Page.tsx';
 
-const ${f.name}: ${E}[] = [
+const ${f.camel}: ${E}[] = [
   {
     id: '00000000-0000-4000-8000-000000000001',
     title: 'Buy milk',
@@ -392,14 +397,16 @@ const ${f.name}: ${E}[] = [
 
 describe('${f.pascal}Page', () => {
   it('shows the empty state when there are no ${f.name}', async () => {
-    const screen = await render(<${f.pascal}Page ${f.name}={[]} onCreate={async () => {}} />);
+    const screen = await render(<${f.pascal}Page ${f.camel}={[]} onCreate={async () => {}} />);
 
     await expect.element(screen.getByText(/Nothing here yet/)).toBeVisible();
     await expect.element(screen.getByRole('heading', { name: '${f.pascal}' })).toBeVisible();
   });
 
   it('renders ${f.name} as a labelled list', async () => {
-    const screen = await render(<${f.pascal}Page ${f.name}={${f.name}} onCreate={async () => {}} />);
+    const screen = await render(
+      <${f.pascal}Page ${f.camel}={${f.camel}} onCreate={async () => {}} />,
+    );
 
     await expect.element(screen.getByRole('list', { name: '${f.pascal}' })).toBeVisible();
     await expect.element(screen.getByText('Buy milk')).toBeVisible();
@@ -407,7 +414,7 @@ describe('${f.pascal}Page', () => {
 
   it('passes the typed title to onCreate', async () => {
     const onCreate = vi.fn<(title: string) => Promise<void>>(async () => {});
-    const screen = await render(<${f.pascal}Page ${f.name}={${f.name}} onCreate={onCreate} />);
+    const screen = await render(<${f.pascal}Page ${f.camel}={${f.camel}} onCreate={onCreate} />);
 
     await screen.getByLabel('New ${f.entity}').fill('  Ship it  ');
     await screen.getByRole('button', { name: 'Add ${f.entity}' }).click();
@@ -419,7 +426,7 @@ describe('${f.pascal}Page', () => {
     const onCreate = vi.fn<(title: string) => Promise<void>>(async () => {
       throw new Error('boom');
     });
-    const screen = await render(<${f.pascal}Page ${f.name}={${f.name}} onCreate={onCreate} />);
+    const screen = await render(<${f.pascal}Page ${f.camel}={${f.camel}} onCreate={onCreate} />);
 
     await screen.getByLabel('New ${f.entity}').fill('Buy milk');
     await screen.getByRole('button', { name: 'Add ${f.entity}' }).click();
@@ -643,10 +650,10 @@ const seeded: ${E} = {
 };
 
 function ${f.pascal}Screen() {
-  const ${f.name} = use${f.pascal}();
+  const ${f.camel} = use${f.pascal}();
   const onCreate = useCreate${E}();
 
-  return <${f.pascal}Page ${f.name}={${f.name}} onCreate={onCreate} />;
+  return <${f.pascal}Page ${f.camel}={${f.camel}} onCreate={onCreate} />;
 }
 
 function renderScreen(client: QueryClient) {
@@ -703,8 +710,8 @@ test.describe('${f.name} contract', () => {
 
     const list = await request.get(\`\${API_URL}/api/${f.name}\`);
     expect(list.status(), 'list through the OpenAPI transport').toBe(200);
-    const ${f.name} = (await list.json()) as Array<{ title: string }>;
-    expect(${f.name}.map((${f.entity}) => ${f.entity}.title)).toContain(title);
+    const ${f.camel} = (await list.json()) as Array<{ title: string }>;
+    expect(${f.camel}.map((${f.entityCamel}) => ${f.entityCamel}.title)).toContain(title);
   });
 
   test('title empty after trim is rejected [AC-2]', async ({ request }) => {
