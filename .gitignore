@@ -25,6 +25,9 @@ dist
 coverage
 .vitest/
 test-results/
+# Артефакты канарейки отчётного контура (C4): отдельный outputDir, чтобы старт
+# подпроцесса не чистил артефакты идущего основного прогона.
+test-results-canary/
 playwright-report/
 blob-report/
 reports/

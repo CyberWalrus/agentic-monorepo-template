@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { loadServerEnv, resolveServerStorage } from './server-config.ts';
+import {
+  assertTestApiNotInProduction,
+  loadServerEnv,
+  resolveServerStorage,
+} from './server-config.ts';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -218,5 +222,34 @@ describe('resolveServerStorage', () => {
         testApiWithDatabase: true,
       }),
     ).toEqual({ kind: 'postgres', connectionString: 'postgres://localhost:5432/demo' });
+  });
+});
+
+describe('assertTestApiNotInProduction', () => {
+  // Второй рубеж запрета (c1.7): createApp зовёт его для входов мимо
+  // loadServerEnv. Читает живой process.env — заглушка вместо источника.
+  it('throws in production, with the same message as the schema guard', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+
+    expect(() => assertTestApiNotInProduction(true)).toThrow(
+      'ENABLE_TEST_API must never be set in production',
+    );
+  });
+
+  it('allows the test API outside production and when not enabled', () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    expect(() => assertTestApiNotInProduction(true)).not.toThrow();
+
+    vi.stubEnv('NODE_ENV', 'test');
+    expect(() => assertTestApiNotInProduction(true)).not.toThrow();
+
+    vi.stubEnv('NODE_ENV', 'production');
+    expect(() => assertTestApiNotInProduction(false)).not.toThrow();
+  });
+
+  it('treats an unset NODE_ENV as not production', () => {
+    vi.stubEnv('NODE_ENV', undefined);
+
+    expect(() => assertTestApiNotInProduction(true)).not.toThrow();
   });
 });

@@ -23,13 +23,33 @@ export interface TaskDatabase {
 }
 
 /**
+ * Таймауты пула (c1.7, аудит обвязки): каждый закрывает свой класс зависания.
+ * `max` — ёмкость объявлена явно, а не дефолтом библиотеки;
+ * `connectionTimeoutMillis` — исчерпанный пул отвечает ошибкой, а не подвешивает
+ * запрос навсегда; `idleTimeoutMillis` — простаивающие соединения закрываются;
+ * `statement_timeout` — зависший запрос снимает сама СУБД, соединение
+ * освобождается. Значения — константы кода, а не env-ручки: потолок — свойство
+ * контракта, а не настройка развёртывания (тот же принцип, что для bodyLimit
+ * в c1.7). Условие возврата: реальному потребителю понадобится другой потолок —
+ * заводим переменную окружения с валидацией в server-config.ts.
+ * HTTP-таймаут запроса (app.ts) больше statement_timeout: медленная СУБД
+ * сначала отвечает ошибкой через oRPC, 504 остаётся зависаниям вне БД.
+ */
+export const TASK_POOL_OPTIONS = {
+  max: 10,
+  connectionTimeoutMillis: 5_000,
+  idleTimeoutMillis: 30_000,
+  statement_timeout: 15_000,
+} as const;
+
+/**
  * Пул подключений + drizzle поверх него. Вызывающий закрывает через `close()`.
  * Строку подключения задаёт DATABASE_URL (server.ts) или контейнер теста.
  * Опция `{ schema }` не нужна: репозиторий обращается к таблицам через
  * явный `schema.tasks`, а не через relational `db.query`.
  */
 export async function connectTaskDatabase(connectionString: string): Promise<TaskDatabase> {
-  const pool = new Pool({ connectionString });
+  const pool = new Pool({ connectionString, ...TASK_POOL_OPTIONS });
   const db = drizzle(pool);
   return { db, close: () => pool.end() };
 }
