@@ -71,6 +71,48 @@ export const CANARIES: GateCanary[] = [
       ),
   },
   {
+    // e15: devDependency в production-entry (server.ts — корень пакета,
+    // слот TanStack ADR 0012): гейт раньше не покрывал корень пакета.
+    name: 'dev-dep в production-entry',
+    steps: 'boundaries',
+    failedStep: 'boundaries',
+    expect: /not-to-dev-dep/,
+    apply: (root) => {
+      const path = join(root, 'apps', 'web', 'server.ts');
+      const source = readFileSync(path, 'utf8');
+      if (!source.includes('createServer') && !source.includes('serve')) {
+        throw new Error('canary anchor not found: apps/web/server.ts');
+      }
+      writeFileSync(path, `${source}\nimport 'vitest/config';\n`);
+    },
+  },
+  {
+    // e15: общий слой web не импортирует фичи (lib — дно зависимостей).
+    name: 'lib импортирует фичу',
+    steps: 'boundaries',
+    failedStep: 'boundaries',
+    expect: /web-lib-not-to-features/,
+    apply: (root) =>
+      write(
+        root,
+        'apps/web/src/lib/evil-feature-probe.ts',
+        "import '../features/tasks/task-cache.ts';\n\nexport const evil = () => 0;\n",
+      ),
+  },
+  {
+    // e15: домен не знает пограничные адаптеры транспорта (authorization и др.).
+    name: 'домен импортирует адаптер транспорта',
+    steps: 'boundaries',
+    failedStep: 'boundaries',
+    expect: /api-domain-independent-of-transport/,
+    apply: (root) =>
+      write(
+        root,
+        'apps/api/src/tasks/evil-transport-probe.ts',
+        "import '../authorization.ts';\n\nexport const evil = () => 0;\n",
+      ),
+  },
+  {
     name: 'межфичевый импорт',
     steps: 'boundaries',
     failedStep: 'boundaries',

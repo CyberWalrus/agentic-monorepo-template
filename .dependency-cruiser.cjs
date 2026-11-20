@@ -71,9 +71,20 @@ module.exports = {
     {
       name: 'api-domain-independent-of-transport',
       severity: 'error',
-      comment: 'Доменные модули API не зависят от HTTP-слоя (app.ts, router.ts, server.ts).',
+      comment:
+        'Доменные модули API не зависят от HTTP-слоя (app.ts, router.ts, server.ts) и от пограничных адаптеров поверх него (authorization.ts, observability.ts, server-config.ts) — иначе домен протягивает транспорт мимо гейта (e15).',
       from: { path: '^apps/api/src/[^/]+/' },
-      to: { path: '^apps/api/src/(app|router|server)\\.ts$' },
+      to: {
+        path: '^apps/api/src/(app|router|server|authorization|observability|server-config)\\.ts$',
+      },
+    },
+    {
+      name: 'web-lib-not-to-features',
+      severity: 'error',
+      comment:
+        'Общий слой web — дно зависимостей: src/lib не импортирует фичи (обратное правило — no-cross-feature-imports; e15).',
+      from: { path: '^apps/web/src/lib/' },
+      to: { path: '^apps/web/src/features/' },
     },
     {
       name: 'no-deep-package-imports',
@@ -86,9 +97,10 @@ module.exports = {
     {
       name: 'not-to-dev-dep',
       severity: 'error',
-      comment: 'Production-код не должен зависеть от devDependencies.',
+      comment:
+        'Production-код не должен зависеть от devDependencies — включая production-entry apps/*/server.ts в корне пакета (слот TanStack, ADR 0012; pnpm deploy --prod прунит devDeps; e15).',
       from: {
-        path: '^(apps|packages)/[^/]+/src/',
+        path: '^(apps|packages)/[^/]+/(src/|server\\.ts$)',
         pathNot: '\\.(test|visual\\.test)\\.tsx?$',
       },
       to: { dependencyTypes: ['npm-dev'], dependencyTypesNot: ['type-only'] },
