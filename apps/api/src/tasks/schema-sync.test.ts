@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -25,8 +26,15 @@ const wideTable = pgTable('fake', {
   title: text('title').notNull(),
   note: text('note'),
 });
+const extraWideTable = pgTable('fake', {
+  id: uuid('id').primaryKey(),
+  title: text('title').notNull(),
+  note: text('note'),
+  level: text('level'),
+});
 const narrowModule = { narrowTable };
 const wideModule = { wideTable };
+const extraWideModule = { extraWideTable };
 
 const ZERO_ID = '00000000-0000-0000-0000-000000000000';
 const ID0 = '11111111-1111-4111-8111-111111111111';
@@ -46,6 +54,15 @@ afterEach(() => {
 function snapshotText(schemaModule: Record<string, unknown>, id: string, prevId: string): string {
   const content = generateDrizzleJson(schemaModule);
   return JSON.stringify({ ...content, id, prevId }, null, 2);
+}
+
+/** JSON с обратным порядком ключей верхнего уровня: сравнение не должно зависеть от порядка. */
+function reversedKeys(jsonText: string): string {
+  const parsed: unknown = JSON.parse(jsonText);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('фикстура ждёт JSON-объект');
+  }
+  return JSON.stringify(Object.fromEntries(Object.entries(parsed).toReversed()));
 }
 
 interface FixtureEntry {
@@ -181,6 +198,38 @@ describe('collectSchemaSyncReport', () => {
     ]);
   });
 
+  it('снапшоты, различающиеся значением поля, — не data-only', async () => {
+    // Содержимое меняется (пометка перезаписана): сравнение обязано увидеть
+    // различие примитивов и не выдать предупреждение.
+    const marked = (marker: string, id: string, prevId: string): string =>
+      JSON.stringify({ ...JSON.parse(snapshotText(narrowModule, id, prevId)), c13_marker: marker });
+    writeCatalog([
+      { idx: 0, tag: '0000_init', snapshot: marked('до', ID0, ZERO_ID) },
+      { idx: 1, tag: '0001_touch', snapshot: marked('после', ID1, ID0) },
+    ]);
+
+    const report = await reportFor(narrowModule);
+
+    expect(report.warnings).toEqual([]);
+    expect(report.errors).toEqual([]);
+  });
+
+  it('порядок ключей снапшота не влияет на data-only сравнение', async () => {
+    writeCatalog([
+      { idx: 0, tag: '0000_init', snapshot: snapshotText(narrowModule, ID0, ZERO_ID) },
+      {
+        idx: 1,
+        tag: '0001_backfill',
+        snapshot: reversedKeys(snapshotText(narrowModule, ID1, ID0)),
+      },
+    ]);
+
+    const report = await reportFor(narrowModule);
+
+    expect(report.errors).toEqual([]);
+    expect(report.warnings).toEqual([expect.stringContaining('0001_backfill не меняет схему')]);
+  });
+
   it('дыра в снапшотах не порождает data-only предупреждений через дыру', async () => {
     // Снапшот второй миграции отсутствует: гейт уже красит, и сравнение
     // третьей миграции через дыру с первой не должно добавлять ложный warning.
@@ -288,13 +337,69 @@ describe('collectSchemaSyncReport', () => {
     expect(report.errors).toEqual([expect.stringContaining('нет массива entries')]);
   });
 
-  it('нечитаемый журнал красит гейт', async () => {
+  it('журнал, равный null, красит гейт как без массива entries', async () => {
+    writeCatalog([]);
+    writeFileSync(join(catalogRoot, 'migrations', 'meta', '_journal.json'), 'null');
+
+    const report = await reportFor(narrowModule);
+
+    expect(report.errors).toEqual([expect.stringContaining('нет массива entries')]);
+  });
+
+  it('запись журнала без idx или tag красит гейт', async () => {
+    writeCatalog([]);
+    writeFileSync(
+      join(catalogRoot, 'migrations', 'meta', '_journal.json'),
+      JSON.stringify({
+        version: '7',
+        dialect: 'postgresql',
+        entries: [{ version: '7', tag: '0000_init' }],
+      }),
+    );
+
+    const report = await reportFor(narrowModule);
+
+    expect(report.errors).toEqual([
+      expect.stringContaining('запись без числового idx или строкового tag'),
+    ]);
+  });
+
+  it('запись журнала с idx, но без tag красит гейт', async () => {
+    writeCatalog([]);
+    writeFileSync(
+      join(catalogRoot, 'migrations', 'meta', '_journal.json'),
+      JSON.stringify({ version: '7', dialect: 'postgresql', entries: [{ idx: 0, version: '7' }] }),
+    );
+
+    const report = await reportFor(narrowModule);
+
+    expect(report.errors).toEqual([
+      expect.stringContaining('запись без числового idx или строкового tag'),
+    ]);
+  });
+
+  it('нечитаемый журнал красит гейт с текстом ошибки, а не молчаливым undefined', async () => {
     writeCatalog([]);
     writeFileSync(join(catalogRoot, 'migrations', 'meta', '_journal.json'), '{ неполный json');
 
     const report = await reportFor(narrowModule);
 
     expect(report.errors).toEqual([expect.stringContaining('не прочитан')]);
+    expect(report.errors[0]).not.toContain(': undefined');
+  });
+
+  it('записи журнала не в порядке сортируются перед проверкой', async () => {
+    // Журнал перечисляет миграции не по порядку: сортировка по idx обязана
+    // восстановить цепочку и оставить гейт зелёным.
+    writeCatalog([
+      { idx: 1, tag: '0001_note', snapshot: snapshotText(wideModule, ID1, ID0) },
+      { idx: 0, tag: '0000_init', snapshot: snapshotText(narrowModule, ID0, ZERO_ID) },
+    ]);
+
+    const report = await reportFor(wideModule);
+
+    expect(report.errors).toEqual([]);
+    expect(report.warnings).toEqual([]);
   });
 
   it('непоследовательные idx журнала красят гейт', async () => {
@@ -334,6 +439,49 @@ describe('collectSchemaSyncReport', () => {
     const report = await reportFor(narrowModule);
 
     expect(report.errors).toEqual([expect.stringContaining('0000_init не сверён со схемой кода')]);
+    expect(report.errors[0]).not.toContain(': undefined');
+  });
+
+  it('нечитаемый снапшот красит гейт', async () => {
+    writeCatalog([{ idx: 0, tag: '0000_init' }]);
+    writeFileSync(join(catalogRoot, 'migrations', 'meta', '0000_snapshot.json'), '{ неполный');
+
+    const report = await reportFor(narrowModule);
+
+    expect(report.errors).toEqual([expect.stringContaining('не прочитан')]);
+    expect(report.errors[0]).not.toContain(': undefined');
+  });
+
+  it('снапшот без строковых id/prevId красит гейт', async () => {
+    writeCatalog([{ idx: 0, tag: '0000_init', snapshot: JSON.stringify({ tables: {} }) }]);
+
+    const report = await reportFor(narrowModule);
+
+    expect(report.errors).toEqual([expect.stringContaining('нет строковых id/prevId')]);
+  });
+
+  it('снапшот с нестроковым id при строковом prevId красит гейт', async () => {
+    writeCatalog([
+      {
+        idx: 0,
+        tag: '0000_init',
+        snapshot: JSON.stringify({ id: 123, prevId: ZERO_ID, tables: {} }),
+      },
+    ]);
+
+    const report = await reportFor(narrowModule);
+
+    expect(report.errors).toEqual([expect.stringContaining('нет строковых id/prevId')]);
+  });
+
+  it('снапшот со строковым id и нестроковым prevId красит гейт', async () => {
+    writeCatalog([
+      { idx: 0, tag: '0000_init', snapshot: JSON.stringify({ id: ID0, prevId: 123, tables: {} }) },
+    ]);
+
+    const report = await reportFor(narrowModule);
+
+    expect(report.errors).toEqual([expect.stringContaining('нет строковых id/prevId')]);
   });
 
   it('снапшот без таблиц красит гейт объяснением', async () => {
@@ -348,6 +496,19 @@ describe('collectSchemaSyncReport', () => {
     const report = await reportFor(narrowModule);
 
     expect(report.errors).toEqual([expect.stringContaining('нет таблиц')]);
+  });
+
+  it('дифф из двух колонок перечисляет операторы через точку с запятой', async () => {
+    writeCatalog([
+      { idx: 0, tag: '0000_init', snapshot: snapshotText(narrowModule, ID0, ZERO_ID) },
+    ]);
+
+    const report = await reportFor(extraWideModule);
+
+    expect(report.errors).toEqual([expect.stringContaining('схема кода расходится с миграциями')]);
+    expect(report.errors[0]).toContain('ADD COLUMN "note"');
+    expect(report.errors[0]).toContain('ADD COLUMN "level"');
+    expect(report.errors[0]).toContain('; ALTER');
   });
 });
 
@@ -444,5 +605,19 @@ describe('isDirectInvocation', () => {
 
   it('argv1 без значения — не прямой запуск', () => {
     expect(isDirectInvocation(syntheticUrl, undefined)).toBe(false);
+  });
+});
+
+describe('schema-sync-cli как скрипт', () => {
+  const cliPath = join(dirname(fileURLToPath(import.meta.url)), 'schema-sync-cli.ts');
+
+  it('прямой запуск на реальном каталоге печатает отчёт в stdout и даёт код 0', () => {
+    const stdout = execFileSync(process.execPath, [cliPath], { encoding: 'utf8' });
+
+    expect(stdout).toContain('schema-sync: схема кода совпадает с миграциями.');
+  });
+
+  it('импорт модуля вне прямого запуска не трогает exitCode процесса', () => {
+    expect(process.exitCode).toBeUndefined();
   });
 });

@@ -58,5 +58,5 @@ export function isDirectInvocation(moduleUrl: string, argv1: string | undefined)
 }
 
 if (isDirectInvocation(import.meta.url, process.argv[1])) {
-  process.exitCode = await runSchemaSyncCheck({ log: (line) => process.stdout.write(`${line}\n`) });
+  process.exitCode = await runSchemaSyncCheck();
 }

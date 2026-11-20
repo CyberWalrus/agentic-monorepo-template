@@ -81,14 +81,11 @@ function isDrizzleSnapshot(value: unknown): value is DrizzleSnapshotJSON {
  * (`drizzle-kit generate --custom` пишет новый id и тот же prevId-хвост).
  */
 function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(',')}]`;
-  }
   if (isRecord(value)) {
     const keys = Object.keys(value).toSorted();
     return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
   }
-  return JSON.stringify(value) ?? 'undefined';
+  return JSON.stringify(value);
 }
 
 /** Содержимое снапшота без id/prevId — то, что сравнивается между соседями. */
@@ -236,26 +233,21 @@ function loadMigrationChain(migrationsFolder: string, problems: string[]): Loade
  * predecessor'у (отличаются только id/prevId). Это канонический след
  * `drizzle-kit generate --custom` — data-only миграция expand/contract
  * (журнал задачи c1.3), и человек должен видеть её глазами.
+ *
+ * Соседи берутся по позиции массива: журнал уже проверен на непрерывность
+ * idx (в противном случае гейт красит), поэтому сосед по массиву — сосед
+ * по idx. Дыра в снапшотах сравнение прерывает: она уже красит гейт, и
+ * сравнение через дыру дало бы ложное предупреждение.
  */
 function dataOnlyMigrationTags(migrations: LoadedMigration[]): string[] {
   const tags: string[] = [];
-  let previous: LoadedMigration | undefined;
-  for (const migration of migrations) {
-    const snapshot = migration.snapshot;
-    const previousSnapshot = previous?.snapshot;
-    // Сравнение только соседей по idx: при дыре в снапшотах (гейт уже красит)
-    // сравнение через дыру дало бы ложное data-only предупреждение.
-    if (
-      snapshot !== undefined &&
-      previousSnapshot !== undefined &&
-      previous.idx === migration.idx - 1
-    ) {
-      if (stripSnapshotIdentity(snapshot) === stripSnapshotIdentity(previousSnapshot)) {
-        tags.push(migration.tag);
-      }
+  for (const [position, migration] of migrations.entries()) {
+    const previousSnapshot = migrations[position - 1]?.snapshot;
+    if (previousSnapshot === undefined || migration.snapshot === undefined) {
+      continue;
     }
-    if (snapshot !== undefined) {
-      previous = migration;
+    if (stripSnapshotIdentity(migration.snapshot) === stripSnapshotIdentity(previousSnapshot)) {
+      tags.push(migration.tag);
     }
   }
   return tags;
@@ -278,9 +270,8 @@ export async function collectSchemaSyncReport(input: SchemaSyncInput): Promise<S
   if (migrations.length === 0 && errors.length === 0) {
     errors.push('журнал миграций пуст: схема кода не покрыта ни одной миграцией');
   }
-  const latest = migrations.at(-1);
-  const latestSnapshot = latest?.snapshot;
-  if (latest !== undefined && latestSnapshot !== undefined) {
+  const latestSnapshot = migrations.at(-1)?.snapshot;
+  if (latestSnapshot !== undefined) {
     try {
       // Глубину содержимого проверяет zod внутри generateMigration: кривой
       // снапшот попадает в catch и красит гейт объяснением (fail-closed).
@@ -294,7 +285,9 @@ export async function collectSchemaSyncReport(input: SchemaSyncInput): Promise<S
         );
       }
     } catch (error) {
-      errors.push(`последний снапшот ${latest.tag} не сверён со схемой кода: ${messageOf(error)}`);
+      errors.push(
+        `последний снапшот ${migrations.at(-1)?.tag} не сверён со схемой кода: ${messageOf(error)}`,
+      );
     }
   }
   for (const tag of dataOnlyMigrationTags(migrations)) {
