@@ -265,6 +265,16 @@ describe('test API log slice', () => {
       expect(body).toMatchObject({ error: 'Invalid requestId query' });
     }
   });
+
+  it('rejects a query mixing a valid id with a malformed one', async () => {
+    const { app } = setup({ enableTestApi: true });
+
+    const response = await app.request(
+      '/__test__/logs?requestId=scenario-request-1&requestId=bad id with spaces',
+    );
+
+    expect(response.status).toBe(400);
+  });
 });
 
 function setupFixture({ actorId }: { actorId?: string } = {}) {
