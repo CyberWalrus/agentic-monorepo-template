@@ -196,6 +196,7 @@ _Действует, кроме отмеченного._
 - Обязательных check три: `gate` (агрегирует job `ci.yml`, исполняется из PR), `gate-integrity` ([ADR 0002](adr/0002-gate-integrity.md)) и `bundle-approval` ([ADR 0013](adr/0013-bundle-delta-gate.md)): оба доверенных workflow на `pull_request_target`, не читают и не исполняют код PR, факты берут из GitHub API. `bundle-approval` читает результат untrusted-замера `bundle-delta` (check-run head SHA) и решает: зелёный замер или label `bundle-growth-approved` от владельца CODEOWNERS. Оба слушают и `merge_group` (no-op с тем же именем check), иначе очередь ждёт вечно.
 - Смена base-ветки PR не порождает `synchronize`, поэтому workflow слушают и `edited`.
 - Права по умолчанию `contents: read`. Устаревшие прогоны PR отменяются через `concurrency`.
+- Числовые храповики поднимает автоматика: nightly после зелёного прогона обновляет `test-count-baseline.json` и открывает PR храповика (update понижать отказывается — дифф только вверх). Автор PR базлайн не поднимает: файл «горячий», параллельные PR с тестами конфликтовали бы в нём (З9, b7) — a10.
 
 ### 3.5 Защищённые пути
 
