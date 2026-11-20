@@ -5,6 +5,7 @@
   "scripts": {
     "prepare": "if [ -e .git ]; then lefthook install; fi",
     "dev": "node tools/dev.ts",
+    "preflight": "node packages/preflight/src/cli.ts",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
