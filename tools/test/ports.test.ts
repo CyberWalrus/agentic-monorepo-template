@@ -109,8 +109,11 @@ describe('pickPorts', () => {
 
     const shifted = await pickPorts(root);
 
+    // Away-from-occupied вместо монотонности: у потолка диапазона сдвиг
+    // корректно заворачивается на MIN_BASE (З9), «больше» ложно-красило
+    // на раннерах с хешем пути у верхней границы (b4.4, флак #88/#96).
+    expect(shifted.web).not.toBe(taken.web);
     expect(shifted.api).not.toBe(taken.api);
-    expect(shifted.web).toBeGreaterThan(taken.web);
     const recorded: unknown = JSON.parse(readFileSync(join(root, 'reports', 'ports.json'), 'utf8'));
     expect(recorded).toEqual({ base: shifted.web, web: shifted.web, api: shifted.api });
   });
@@ -126,9 +129,12 @@ describe('pickPorts', () => {
     const shifted = await pickPorts(root);
 
     expect(shifted.api).toBe(shifted.web + 1);
-    // Инвариант имени теста: сдвиг действительно увёл от всех занятых портов,
-    // а не вернул занятую базу (убирание логики сдвига должно красить тест).
-    expect(shifted.web).toBeGreaterThan(first.web + 3);
+    // Инвариант имени теста: сдвиг увёл от ВСЕХ занятых портов (убирание
+    // логики сдвига красит тест). Без монотонности: у потолка сдвиг
+    // заворачивается на MIN_BASE — корректно (b4.4).
+    const occupiedPorts = [first.web, first.web + 1, first.web + 2, first.web + 3];
+    expect(occupiedPorts).not.toContain(shifted.web);
+    expect(occupiedPorts).not.toContain(shifted.api);
   });
 });
 
@@ -166,11 +172,14 @@ describe('readPorts / resolvePorts', () => {
   it('prefers API_PORT env — the config choice is consistent for the whole run', async () => {
     const root = tmpRoot();
     const picked = await pickPorts(root);
-    process.env['API_PORT'] = String(picked.api + 10);
+    // Оверрайд в валидном диапазоне независимо от базы: у потолка picked.api+10
+    // выходит за MAX_BASE и resolvePorts честно отказывает (b4.4, флак #96).
+    const override = picked.api + 10 <= MAX_BASE - 2 ? picked.api + 10 : MIN_BASE + 4;
+    process.env['API_PORT'] = String(override);
     try {
       // Файл говорит одно (прошлый выбор), env — выбор текущего конфига.
       const resolved = await resolvePorts(root);
-      expect(resolved.api).toBe(picked.api + 10);
+      expect(resolved.api).toBe(override);
     } finally {
       delete process.env['API_PORT'];
     }
