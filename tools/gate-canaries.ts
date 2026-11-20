@@ -662,7 +662,10 @@ export const CANARIES: GateCanary[] = [
     name: 'test:hooks inputs разошлись с каноническим списком',
     steps: 'test:hooks',
     failedStep: 'test:hooks',
-    expect: /канонический список/,
+    // Основа слова: имя теста стоит в творительном падеже («каноническим
+    // списком») — номинатив в expect не матчился и канарейка не засчитывалась
+    // при красном гейте (первый прогон).
+    expect: /каноническ/,
     apply: (root) => {
       const path = join(root, 'tools', 'test-hooks-inputs.ts');
       const source = readFileSync(path, 'utf8');
