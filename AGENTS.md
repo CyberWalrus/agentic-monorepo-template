@@ -6,7 +6,7 @@
 
 ## Стек
 
-Node (`.nvmrc`) · pnpm (`packageManager`) · Turborepo · TypeScript · Oxlint + Oxfmt · Vite · React + TanStack Start + TanStack Query · Hono + oRPC + Zod · Vitest (browser mode) · Playwright · dependency-cruiser · Knip · StrykerJS.
+Node (`.nvmrc`) · pnpm (`packageManager`) · Turborepo · TypeScript · Oxlint + Oxfmt · Vite (Rolldown) · React + TanStack Start + TanStack Query · Hono + oRPC + Zod · Vitest (browser mode) · Playwright · dependency-cruiser · Knip · sherif · StrykerJS · Lefthook.
 
 Версии зависимостей — только в каталоге `catalog:` в [pnpm-workspace.yaml](pnpm-workspace.yaml). Почему такой стек: [ADR 0001](docs/adr/0001-initial-stack.md).
 
@@ -16,28 +16,29 @@ Node (`.nvmrc`) · pnpm (`packageManager`) · Turborepo · TypeScript · Oxlint 
 apps/api/                Hono + oRPC. src/<module>/ — домен, app.ts/router.ts — HTTP-слой
 apps/web/                TanStack Start. src/features/<feature>/ — независимые фичи, src/lib/ — общее
 packages/contracts/      oRPC-контракт + Zod-схемы. Единый источник правды API. openapi.json генерируется
-packages/ui/             Презентационные React-компоненты. Без домена и транспорта
-e2e/                     Playwright: features/ (функциональные), *.visual.ts (скриншоты), perf/ (бюджеты)
+packages/ui/             Презентационные React-компоненты. Без импортов контрактов и транспорта; шейп данных объявляется локально в пакете (domain-shaped presentation допустим)
+e2e/                     Playwright: features/ (функциональные), *.visual.ts (скриншоты), perf/ (бюджеты), specs/ (планы тестов — трассировка AC), agents/ (seed Test Agents)
 tools/                   Гейты: verify, бюджет бандла, защищённые пути, визуальные тесты в Docker
 perf-budgets.json        Перф-бюджеты (защищён)
 ```
 
 ## Команды
 
-| Команда                                 | Что делает                                                                              | Когда                                                               |
-| --------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `pnpm verify`                           | Формат, линт, типы, unit, границы, мёртвый код, дрейф OpenAPI (~2–5 с тёплым кэшем, E1) | После каждого логического шага                                      |
-| `pnpm verify --full`                    | + сборка, бюджет бандла, E2E, перф-бюджеты (минуты; замеры — architecture.md 3.1)       | Перед PR                                                            |
-| `pnpm verify --json`                    | То же, машиночитаемо                                                                    | Агентам и хукам                                                     |
-| `pnpm --filter <pkg> test`              | Тесты одного пакета                                                                     | Во время разработки                                                 |
-| `pnpm e2e` / `pnpm perf`                | E2E / перф-бюджеты (собирает web)                                                       | При изменении поведения или UI                                      |
-| `pnpm visual`                           | Скриншот-тесты в Docker (как в CI)                                                      | При изменении UI                                                    |
-| `pnpm mutation`                         | Мутационное тестирование API                                                            | При изменении доменной логики                                       |
-| `pnpm --filter @repo/contracts openapi` | Перегенерировать openapi.json                                                           | После изменения контракта                                           |
-| `pnpm evals`                            | Эталонные агентные прогоны (ADR 0016): pass/итерации/время/токены                       | В CI по расписанию; локально — отладка раннера (токены стоят денег) |
-| `pnpm format` / `pnpm lint:fix`         | Автоисправление                                                                         | Когда линт или формат красные                                       |
+| Команда                                 | Что делает                                                                              | Когда                                                                       |
+| --------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `pnpm verify`                           | Формат, линт, типы, unit, границы, мёртвый код, дрейф OpenAPI (~2–5 с тёплым кэшем, E1) | После каждого логического шага                                              |
+| `pnpm verify --full`                    | + сборка, бюджет бандла, E2E, перф-бюджеты (минуты; замеры — architecture.md 3.1)       | Перед PR                                                                    |
+| `pnpm verify --json`                    | То же, машиночитаемо                                                                    | Агентам и хукам                                                             |
+| `pnpm verify --only <шаги>`             | Подмножество шагов (`--only docs,lint`); slow-шаги — только вместе с `--full`           | Отладка отдельного шага или канарейка гейта; хуки и CI его не передают (З5) |
+| `pnpm --filter <pkg> test`              | Тесты одного пакета                                                                     | Во время разработки                                                         |
+| `pnpm e2e` / `pnpm perf`                | E2E / перф-бюджеты (собирает web)                                                       | При изменении поведения или UI                                              |
+| `pnpm visual`                           | Скриншот-тесты в Docker (как в CI)                                                      | При изменении UI                                                            |
+| `pnpm mutation`                         | Мутационное тестирование API                                                            | При изменении доменной логики                                               |
+| `pnpm --filter @repo/contracts openapi` | Перегенерировать openapi.json                                                           | После изменения контракта                                                   |
+| `pnpm evals`                            | Эталонные агентные прогоны (ADR 0016): pass/итерации/время/токены                       | В CI по расписанию; локально — отладка раннера (токены стоят денег)         |
+| `pnpm format` / `pnpm lint:fix`         | Автоисправление                                                                         | Когда линт или формат красные                                               |
 
-Окружение: `nvm use` (версия в `.nvmrc`), pnpm из `packageManager`.
+Окружение: `nvm use` (версия в `.nvmrc`), pnpm из `packageManager` (на чистом node — `npm install -g pnpm@<версия из packageManager>`; corepack в Node ≥25 не входит — [ADR 0012](docs/adr/0012-production-server.md)). Требования окружения — Docker (интеграционные и визуальные тесты), Chromium Playwright, телеметрия turbo — перечислены в README.md, «Требования окружения».
 
 Worktree: в новом worktree сначала `pnpm install` (хранилище pnpm общее, ставится быстро). Порты выводятся из пути worktree автоматически (`pnpm dev`, `pnpm verify --full`), два worktree не пересекаются; выбранные порты — в `reports/ports.json`.
 
@@ -48,7 +49,7 @@ Worktree: в новом worktree сначала `pnpm install` (хранилищ
 1. `pnpm backlog next` — покажет следующую свободную задачу; в worktree с веткой `task/<id>` — состояние твоей задачи.
 2. `pnpm backlog start <id>` — захватить задачу (ветка `task/<id>` + worktree). Занятую задачу вторым агентом не взять: захваты ловит сам git.
 3. Дальше по типу задачи: `research` → результат в ADR/`docs/research/`; `decompose` → файлы задач; `change` → скил `feature-workflow`.
-4. Прогресс задачи — коммиты и раздел «Журнал» файла задачи. Закрывающий PR переносит файл в `backlog/done/`.
+4. Прогресс задачи — коммиты и раздел «Журнал» файла задачи. Файл задачи переносится в `backlog/done/` сразу после захвата (`pnpm backlog close <id>`) — гейт `docs` красит ветку, пока файл открыт; «Журнал» дополняется до merge.
 
 Подробности: `.claude/skills/task-board/SKILL.md`. Не брать чужую задачу в работе. Задачи со статусом «режим обслуживания» и с `needs_human: оператор: …` обычная сессия не берёт — их ведёт оператор.
 
@@ -156,4 +157,4 @@ MCP (`.mcp.json`): `playwright` — исследование и воспроиз
 Если задача меняет не продукт, а сам шаблон (гейты, хуки, CI, структуру репозитория, инструкции агентов), сначала прочитай:
 
 - [docs/architecture.md](docs/architecture.md): законы обвязки и принятые архитектурные и инфраструктурные подходы. Изменение не должно им противоречить.
-- Доска задач `backlog/` (`pnpm backlog next`): что переделать, улучшить и добавить, с доказательствами, подводными камнями и критериями готовности (ADR 0007). Итог аудита и таблица стека — `docs/roadmap.md`. Задачи, чьи `touches` попадают в защищённые пути, требуют режима обслуживания — доска считает статус сама; ведёт их оператор (ADR 0009).
+- Доска задач `backlog/` (`pnpm backlog next`): что переделать, улучшить и добавить, с доказательствами, подводными камнями и критериями готовности (ADR 0007). Задачи, чьи `touches` попадают в защищённые пути, требуют режима обслуживания — доска считает статус сама; ведёт их оператор (ADR 0009).

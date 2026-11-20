@@ -16,7 +16,9 @@
     "typecheck": "tsc",
     "test": "vitest run --coverage --reporter=json --reporter=default --outputFile=reports/vitest.json",
     "mutation": "stryker run",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "db:custom": "drizzle-kit generate --custom",
+    "db:check": "node src/tasks/schema-sync-cli.ts"
   },
   "dependencies": {
     "@hono/node-server": "catalog:",
