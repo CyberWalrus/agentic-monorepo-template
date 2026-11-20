@@ -216,6 +216,18 @@ describe('request guards', () => {
     expect(response.status).toBe(504);
     expect(await response.json()).toEqual({ error: 'Request timed out' });
   });
+
+  it('clears the pending timeout timer once the request settles', async () => {
+    const { app } = setup({ requestTimeoutMs: 60_000 });
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+    await app.request('/api/tasks');
+
+    // Гигиена таймера: обработавшийся запрос не оставляет висящий таймер,
+    // который выстрелит на уже законченном контексте (мутационный прогон c1.7).
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    clearTimeoutSpy.mockRestore();
+  });
 });
 
 describe('test API', () => {
