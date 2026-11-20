@@ -30,25 +30,45 @@ env:
   # Порты детерминированы в CI (ADR 0005, З9): без него base выводится из пути
   # чекаута, который у раннеров отличается от прогона к прогону.
   PORT_BASE: 3300
-  # Remote cache (опционально): self-hosted или Vercel.
-  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
-  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
-  TURBO_API: ${{ vars.TURBO_API }}
+  # Remote cache (A7, architecture.md §3.3): job из PR только читает (remote:r),
+  # merge queue кэшу main не доверяет и гоняет задачи принудительно (только
+  # локальный кэш), пишет только job на push в main. Сам токен отсюда не выдаётся:
+  # TURBO_TOKEN/TURBO_TEAM/TURBO_API приходят из environment job'а — cache-read
+  # (read-only токен) или cache-write (токен на запись, environment ограничен
+  # protected-веткой main). Пока кэш не подключён, секреты пусты — turbo работает
+  # на локальном кэше .turbo.
+  TURBO_CACHE_ARGS: ${{ github.event_name == 'push' && '--cache=local:rw,remote:rw' || (github.event_name == 'merge_group' && '--cache=local:rw' || '--cache=local:rw,remote:r') }}
 
 jobs:
   static:
     name: static
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # A7: environment определяет, какой TURBO_TOKEN достаётся job'у: read-only
+    # из cache-read, на запись — из cache-write (только push в protected main).
+    environment: ${{ github.event_name == 'push' && 'cache-write' || 'cache-read' }}
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+      TURBO_API: ${{ vars.TURBO_API }}
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
+      # A7: локальный кэш PR — свой, изолированный от main и других PR по номеру
+      # PR; компенсирует отсутствие remote-записи из PR (architecture.md §3.3).
+      - uses: actions/cache@v6
+        if: github.event_name == 'pull_request'
+        with:
+          path: .turbo
+          key: turbo-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          restore-keys: |
+            turbo-pr-${{ github.event.pull_request.number }}-
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - run: pnpm format:check
       - run: pnpm lint --format github
-      - run: pnpm turbo run typecheck $AFFECTED --output-logs=errors-only
+      - run: pnpm turbo run typecheck $AFFECTED $TURBO_CACHE_ARGS --output-logs=errors-only
       - run: pnpm typecheck:tools
       - run: pnpm boundaries
       - run: pnpm knip
@@ -75,14 +95,28 @@ jobs:
     name: unit
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A7: environment cache-read/cache-write — см. комментарий в job static.
+    environment: ${{ github.event_name == 'push' && 'cache-write' || 'cache-read' }}
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+      TURBO_API: ${{ vars.TURBO_API }}
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
+      # A7: локальный кэш PR — см. комментарий в job static.
+      - uses: actions/cache@v6
+        if: github.event_name == 'pull_request'
+        with:
+          path: .turbo
+          key: turbo-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          restore-keys: |
+            turbo-pr-${{ github.event.pull_request.number }}-
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-      - run: pnpm turbo run test $AFFECTED --output-logs=errors-only
+      - run: pnpm turbo run test $AFFECTED $TURBO_CACHE_ARGS --output-logs=errors-only
       # Гейт по отчёту раннера (З3, A3): ожидания выводятся из dry-графа turbo,
       # поэтому требуются отчёты ровно гонявшихся задач. Тот же $AFFECTED, что
       # у прогона выше: на merge_group и push оба без --affected.
@@ -135,11 +169,25 @@ jobs:
     name: e2e
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A7: environment cache-read/cache-write — см. комментарий в job static.
+    environment: ${{ github.event_name == 'push' && 'cache-write' || 'cache-read' }}
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+      TURBO_API: ${{ vars.TURBO_API }}
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
+      # A7: локальный кэш PR — см. комментарий в job static.
+      - uses: actions/cache@v6
+        if: github.event_name == 'pull_request'
+        with:
+          path: .turbo
+          key: turbo-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          restore-keys: |
+            turbo-pr-${{ github.event.pull_request.number }}-
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       # Выбор E2E по фичам (B4.1): только в PR — merge queue, push и nightly
@@ -153,7 +201,7 @@ jobs:
           CHANGED=$(git diff --no-renames --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)
           SELECTION=$(printf '%s\n' "$CHANGED" | node tools/e2e-select.ts --from-stdin)
           echo "E2E_FEATURES=$SELECTION" >> "$GITHUB_ENV"
-      - run: pnpm turbo run e2e $AFFECTED --output-logs=errors-only
+      - run: pnpm turbo run e2e $AFFECTED $TURBO_CACHE_ARGS --output-logs=errors-only
       # Проект functional с default:false не запускается без явного --project —
       # гейт требует его присутствия в отчёте (A3). $AFFECTED — как у прогона.
       - run: pnpm test:report --from-turbo e2e $AFFECTED --expect-project functional
@@ -173,6 +221,12 @@ jobs:
     name: visual
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A7: environment cache-read/cache-write — см. комментарий в job static.
+    environment: ${{ github.event_name == 'push' && 'cache-write' || 'cache-read' }}
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+      TURBO_API: ${{ vars.TURBO_API }}
     # Тот же образ и архитектура, что у `pnpm visual` локально: базлайны совпадают.
     container:
       image: mcr.microsoft.com/playwright:v1.64.1-noble
@@ -182,6 +236,14 @@ jobs:
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup
+      # A7: локальный кэш PR — см. комментарий в job static.
+      - uses: actions/cache@v6
+        if: github.event_name == 'pull_request'
+        with:
+          path: .turbo
+          key: turbo-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          restore-keys: |
+            turbo-pr-${{ github.event.pull_request.number }}-
       # Две фазы (b3.1, ADR 0015): обычный прогон (дифф = красный job и отчёт),
       # затем перезапись только разошедшихся базлайнов и сборка артефакта
       # visual-actuals для одобрения командой /approve-visual.
@@ -217,6 +279,13 @@ jobs:
     name: perf
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A7: только чтение remote — и то лишь для build-зависимости, сама задача
+    # perf вне кэша (cache: false в turbo.json): писать job'у нечего.
+    environment: ${{ github.event_name == 'push' && 'cache-write' || 'cache-read' }}
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+      TURBO_API: ${{ vars.TURBO_API }}
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
@@ -224,9 +293,9 @@ jobs:
         with: { playwright: 'true' }
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-      - run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
+      - run: pnpm turbo run build --filter=@repo/web $TURBO_CACHE_ARGS --output-logs=errors-only
       - run: pnpm bundle
-      - run: pnpm turbo run perf --output-logs=errors-only
+      - run: pnpm turbo run perf $TURBO_CACHE_ARGS --output-logs=errors-only
       - uses: grafana/setup-k6-action@v1
       - name: API smoke (k6)
         # Порты из tools/ports.ts (ADR 0005, З9): PORT_BASE=3300 задан на уровне workflow.
@@ -269,7 +338,7 @@ jobs:
       - uses: ./.github/actions/setup
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-      - run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
+      - run: pnpm turbo run build --filter=@repo/web $TURBO_CACHE_ARGS --output-logs=errors-only
       - run: pnpm bundle:delta --base "${{ github.event.pull_request.base.sha }}"
       - uses: actions/upload-artifact@v7
         if: always()
