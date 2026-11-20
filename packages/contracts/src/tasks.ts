@@ -45,7 +45,16 @@ export const tasksContract = {
   // null — и оба случая (чужой и неизвестный id) получают отказ FORBIDDEN
   // без оракула «ресурс существует» (fail-closed, C2.2).
   remove: ocAccess
-    .route({ method: 'DELETE', path: '/tasks/{id}', summary: 'Delete an owned task' })
+    .route({
+      method: 'DELETE',
+      path: '/tasks/{id}',
+      summary: 'Delete an owned task',
+      // c1.7: авторизация исполняется до валидации входа, поэтому не-uuid id
+      // получает тот же FORBIDDEN, а не BAD_REQUEST — потребитель не отличает
+      // «битый формат» от «нет доступа». Поведение закреплено тестом (app.test).
+      description:
+        'Authorization runs before input validation: a malformed id (not a uuid) is answered with 403 FORBIDDEN, indistinguishable from having no access.',
+    })
     .meta({ access: { type: 'owner' } })
     .input(TaskIdInputSchema)
     .output(z.void()),

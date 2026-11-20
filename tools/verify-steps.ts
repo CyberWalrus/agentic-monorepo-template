@@ -33,6 +33,8 @@ export const fast: Step[] = [
   // Классы защиты tools/ (ADR 0014): замыкание гейтов == deny protected-paths.json.
   { name: 'tool-class', command: 'pnpm', args: ['tool-class:check'] },
   { name: 'docs', command: 'pnpm', args: ['docs:check'] },
+  // Карантин флаков (b4.4): валидность защищённого файла.
+  { name: 'quarantine', command: 'pnpm', args: ['flaky:quarantine'] },
   { name: 'sherif', command: 'pnpm', args: ['sherif'] },
   // Версия Docker-образа Playwright == каталог @playwright/test (З4/A8).
   { name: 'visual-image', command: 'pnpm', args: ['visual-image:check'] },
