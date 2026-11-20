@@ -40,7 +40,8 @@ pnpm dev           # web и api на портах из worktree (выбор — 
 - Node из `.nvmrc` и pnpm из `packageManager`;
 - Docker: интеграционные тесты API поднимают Postgres через Testcontainers (это часть `pnpm verify`); скриншот-тесты (`pnpm visual`) — тоже Docker;
 - Chromium: браузеры Playwright для browser-тестов unit и E2E (`playwright install --with-deps chromium`); нужна сеть до npm registry и CDN Playwright;
-- для облачных агентов — минимальный контур в [ADR 0010](docs/adr/0010-cloud-agents.md).
+- для облачных агентов — минимальный контур в [ADR 0010](docs/adr/0010-cloud-agents.md);
+- телеметрия Turborepo: в CI выключена переменной `TURBO_TELEMETRY_DISABLED`, локально один раз на машину выполни `pnpm exec turbo telemetry disable` (иначе turbo ходит на `telemetry.vercel.com`, а песочница агента режет эти запросы).
 
 ## Production-запуск
 
@@ -123,4 +124,4 @@ tools               гейты: verify, бюджеты, защищённые п�
 - [Архитектурные и инфраструктурные подходы](docs/architecture.md): законы обвязки, слои, правила изменения гейтов
 - План развития обвязки: итог аудита и таблица стека — `docs/roadmap.md`; задачи развития — доска `backlog/` (`pnpm backlog`, ADR 0007)
 - [Настройка GitHub](docs/github-setup.md): ruleset, labels, секреты
-- [AGENTS.md](AGENTS.md) и [CLAUDE.md](CLAUDE.md): инструкции для агентов
+- [AGENTS.md](AGENTS.md): инструкции для агентов для всех клиентов; [CLAUDE.md](CLAUDE.md) только импортирует его для Claude Code
