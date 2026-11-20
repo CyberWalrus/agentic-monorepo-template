@@ -28,6 +28,9 @@ function formatIssues(error: z.ZodError): string {
     .join('\n');
 }
 
+/** Ключи окружения web (union SSR- и process-схем) — полнота env.example (гейт C3.1). */
+export const WEB_ENV_KEYS = ['API_URL', 'PORT', 'HOST'] as const;
+
 /** Окружение SSR-процесса: адрес API обязателен только на сервере. */
 export function loadWebServerEnv(source: Record<string, string | undefined> = process.env): {
   apiUrl: string;

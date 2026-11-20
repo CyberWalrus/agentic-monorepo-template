@@ -49,6 +49,17 @@ const optionalStringSchema = z
   .optional()
   .transform((value) => (value === '' ? undefined : value));
 
+/** Ключи схемы окружения api — источник полноты env.example (гейт C3.1). */
+export const SERVER_ENV_KEYS = [
+  'PORT',
+  'HOST',
+  'ENABLE_TEST_API',
+  'ENABLE_TEST_API_WITH_DATABASE',
+  'INSTANCE_ID',
+  'DATABASE_URL',
+  'NODE_ENV',
+] as const;
+
 const serverEnvSchema = z
   .object({
     PORT: portSchema,

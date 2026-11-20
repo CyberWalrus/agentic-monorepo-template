@@ -32,6 +32,7 @@
     "test:count": "node tools/check-test-count.ts",
     "test:count:update": "node tools/check-test-count.ts --update",
     "sandbox:check": "node tools/check-sandbox-paths.ts",
+    "env:check": "node tools/check-env-usage.ts && node tools/check-env-example.ts",
     "tool-class:check": "node tools/check-tool-class.ts",
     "docs:check": "node tools/check-docs.ts",
     "visual-image:check": "node tools/check-visual-image.ts",

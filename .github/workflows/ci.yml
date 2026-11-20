@@ -48,6 +48,9 @@ jobs:
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - run: pnpm format:check
       - run: pnpm lint --format github
+      # Гейт окружения (C3.1): process.env/import.meta.env только в env-модулях,
+      # env.example на месте и в формате KEY=VALUE (полнота — в тестах приложений).
+      - run: pnpm env:check
       - run: pnpm turbo run typecheck $AFFECTED --output-logs=errors-only
       - run: pnpm typecheck:tools
       - run: pnpm boundaries

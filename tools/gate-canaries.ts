@@ -651,6 +651,44 @@ export const CANARIES: GateCanary[] = [
       writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
     },
   },
+  {
+    // C3.1: чтение окружения только в модулях окружения (server-config.ts,
+    // web/src/lib/env.ts). Плохое изменение — прямое чтение process.env в
+    // продуктовом коде приложения; красит шаг env (tools/check-env-usage.ts).
+    name: 'process.env вне env-модуля',
+    steps: 'env',
+    failedStep: 'env',
+    expect: /чтение окружения вне модуля окружения/,
+    apply: (root) => {
+      const path = join(root, 'apps', 'api', 'src', 'server.ts');
+      const source = readFileSync(path, 'utf8');
+      if (!source.includes('loadServerEnv')) {
+        throw new Error('canary anchor not found in apps/api/src/server.ts');
+      }
+      writeFileSync(path, `${source}\nconst c31EnvLeak = process.env.PORT;\n`);
+    },
+  },
+  {
+    // C3.1, второе направление: env.example полон относительно схемы. Плохое
+    // изменение — удалённая переменная; красит тест полноты (apps/api) в шаге
+    // test. Формат файла канареечится тем же тестом при пустом файле.
+    name: 'env.example неполный',
+    steps: 'test',
+    failedStep: 'test',
+    expect: /env\.example api/,
+    apply: (root) => {
+      const path = join(root, 'apps', 'api', 'env.example');
+      const source = readFileSync(path, 'utf8');
+      if (!source.includes('DATABASE_URL=')) {
+        throw new Error('canary anchor not found in apps/api/env.example');
+      }
+      const withoutKey = source
+        .split('\n')
+        .filter((line) => !line.startsWith('DATABASE_URL='))
+        .join('\n');
+      writeFileSync(path, withoutKey);
+    },
+  },
 ];
 // Вывод портов (З9, A5 PR-3) канарейки шага не имеет: рантайм читает записанный
 // reports/ports.json (read-first — иначе зонд после старта серверов уезжал на
