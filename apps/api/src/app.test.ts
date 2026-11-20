@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.ts';
 import { authorizationMiddleware, type Actor, type AppContext } from './authorization.ts';
+import type { LogRecord, LogSink } from './observability.ts';
 import { InMemoryTaskRepository } from './tasks/repository.ts';
 
 const UNKNOWN_ID = '00000000-0000-4000-8000-999999999999';
@@ -21,12 +22,14 @@ const actorFromHeader = (request: Request): Actor | null => {
 function setup({
   enableTestApi = false,
   instanceId,
-}: { enableTestApi?: boolean; instanceId?: string } = {}) {
+  log,
+}: { enableTestApi?: boolean; instanceId?: string; log?: LogSink } = {}) {
   const app = createApp({
     tasks: new InMemoryTaskRepository(),
     enableTestApi,
     // exactOptionalPropertyTypes: undefined нельзя передавать явно.
     ...(instanceId === undefined ? {} : { instanceId }),
+    ...(log === undefined ? {} : { log }),
   });
   const client: ContractRouterClient<Contract> = createORPCClient(
     new RPCLink({ url: 'http://api.test/rpc', fetch: async (request) => app.fetch(request) }),
@@ -196,6 +199,71 @@ describe('test API', () => {
 
     expect(response.status).toBe(400);
     expect(await client.tasks.list()).toHaveLength(1);
+  });
+});
+
+describe('test API log slice', () => {
+  it('is not exposed unless the test API is enabled', async () => {
+    const app = createApp({ tasks: new InMemoryTaskRepository() });
+
+    const response = await app.request('/__test__/logs?requestId=scenario-request-1');
+
+    expect(response.status).toBe(404);
+  });
+
+  it('returns the records of the given request ids and none of the neighbors', async () => {
+    const records: LogRecord[] = [];
+    const log: LogSink = (record) => records.push(record);
+    const { app } = setup({ enableTestApi: true, log });
+
+    // три «параллельных» запроса с разными идентификаторами: два — свой сценарий, один — сосед
+    await app.request('/health', { headers: { 'x-request-id': 'scenario-request-1' } });
+    await app.request('/api/tasks', { headers: { 'x-request-id': 'scenario-request-2' } });
+    await app.request('/health', { headers: { 'x-request-id': 'neighbor-request-9' } });
+
+    const response = await app.request(
+      '/__test__/logs?requestId=scenario-request-1&requestId=scenario-request-2',
+    );
+
+    expect(response.status).toBe(200);
+    // срез — в точности записи основного лога этих двух идентификаторов:
+    // соседний при параллельной записи в общий буфер не попадает
+    const ownIds = new Set(['scenario-request-1', 'scenario-request-2']);
+    expect(await response.json()).toEqual({
+      records: records.filter(
+        (record) => typeof record['requestId'] === 'string' && ownIds.has(record['requestId']),
+      ),
+    });
+  });
+
+  it('finds records by the generated id returned in the response header', async () => {
+    const { app } = setup({ enableTestApi: true });
+
+    const response = await app.request('/health');
+    const requestId = response.headers.get('x-request-id');
+    const sliceResponse = await app.request(`/__test__/logs?requestId=${requestId}`);
+
+    expect(sliceResponse.status).toBe(200);
+    const slice = z
+      .object({ records: z.array(z.object({ requestId: z.string() })).length(1) })
+      .parse(await sliceResponse.json());
+    expect(slice.records[0]?.requestId).toBe(requestId);
+  });
+
+  it('rejects missing or malformed request ids instead of returning the whole buffer', async () => {
+    const { app } = setup({ enableTestApi: true });
+
+    const responses = [
+      await app.request('/__test__/logs'),
+      await app.request('/__test__/logs?requestId=bad id with spaces'),
+      await app.request('/__test__/logs?requestId=../../etc/passwd'),
+    ];
+
+    const bodies = await Promise.all(responses.map((response) => response.json()));
+    expect(responses.map((response) => response.status)).toEqual([400, 400, 400]);
+    for (const body of bodies) {
+      expect(body).toMatchObject({ error: 'Invalid requestId query' });
+    }
   });
 });
 
