@@ -1,4 +1,5 @@
 {
+  "$comment": "Снимок живого ruleset (a11: ночной чек дрейфа сверяет с ним; реестр id — docs/template-state.md). merge_queue не включён: недоступен на тарифе — параметры возвращают при появлении тарифа (A9.1/журнал d8.3).",
   "name": "main",
   "target": "branch",
   "enforcement": "active",
@@ -28,18 +29,6 @@
         "strict_required_status_checks_policy": true,
         "do_not_enforce_on_create": false,
         "required_status_checks": [{ "context": "gate" }, { "context": "gate-integrity" }]
-      }
-    },
-    {
-      "type": "merge_queue",
-      "parameters": {
-        "merge_method": "SQUASH",
-        "grouping_strategy": "ALLGREEN",
-        "max_entries_to_build": 5,
-        "min_entries_to_merge": 1,
-        "max_entries_to_merge": 5,
-        "min_entries_to_merge_wait_minutes": 1,
-        "check_response_timeout_minutes": 30
       }
     }
   ]

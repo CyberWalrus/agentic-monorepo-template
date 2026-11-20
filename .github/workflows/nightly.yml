@@ -42,6 +42,24 @@ jobs:
         if: always()
         with: { name: mutation-full, path: apps/api/reports/mutation/ }
 
+  # Дрейф живого ruleset от снимка (a11): живое правило меняется в интерфейсе
+  # в любой момент — снимок продолжит утверждать защиту, которой нет.
+  ruleset-drift:
+    name: ruleset drift (a11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: ruleset drift check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node tools/check-ruleset-drift.ts --create-issue --run-url "$RUN_URL"
+
   perf-trend:
     name: perf trend
     runs-on: ubuntu-latest
