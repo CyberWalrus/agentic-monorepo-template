@@ -52,6 +52,7 @@
     "tools/perf-lock.ts",
     "tools/perf-metrics.ts",
     "tools/ports.ts",
+    "tools/test-hooks-inputs.ts",
     "tools/protected-paths.json",
     "tools/protected-paths.ts",
     "tools/run-gate-canaries.ts",

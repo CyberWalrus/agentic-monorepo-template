@@ -651,6 +651,23 @@ export const CANARIES: GateCanary[] = [
       writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
     },
   },
+  {
+    // E1: turbo.json обязан соответствовать каноническому списку входов
+    // //#test:hooks (tools/test-hooks-inputs.ts): пропущенный input — тихо
+    // устаревший зелёный результат (З6). Красит тест синхронизации в test:hooks.
+    name: 'test:hooks inputs разошлись с каноническим списком',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /канонический список/,
+    apply: (root) => {
+      const path = join(root, 'turbo.json');
+      const source = readFileSync(path, 'utf8');
+      if (!source.includes('".claude/hooks/**"')) {
+        throw new Error('canary anchor not found: //#test:hooks inputs');
+      }
+      writeFileSync(path, source.replace('    ".claude/hooks/**",\n', ''));
+    },
+  },
 ];
 // Вывод портов (З9, A5 PR-3) канарейки шага не имеет: рантайм читает записанный
 // reports/ports.json (read-first — иначе зонд после старта серверов уезжал на

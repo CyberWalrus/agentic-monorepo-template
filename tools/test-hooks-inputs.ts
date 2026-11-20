@@ -1,0 +1,27 @@
+/**
+ * Канонический список входов корневой задачи `//#test:hooks` (E1) —
+ * единственное место определения. turbo.json обязан ему соответствовать:
+ * расходится канарейка tools/test/test-hooks-inputs.test.ts (З6 —
+ * пропущенный input означал бы тихо устаревший зелёный результат).
+ * Список заведомо щедрый: лишний input только вызывает лишний перегон,
+ * пропущенный — стейт-зелёность.
+ */
+export const TEST_HOOKS_INPUTS = [
+  'tools/**',
+  '.claude/hooks/**',
+  '.claude/agents/**',
+  '.claude/settings.json',
+  '.github/**',
+  'vitest.config.ts',
+  'tsconfig.json',
+  'tsconfig.base.json',
+  '.dependency-cruiser.cjs',
+  'knip.json',
+  '.oxlintrc.json',
+  'turbo.json',
+  'verify-budgets.json',
+  'perf-budgets.json',
+  'test-count-baseline.json',
+  'package.json',
+  'pnpm-lock.yaml',
+] as const;
