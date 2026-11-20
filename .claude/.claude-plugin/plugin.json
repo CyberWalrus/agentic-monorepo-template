@@ -1,0 +1,9 @@
+{
+  "name": "agent-harness",
+  "description": "Обвязка агента из шаблона agentic-monorepo-template: хуки-гейты, скилы процессов и ревьюеры. Хуки резолвят CLI в tools/hooks относительно репозитория-потребителя (CLAUDE_PROJECT_DIR) — репозиторию нужен tools/ из шаблона; подключать поверх скопированной .claude/ нельзя (хуки задвоятся).",
+  "version": "0.1.0",
+  "author": {
+    "name": "Андрей Пахомов"
+  },
+  "hooks": ["./.claude-plugin/hooks.json"]
+}

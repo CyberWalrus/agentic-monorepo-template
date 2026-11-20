@@ -1,30 +1,50 @@
-# Агентное ревью PR. Информационное: не входит в `gate`, merge блокируют только детерминированные проверки.
-# Требует секрет ANTHROPIC_API_KEY (или CLAUDE_CODE_OAUTH_TOKEN) и установленное Claude GitHub App.
+# Агентное ревью PR (b5). Информационное: не входит в `gate`, merge блокируют только
+# детерминированные проверки. Требует секрет ANTHROPIC_API_KEY (или CLAUDE_CODE_OAUTH_TOKEN)
+# и установленное Claude GitHub App.
+#
+# Гарантии b5:
+# - ревью не исполняет код проекта: whitelist инструментов (чтение, git diff/log/show и
+#   MCP-инструмент комментария); defaultMode "default" — всё непокрытое правилами = отказ,
+#   а не ревью LLM; deny закрывает исполнение (pnpm/npm/node/python), запись файлов,
+#   браузерные MCP и чтение /proc (цепочка утечки ключа);
+# - запуск по ready_for_review и вручную (workflow_dispatch с номером PR), не на каждый push;
+#   dispatch чекаутит head PR (без этого ревьюилось бы дерево ref запуска);
+# - модель и предел ходов заданы явно (ANTHROPIC_MODEL, --max-turns);
+# - каждый blocker строкой «BLOCKER <гейт>: <файл>:<строка> — суть» — шаг аннотаций
+#   превращает их в ::error на PR (лимит GitHub 10+10, ограничиваем явно); MAJOR — ::warning.
+# Ограничения платформы (честно): hosted-раннер без декларативного egress-фаервола —
+# сеть сужена deny браузерных MCP и web-инструментов + отсутствием исполнения кода;
+# детерминированные проверки делает CI, вердикт ревью — только по чтению диффа.
 name: Agent review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    types: [ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Номер PR для ревью
+        required: true
+        type: string
 
 concurrency:
-  group: agent-review-${{ github.event.pull_request.number }}
+  group: agent-review-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: true
 
 permissions:
   contents: read
   pull-requests: write
-  issues: write
-  id-token: write
-  actions: read
 
 jobs:
   review:
     name: agent-review
-    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' || secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+      # Явная модель (b5): меняется здесь, в одном месте.
+      ANTHROPIC_MODEL: claude-sonnet-4-5
     steps:
       - name: Skip without credentials
         if: env.HAS_KEY != 'true'
@@ -34,7 +54,9 @@ jobs:
         if: env.HAS_KEY == 'true'
         with: { fetch-depth: 0 }
 
-      - name: General code review (official plugin)
+      # dispatch запускается с ref main: чекаутим head PR явно. На pull_request
+      # checkout уже стоит на head — fetch той же SHA идемпотентен.
+      - name: Checkout PR head
         if: env.HAS_KEY == 'true'
         uses: anthropics/claude-code-action@c84e279f859e2591391e95bd309286eb111c345f # v1
         with:
@@ -53,16 +75,99 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          use_sticky_comment: true
-          settings: '{"disableAllHooks": true}'
-          claude_args: --max-turns 60
+          settings: |
+            {
+              "disableAllHooks": true,
+              "permissions": {
+                "defaultMode": "default",
+                "allow": [
+                  "Read",
+                  "Grep",
+                  "Glob",
+                  "LS",
+                  "TodoWrite",
+                  "Task",
+                  "Bash(git diff:*)",
+                  "Bash(git log:*)",
+                  "Bash(git show:*)",
+                  "mcp__github_comment__update_claude_comment"
+                ],
+                "deny": [
+                  "Write",
+                  "Edit",
+                  "MultiEdit",
+                  "NotebookEdit",
+                  "WebFetch",
+                  "WebSearch",
+                  "Read(/proc/**)",
+                  "Bash(git config:*)",
+                  "Bash(git -c:*)",
+                  "Bash(env:*)",
+                  "Bash(printenv:*)",
+                  "Bash(pnpm:*)",
+                  "Bash(npm:*)",
+                  "Bash(npx:*)",
+                  "Bash(node:*)",
+                  "Bash(python:*)",
+                  "Bash(python3:*)",
+                  "Bash(bun:*)",
+                  "Bash(deno:*)",
+                  "mcp__playwright*",
+                  "mcp__chrome-devtools*"
+                ]
+              }
+            }
+          # MCP-сервер комментария ставится в agent mode только с явным --allowed-tools
+          # (исходники claude-code-action@v1, install-mcp-server.ts) — без него
+          # ревью физически не может опубликовать комментарий.
+          claude_args: --max-turns 50 --allowed-tools mcp__github_comment__update_claude_comment
           prompt: |
-            Review PR #${{ github.event.pull_request.number }} in ${{ github.repository }}.
-            The diff is `git diff origin/${{ github.base_ref }}...HEAD`; the PR description holds the task and acceptance criteria.
+            Review PR #${{ env.PR_NUMBER }} in ${{ github.repository }}.
+            The diff is `git diff origin/main...HEAD`; the PR description holds the task and acceptance criteria.
 
             Run these subagents from .claude/agents in parallel, giving each the task, the acceptance criteria and the diff:
             architecture-reviewer, sanity-reviewer, test-quality-reviewer, security-reviewer, product-logic-reviewer.
 
-            Post ONE comment: a table "reviewer | verdict | blockers", then every blocker and major finding
-            with file:line, why and fix. Skip minor nitpicks. Do not modify files and do not approve the PR:
-            your output is advisory; merge is decided by CI `gate` and human reviewers.
+            Constraints (enforced by the tool whitelist above, repeated for the plan):
+            - You can only read the repository and run `git diff` / `git log` / `git show`.
+            - Do NOT run project code (no pnpm/npm/node commands) and do not fetch the network:
+              deterministic checks belong to CI, not to this review; verdicts are based on reading.
+            - Post the review comment with the mcp__github_comment__update_claude_comment tool.
+            - Do not modify files, do not set labels, do not approve the PR: output is advisory;
+              merge is decided by CI `gate` and human reviewers.
+
+            Comment content, structured exactly:
+            1) Header line: `agent-review (model: ${{ env.ANTHROPIC_MODEL }}, PR: ${{ env.PR_NUMBER }})`.
+            2) Table: `reviewer | verdict (approve / changes-requested) | blockers (count)`.
+            3) For every blocker and major finding, one line in this exact format:
+               `BLOCKER <gate>: <file>:<line> — <what>; fix: <how>`
+               where <gate> is one of: static, unit, e2e, visual, perf, mutation, bundle-delta,
+               gate-integrity, docs, manual. Major (non-blocking) findings use the same format
+               with prefix `MAJOR` instead of `BLOCKER`. Skip minor nitpicks.
+            These lines are machine-parsed into PR annotations — keep the format exact.
+
+      - name: Blockers to PR annotations
+        if: env.HAS_KEY == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+            --jq '[.[] | select(.body | startswith("agent-review ("))] | last | .body' 2>/dev/null || echo "")
+          if [ -z "$BODY" ]; then
+            echo "::notice::agent-review comment not found, nothing to annotate."
+            exit 0
+          fi
+          # Лимит GitHub — 10 error + 10 warning на шаг; ограничиваем по классам явно,
+          # чтобы блокеры не вытесняли мажоры. Чистое ревью — не ошибка шага.
+          grep -E '^BLOCKER ' <<<"$BODY" | head -10 > /tmp/agent-review-blockers.txt || true
+          grep -E '^MAJOR ' <<<"$BODY" | head -10 > /tmp/agent-review-majors.txt || true
+          while IFS= read -r LINE; do
+            [ -z "$LINE" ] && continue
+            echo "::error title=agent-review::${LINE#BLOCKER }"
+          done < /tmp/agent-review-blockers.txt
+          while IFS= read -r LINE; do
+            [ -z "$LINE" ] && continue
+            echo "::warning title=agent-review::${LINE#MAJOR }"
+          done < /tmp/agent-review-majors.txt
+          grep -q '^BLOCKER ' <<<"$BODY" || echo "::notice::agent-review: blockers not found."

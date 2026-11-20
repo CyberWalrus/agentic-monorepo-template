@@ -11,6 +11,7 @@
     "e2e": "turbo run e2e",
     "perf": "turbo run perf",
     "mutation": "turbo run mutation",
+    "probe:plugin": "node tools/probe-claude-plugin.ts",
     "lint": "oxlint --type-aware --deny-warnings",
     "lint:fix": "oxlint --type-aware --fix",
     "format": "oxfmt",
@@ -37,6 +38,7 @@
     "sandbox:check": "node tools/check-sandbox-paths.ts",
     "tool-class:check": "node tools/check-tool-class.ts",
     "docs:check": "node tools/check-docs.ts",
+    "flaky:quarantine": "node tools/check-flaky-rate.ts --validate-quarantine --quarantine tools/flaky-quarantine.json",
     "visual-image:check": "node tools/check-visual-image.ts",
     "backlog": "node tools/backlog.ts"
   },
