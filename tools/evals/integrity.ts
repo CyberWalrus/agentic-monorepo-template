@@ -30,16 +30,28 @@ async function git(worktree: string, args: string[]): Promise<string> {
 }
 
 /** Снимок дерева worktree в git-объект; возвращает хеш дерева.
- * Deny-пути добавляются force: gitignored файлы (.claude/settings.local.json
- * и др.) не могут спрятать ослабление в ignore (находка security-ревью C9.2).
- * Force — только по pathspec deny-глобов из tools/protected-paths.json:
- * полный `add -A --force` стейджит node_modules и вешает pre-commit-хуки на
- * сотни тысяч файлов (урок прогона 2026-11-20T07:38). */
+ * gitignored файлы под deny-глобами добавляются force (не спрятать
+ * ослабление в ignore — находка security-ревью C9.2). Полный `add -A
+ * --force` нельзя: стейджит node_modules и вешает pre-commit-хуки на сотни
+ * тысяч файлов (урок прогона 2026-11-20T07:38); точечный список файлов
+ * берётся из lenient `ls-files` — строгий `git add` фаталит на пустой
+ * pathspec (находка прогона 10:44). */
 export async function snapshotTree(worktree: string): Promise<string> {
   await git(worktree, ['add', '-A']);
-  const denyGlobs = denyGlobsOf(worktree);
-  if (denyGlobs.length > 0) {
-    await git(worktree, ['add', '-A', '--force', '--', ...denyGlobs]);
+  const ignoreGlobs = denyGlobsOf(worktree);
+  if (ignoreGlobs.length > 0) {
+    const ignored = await git(worktree, [
+      'ls-files',
+      '--others',
+      '--ignored',
+      '--exclude-standard',
+      '--',
+      ...ignoreGlobs,
+    ]);
+    const files = ignored.split('\n').filter((line) => line.trim() !== '');
+    if (files.length > 0) {
+      await git(worktree, ['add', '-A', '--force', '--', ...files]);
+    }
   }
   return (await git(worktree, ['write-tree'])).trim();
 }
@@ -48,7 +60,8 @@ export async function snapshotTree(worktree: string): Promise<string> {
 function denyGlobsOf(worktree: string): string[] {
   try {
     const config = JSON.parse(readFileSync(join(worktree, 'tools/protected-paths.json'), 'utf8'));
-    return typeof config?.deny === 'object' && Array.isArray(config.deny) ? config.deny : [];
+    const deny = typeof config?.deny === 'object' && Array.isArray(config.deny) ? config.deny : [];
+    return deny;
   } catch {
     // Конфиг не читается — force-фаза пропускается, обычный add -A работает;
     // matcher классов (protectionOf) при этом продолжает защищать детект.
