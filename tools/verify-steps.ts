@@ -27,11 +27,14 @@ export const fast: Step[] = [
   { name: 'boundaries', command: 'pnpm', args: ['boundaries'] },
   { name: 'knip', command: 'pnpm', args: ['knip'] },
   { name: 'test-integrity', command: 'pnpm', args: ['test:integrity'] },
-  { name: 'test:hooks', command: 'pnpm', args: ['test:hooks'] },
+  // Тесты обвязки под кэшем turbo (E1): inputs — tools/test-hooks-inputs.ts.
+  turbo('test:hooks'),
   { name: 'sandbox', command: 'pnpm', args: ['sandbox:check'] },
   // Классы защиты tools/ (ADR 0014): замыкание гейтов == deny protected-paths.json.
   { name: 'tool-class', command: 'pnpm', args: ['tool-class:check'] },
   { name: 'docs', command: 'pnpm', args: ['docs:check'] },
+  // Карантин флаков (b4.4): валидность защищённого файла.
+  { name: 'quarantine', command: 'pnpm', args: ['flaky:quarantine'] },
   { name: 'sherif', command: 'pnpm', args: ['sherif'] },
   // Версия Docker-образа Playwright == каталог @playwright/test (З4/A8).
   { name: 'visual-image', command: 'pnpm', args: ['visual-image:check'] },
