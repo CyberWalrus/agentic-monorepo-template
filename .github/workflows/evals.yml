@@ -20,8 +20,6 @@ permissions:
 
 env:
   TURBO_TELEMETRY_DISABLED: 1
-  # Косвенность для job-level if: secrets в if не читается, env — читается.
-  EVALS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
   # З10: версия CLI агента — единственный источник здесь. Сторонний инструмент
   # в контуре — по прецеденту copier (ADR 0004, З5-исключение): точный пин,
   # установка в job, обновление — отдельный review-класс PR.
@@ -34,9 +32,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Факт секрета проверяет шаг гейта: env недоступен в job-level if
+  # (документация контекстов) — первый прогон в main (13c4ae2) упал с нулём
+  # jobs именно на этом; outputs — каноническая проводка.
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      has_key: ${{ steps.check.outputs.has_key }}
+    steps:
+      - id: check
+        env:
+          EVALS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$EVALS_API_KEY" ]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+          fi
+
   evals:
     name: agent evals
-    if: env.EVALS_API_KEY != ''
+    needs: [gate]
+    if: needs.gate.outputs.has_key == 'true'
     runs-on: ubuntu-latest
     # Бюджет контура (З6): таймаут job. Внутри агент ограничен --timeout-minutes
     # раннера (90 по умолчанию, калибровка 2026-11-19), install и verify —
@@ -69,7 +87,8 @@ jobs:
   # напоминаний нет, чтобы не спамить при каждом изменении обвязки.
   needs-key:
     name: evals skipped (no ANTHROPIC_API_KEY)
-    if: env.EVALS_API_KEY == '' && github.event_name != 'push'
+    needs: [gate]
+    if: needs.gate.outputs.has_key == 'false' && github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
