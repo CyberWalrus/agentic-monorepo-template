@@ -120,9 +120,9 @@ describe('gen feature', () => {
     expect(app).toContain("import type { NoteRepository } from './notes/repository.ts';");
     expect(app).toContain('  tasks: TaskRepository;\n  notes: NoteRepository;');
     expect(app).toContain('  notes,\n  tasks,\n  router = defaultRouter,');
-    expect(app).toContain(
-      'const buildContext = (request: Request): AppContext => ({\n    notes,\n    tasks,',
-    );
+    // Вставка сразу после открывающей строки buildContext: устойчиво к тому,
+    // что в репозитории уже есть другие сгенерированные фичи.
+    expect(app).toContain('const buildContext = (request: Request): AppContext => ({\n    notes,');
 
     const page = read(root, 'apps/web/src/features/notes/NotesPage.tsx');
     expect(page).toContain('export function NotesPage');
@@ -131,7 +131,7 @@ describe('gen feature', () => {
     expect(page).toContain("useHydrated } from '../../lib/use-hydrated.ts';");
 
     const hooks = read(root, 'apps/web/src/features/notes/use-notes.ts');
-    expect(hooks).toContain('export const notesListQuery = orpc.notes.list.queryOptions();');
+    expect(hooks).toContain('const listQuery = orpc.notes.list.queryOptions();');
     expect(hooks).toContain('export function useCreateNote()');
 
     const spec = read(root, 'e2e/features/notes/notes.spec.ts');
@@ -144,7 +144,7 @@ describe('gen feature', () => {
       'packages/contracts/src/notes.test.ts',
       'apps/api/src/notes/repository.ts',
       'apps/api/src/notes/repository.test.ts',
-      'apps/api/src/notes/api.test.ts',
+      'apps/api/src/notes.test.ts',
       'apps/web/src/features/notes/NotesPage.test.tsx',
       'apps/web/src/features/notes/CreateNoteForm.tsx',
       'apps/web/src/features/notes/CreateNoteForm.test.tsx',
@@ -167,7 +167,7 @@ describe('gen feature', () => {
     expect(page).toContain('<h1>TodoLists</h1>');
     expect(page).toContain('export function TodoListsPage({ todoLists, onCreate }');
     expect(read(root, 'apps/web/src/features/todo-lists/use-todo-lists.ts')).toContain(
-      'export const todoListsListQuery = orpc.todoLists.list.queryOptions();',
+      'const listQuery = orpc.todoLists.list.queryOptions();',
     );
     expect(read(root, 'apps/api/src/authorization.ts')).toContain(
       '  todoLists: TodoListRepository;',

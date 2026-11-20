@@ -189,7 +189,7 @@ export interface ${E}Repository {
   list(): Promise<${E}[]>;
   create(title: string): Promise<${E}>;
   /** Заменяет всё хранилище: сидирование тестовых данных. */
-  reset(${f.camel}: readonly ${E}[]): Promise<void>;
+  reset(seeded: readonly ${E}[]): Promise<void>;
 }
 
 /**
@@ -228,9 +228,9 @@ export class InMemory${E}Repository implements ${E}Repository {
     return ${f.entityCamel};
   }
 
-  async reset(${f.camel}: readonly ${E}[]): Promise<void> {
+  async reset(seeded: readonly ${E}[]): Promise<void> {
     this.#${f.camel}.clear();
-    for (const ${f.entityCamel} of ${f.camel}) {
+    for (const ${f.entityCamel} of seeded) {
       this.#${f.camel}.set(${f.entityCamel}.id, ${f.entityCamel});
     }
   }
@@ -288,14 +288,16 @@ import type { ContractRouterClient } from '@orpc/contract';
 import { type Contract } from '@repo/contracts';
 import { describe, expect, it } from 'vitest';
 
-import { createApp } from '../app.ts';
-import { InMemoryTaskRepository } from '../tasks/repository.ts';
-import { InMemory${E}Repository } from './repository.ts';
+import { createApp } from './app.ts';
+import { InMemory${E}Repository } from './${f.name}/repository.ts';
+import { InMemoryTaskRepository } from './tasks/repository.ts';
 
 /**
  * Проводка заготовки ${f.name} (сгенерировано \`pnpm gen feature ${f.name}\`):
  * контракт → контекст → RPC-транспорт. Транспорт в модуле приложения не
- * подменяется — клиент строится поверх app.fetch, как в app.test.ts.
+ * подменяется — клиент строится поверх app.fetch, как в app.test.ts. Файл —
+ * в корне src/, не в модуле: доменные каталоги не импортируют HTTP-слой
+ * (правило api-domain-independent-of-transport).
  */
 function setup() {
   const app = createApp({
@@ -354,9 +356,9 @@ export function ${f.pascal}Page({ ${f.camel}, onCreate }: ${f.pascal}PageProps) 
   // До гидратации клик по SSR-разметке теряется: React вернёт серверное состояние.
   const interactive = useHydrated();
 
-  function handleCreate(title: string) {
+  function handleCreate(title: string): Promise<void> {
     setError(null);
-    onCreate(title).catch(() => setError('Could not create the ${f.entity}. Try again.'));
+    return onCreate(title).catch(() => setError('Could not create the ${f.entity}. Try again.'));
   }
 
   return (
@@ -368,8 +370,8 @@ export function ${f.pascal}Page({ ${f.camel}, onCreate }: ${f.pascal}PageProps) 
         <p>Nothing here yet. Add your first ${f.entity} above.</p>
       ) : (
         <ul aria-label="${f.pascal}">
-          {${f.camel}.map((${f.entityCamel}) => (
-            <li key={${f.entityCamel}.id}>{${f.entityCamel}.title}</li>
+          {${f.camel}.map((item) => (
+            <li key={item.id}>{item.title}</li>
           ))}
         </ul>
       )}
@@ -416,7 +418,7 @@ describe('${f.pascal}Page', () => {
     const onCreate = vi.fn<(title: string) => Promise<void>>(async () => {});
     const screen = await render(<${f.pascal}Page ${f.camel}={${f.camel}} onCreate={onCreate} />);
 
-    await screen.getByLabel('New ${f.entity}').fill('  Ship it  ');
+    await screen.getByLabelText('New ${f.entity}').fill('  Ship it  ');
     await screen.getByRole('button', { name: 'Add ${f.entity}' }).click();
 
     expect(onCreate).toHaveBeenCalledExactlyOnceWith('Ship it');
@@ -428,7 +430,7 @@ describe('${f.pascal}Page', () => {
     });
     const screen = await render(<${f.pascal}Page ${f.camel}={${f.camel}} onCreate={onCreate} />);
 
-    await screen.getByLabel('New ${f.entity}').fill('Buy milk');
+    await screen.getByLabelText('New ${f.entity}').fill('Buy milk');
     await screen.getByRole('button', { name: 'Add ${f.entity}' }).click();
 
     await expect
@@ -512,11 +514,11 @@ describe('Create${E}Form', () => {
     const onCreate = vi.fn<(title: string) => Promise<void>>(async () => {});
     const screen = await render(<Create${E}Form onCreate={onCreate} />);
 
-    await screen.getByLabel('New ${f.entity}').fill('  Buy milk  ');
+    await screen.getByLabelText('New ${f.entity}').fill('  Buy milk  ');
     await screen.getByRole('button', { name: 'Add ${f.entity}' }).click();
 
     expect(onCreate).toHaveBeenCalledExactlyOnceWith('Buy milk');
-    await expect.element(screen.getByLabel('New ${f.entity}')).toHaveValue('');
+    await expect.element(screen.getByLabelText('New ${f.entity}')).toHaveValue('');
   });
 
   it('shows the shared validation message and does not submit an empty title', async () => {
@@ -535,13 +537,13 @@ describe('Create${E}Form', () => {
     });
     const screen = await render(<Create${E}Form onCreate={onCreate} />);
 
-    await screen.getByLabel('New ${f.entity}').fill('Retry me');
+    await screen.getByLabelText('New ${f.entity}').fill('Retry me');
     await screen.getByRole('button', { name: 'Add ${f.entity}' }).click();
 
     await expect
       .element(screen.getByRole('alert'))
       .toHaveTextContent('Could not create the ${f.entity}. Try again.');
-    await expect.element(screen.getByLabel('New ${f.entity}')).toHaveValue('Retry me');
+    await expect.element(screen.getByLabelText('New ${f.entity}')).toHaveValue('Retry me');
   });
 });
 
@@ -549,7 +551,7 @@ describe('Create${E}Form when disabled', () => {
   it('blocks typing and submitting', async () => {
     const screen = await render(<Create${E}Form onCreate={async () => {}} disabled />);
 
-    await expect.element(screen.getByLabel('New ${f.entity}')).toBeDisabled();
+    await expect.element(screen.getByLabelText('New ${f.entity}')).toBeDisabled();
     await expect.element(screen.getByRole('button', { name: 'Add ${f.entity}' })).toBeDisabled();
   });
 });
@@ -558,8 +560,7 @@ describe('Create${E}Form when disabled', () => {
 
 function hooksTemplate(f: FeatureNames): string {
   const E = f.entityPascal;
-  return `import type { ${E} } from '@repo/contracts';
-import {
+  return `import {
   useMutation,
   useQueryClient,
   useSuspenseQuery,
@@ -569,11 +570,12 @@ import {
 import { orpc } from '../../lib/api-client.ts';
 
 const listKey = orpc.${f.camel}.list.queryKey();
-
-export const ${f.camel}ListQuery = orpc.${f.camel}.list.queryOptions();
+// Приватный, пока страница не смонтирована в маршрут: loader забирает
+// queryOptions отсюда (образец — tasksListQuery в routes/index.tsx).
+const listQuery = orpc.${f.camel}.list.queryOptions();
 
 export function use${f.pascal}() {
-  return useSuspenseQuery(${f.camel}ListQuery).data;
+  return useSuspenseQuery(listQuery).data;
 }
 
 /**
@@ -610,7 +612,6 @@ import { Suspense } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
-import { orpc } from '../../lib/api-client.ts';
 import { ${f.pascal}Page } from './${f.pascal}Page.tsx';
 import { useCreate${E}, use${f.pascal} } from './use-${f.name}.ts';
 
@@ -619,14 +620,20 @@ import { useCreate${E}, use${f.pascal} } from './use-${f.name}.ts';
  * транспорт подменяется (паттерн из use-tasks.test.tsx).
  */
 const transport = vi.hoisted(() => {
-  const stubbed = {
+  type Transport = {
+    list: () => Promise<${E}[]>;
+    create: (input: { title: string }) => Promise<${E}>;
+  };
+
+  const stubbed: Transport = {
     list: () => {
       throw new Error('transport is not configured for this test');
     },
-    create: (_input: { title: string }) => {
+    create: () => {
       throw new Error('transport is not configured for this test');
     },
   };
+
   return stubbed;
 });
 
@@ -656,7 +663,7 @@ function ${f.pascal}Screen() {
   return <${f.pascal}Page ${f.camel}={${f.camel}} onCreate={onCreate} />;
 }
 
-function renderScreen(client: QueryClient) {
+async function renderScreen(client: QueryClient) {
   return render(
     <QueryClientProvider client={client}>
       <Suspense fallback={<p>Loading ${f.name}…</p>}>
@@ -669,7 +676,7 @@ function renderScreen(client: QueryClient) {
 describe('use-${f.name}', () => {
   it('renders the list from the transport through the hook', async () => {
     transport.list = async () => [seeded];
-    const screen = renderScreen(new QueryClient());
+    const screen = await renderScreen(new QueryClient());
 
     await expect.element(screen.getByText('Buy milk')).toBeVisible();
   });
@@ -681,10 +688,10 @@ describe('use-${f.name}', () => {
       created = true;
       return { ...seeded, title: input.title };
     };
-    const screen = renderScreen(new QueryClient());
+    const screen = await renderScreen(new QueryClient());
 
     await expect.element(screen.getByText(/Nothing here yet/)).toBeVisible();
-    await screen.getByLabel('New ${f.entity}').fill('Ship it');
+    await screen.getByLabelText('New ${f.entity}').fill('Ship it');
     await screen.getByRole('button', { name: 'Add ${f.entity}' }).click();
 
     // Новая запись приходит с сервера через инвалидацию после мутации.
@@ -710,8 +717,7 @@ test.describe('${f.name} contract', () => {
 
     const list = await request.get(\`\${API_URL}/api/${f.name}\`);
     expect(list.status(), 'list through the OpenAPI transport').toBe(200);
-    const ${f.camel} = (await list.json()) as Array<{ title: string }>;
-    expect(${f.camel}.map((${f.entityCamel}) => ${f.entityCamel}.title)).toContain(title);
+    expect(titlesOf(await list.json())).toContain(title);
   });
 
   test('title empty after trim is rejected [AC-2]', async ({ request }) => {
@@ -720,6 +726,19 @@ test.describe('${f.name} contract', () => {
     expect(create.status(), 'contract validation runs end-to-end').toBe(400);
   });
 });
+
+/** Титулы из ответа списка с проверкой формы: ответ API — unknown, не any. */
+function titlesOf(payload: unknown): string[] {
+  if (!Array.isArray(payload)) {
+    throw new Error('list response is not an array');
+  }
+  return payload.map((item) => {
+    if (typeof item !== 'object' || item === null || typeof item['title'] !== 'string') {
+      throw new Error('list response item is not { title: string }');
+    }
+    return item['title'];
+  });
+}
 `;
 }
 
@@ -830,7 +849,7 @@ function plannedFiles(f: FeatureNames): PlannedFile[] {
     { path: `packages/contracts/src/${f.name}.test.ts`, content: contractTestTemplate(f) },
     { path: `apps/api/src/${f.name}/repository.ts`, content: repositoryTemplate(f) },
     { path: `apps/api/src/${f.name}/repository.test.ts`, content: repositoryTestTemplate(f) },
-    { path: `apps/api/src/${f.name}/api.test.ts`, content: apiTestTemplate(f) },
+    { path: `apps/api/src/${f.name}.test.ts`, content: apiTestTemplate(f) },
     { path: `apps/web/src/features/${f.name}/${f.pascal}Page.tsx`, content: pageTemplate(f) },
     {
       path: `apps/web/src/features/${f.name}/${f.pascal}Page.test.tsx`,
