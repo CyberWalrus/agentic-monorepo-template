@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { generateDrizzleJson } from 'drizzle-kit/api';
@@ -181,6 +181,22 @@ describe('collectSchemaSyncReport', () => {
     ]);
   });
 
+  it('дыра в снапшотах не порождает data-only предупреждений через дыру', async () => {
+    // Снапшот второй миграции отсутствует: гейт уже красит, и сравнение
+    // третьей миграции через дыру с первой не должно добавлять ложный warning.
+    const id2 = '33333333-3333-4333-8333-333333333333';
+    writeCatalog([
+      { idx: 0, tag: '0000_init', snapshot: snapshotText(narrowModule, ID0, ZERO_ID) },
+      { idx: 1, tag: '0001_lost' },
+      { idx: 2, tag: '0002_after_hole', snapshot: snapshotText(narrowModule, id2, ID1) },
+    ]);
+
+    const report = await reportFor(narrowModule);
+
+    expect(report.errors).toEqual([expect.stringContaining('отсутствует')]);
+    expect(report.warnings).toEqual([]);
+  });
+
   it('битая цепочка prevId красит гейт', async () => {
     const foreignId = '44444444-4444-4444-8444-444444444444';
     writeCatalog([
@@ -233,6 +249,31 @@ describe('collectSchemaSyncReport', () => {
 
     expect(report.errors).toEqual([expect.stringContaining('SQL-файл')]);
     expect(report.errors[0]).toContain('0000_init.sql');
+  });
+
+  it('SQL-файл вне журнала красит гейт', async () => {
+    writeCatalog([
+      { idx: 0, tag: '0000_init', snapshot: snapshotText(narrowModule, ID0, ZERO_ID) },
+    ]);
+    writeFileSync(join(catalogRoot, 'migrations', '0001_orphan.sql'), '-- не в журнале\n');
+
+    const report = await reportFor(narrowModule);
+
+    expect(report.errors).toEqual([
+      expect.stringContaining('0001_orphan.sql вне журнала миграций'),
+    ]);
+  });
+
+  it('служебные файлы каталога (не SQL) вне журнала не красят гейт', async () => {
+    writeCatalog([
+      { idx: 0, tag: '0000_init', snapshot: snapshotText(narrowModule, ID0, ZERO_ID) },
+    ]);
+    writeFileSync(join(catalogRoot, 'migrations', '0000_init.sql.bak'), '-- не SQL-миграция\n');
+
+    const report = await reportFor(narrowModule);
+
+    expect(report.errors).toEqual([]);
+    expect(report.warnings).toEqual([]);
   });
 
   it('журнал без массива entries красит гейт', async () => {
@@ -383,7 +424,6 @@ describe('isDirectInvocation', () => {
   const cliUrl = pathToFileURL(
     join(dirname(fileURLToPath(import.meta.url)), 'schema-sync-cli.ts'),
   ).href;
-  const apiRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
   it('прямой запуск: модуль совпадает с argv1', () => {
     expect(isDirectInvocation(syntheticUrl, '/repo/apps/api/src/tasks/schema-sync-cli.ts')).toBe(
@@ -392,13 +432,10 @@ describe('isDirectInvocation', () => {
   });
 
   it('относительный argv1 резолвится против cwd', () => {
-    const previousCwd = process.cwd();
-    process.chdir(apiRoot);
-    try {
-      expect(isDirectInvocation(cliUrl, 'src/tasks/schema-sync-cli.ts')).toBe(true);
-    } finally {
-      process.chdir(previousCwd);
-    }
+    // Без process.chdir: он запрещён в воркерах (stryker, rev c1.3). Относительный
+    // путь от текущего cwd к cli проверяет тот же контракт в любом cwd.
+    const cliPath = join(dirname(fileURLToPath(import.meta.url)), 'schema-sync-cli.ts');
+    expect(isDirectInvocation(cliUrl, relative(process.cwd(), cliPath))).toBe(true);
   });
 
   it('чужой argv1 (vitest, другой скрипт) — не прямой запуск', () => {

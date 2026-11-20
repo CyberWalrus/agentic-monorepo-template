@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { generateDrizzleJson, generateMigration, type DrizzleSnapshotJSON } from 'drizzle-kit/api';
@@ -135,6 +135,30 @@ function readJournal(migrationsFolder: string, problems: string[]): JournalEntry
   return entries;
 }
 
+/**
+ * SQL-файлы каталога, на которые не ссылается журнал: мигратор применяет
+ * только записи журнала, поэтому такой файл — мусор или оборвавшийся
+ * `generate`; он должен быть либо убран, либо возвращён в журнал.
+ */
+function addUnjournaledSqlProblems(
+  migrationsFolder: string,
+  entries: JournalEntry[],
+  problems: string[],
+): void {
+  const journaledTags = new Set(entries.map((entry) => entry.tag));
+  for (const name of readdirSync(migrationsFolder).toSorted()) {
+    if (!name.endsWith('.sql')) {
+      continue;
+    }
+    const tag = name.slice(0, -'.sql'.length);
+    if (!journaledTags.has(tag)) {
+      problems.push(
+        `SQL-файл ${name} вне журнала миграций: мигратор его не применит — убери файл или верни запись в журнал`,
+      );
+    }
+  }
+}
+
 function parseSnapshot(text: string, snapshotPath: string): LoadedSnapshot | string {
   let parsed: unknown;
   try {
@@ -162,6 +186,7 @@ function parseSnapshot(text: string, snapshotPath: string): LoadedSnapshot | str
  */
 function loadMigrationChain(migrationsFolder: string, problems: string[]): LoadedMigration[] {
   const entries = readJournal(migrationsFolder, problems);
+  addUnjournaledSqlProblems(migrationsFolder, entries, problems);
   const migrations: LoadedMigration[] = [];
   for (const entry of entries) {
     const sqlPath = join(migrationsFolder, `${entry.tag}.sql`);
@@ -214,15 +239,24 @@ function loadMigrationChain(migrationsFolder: string, problems: string[]): Loade
  */
 function dataOnlyMigrationTags(migrations: LoadedMigration[]): string[] {
   const tags: string[] = [];
-  let previous: LoadedSnapshot | undefined;
+  let previous: LoadedMigration | undefined;
   for (const migration of migrations) {
     const snapshot = migration.snapshot;
-    if (snapshot !== undefined && previous !== undefined) {
-      if (stripSnapshotIdentity(snapshot) === stripSnapshotIdentity(previous)) {
+    const previousSnapshot = previous?.snapshot;
+    // Сравнение только соседей по idx: при дыре в снапшотах (гейт уже красит)
+    // сравнение через дыру дало бы ложное data-only предупреждение.
+    if (
+      snapshot !== undefined &&
+      previousSnapshot !== undefined &&
+      previous.idx === migration.idx - 1
+    ) {
+      if (stripSnapshotIdentity(snapshot) === stripSnapshotIdentity(previousSnapshot)) {
         tags.push(migration.tag);
       }
     }
-    previous = snapshot ?? previous;
+    if (snapshot !== undefined) {
+      previous = migration;
+    }
   }
   return tags;
 }
