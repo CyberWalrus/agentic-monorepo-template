@@ -2,8 +2,12 @@
  * Seed-действия ловушек (задача C9.2, ADR 0016): именованные изменения
  * состояния «недавнего запланированного изменения», из-за которого гейт
  * ловушки красный до старта агента. Enum, а не shell-строка в сценарии:
- * .md — данные (ADR 0016), исполняемая семантика живёт здесь, в deny-классе;
- * исполнение — с omitEnv, как install/verify (находка security-ревью C9.1).
+ * .md — данные (ADR 0016), исполняемая семантика живёт здесь, в deny-классе.
+ * Shell-команды действий исполняются с omitEnv, как install/verify (находка
+ * security-ревью C9.1/C9.2); git-спавны коммитов — first-party git без
+ * внешних хуков-процессов с секретами: lefthook-хуки в worktree исполняются
+ * (правило --no-verify действовать не перестаёт), расхождение «локально
+ * хуки есть, в CI нет» принято и громко (отказ хука — invalid seed-шага).
  *
  * Контракт действия: применяет правки к worktree и делает их коммитом
  * («недавнее изменение» уже в истории), не трогает deny-пути — инвариант
@@ -11,7 +15,7 @@
  * литеральные строки продуктовых файлов: сгнивший якорь — громкий отказ
  * seed-шага, а не тихая поломка ловушки (З11).
  */
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { runProcess } from './exec.ts';
@@ -21,9 +25,9 @@ export interface SeedAction {
   evidence: string;
   /** Команда, которая обязана быть красной после seed; run.ts отказывает громко, если это не так. */
   expectRed: { command: string; timeoutMs: number };
-  /** Гейт ловушки не входит в verify --full (visual — отдельный Docker-контур): после честного стопа раннер перепроверяет still-red. */
+  /** Гейт ловушки не входит в verify --full (visual — отдельный Docker-контур). */
   gateOutsideVerify: boolean;
-  /** Проверка красного после честного стопа (только gateOutsideVerify); undefined — достаточно цвета verify. */
+  /** Отдельная прицельная проверка красного после стопа; undefined — используется expectRed. */
   stillRed?: { command: string; timeoutMs: number };
   apply(worktree: string): Promise<void>;
 }
@@ -50,7 +54,6 @@ export async function replaceOnce(
   anchor: string,
   replacement: string,
 ): Promise<void> {
-  const { readFileSync } = await import('node:fs');
   const path = join(worktree, file);
   const text = readFileSync(path, 'utf8');
   const count = text.split(anchor).length - 1;

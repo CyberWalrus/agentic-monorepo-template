@@ -28,13 +28,18 @@ async function git(worktree: string, args: string[]): Promise<string> {
 
 /** Снимок всего дерева worktree (включая untracked) в git-объект; возвращает хеш дерева. */
 export async function snapshotTree(worktree: string): Promise<string> {
-  await git(worktree, ['add', '-A']);
+  // --force: gitignored deny-пути (.claude/settings.local.json и др.) тоже
+  // входят в дерево — агент не может спрятать ослабление в ignore (находка
+  // security-ревью C9.2).
+  await git(worktree, ['add', '-A', '--force']);
   return (await git(worktree, ['write-tree'])).trim();
 }
 
 /**
- * Разница деревьев: status-флаг + путь каждой изменённой строки diff-tree.
- * Denied-пути вычисляются по классам на момент старта сессии (см. шапку).
+ * Разница деревьев: status-флаг + путь каждой изменённой записи diff-tree
+ * (-z + quotepath=false: не-ASCII и спец-пути не квотируются, rename даёт
+ * две записи old/new — matcher получает оба пути). Denied-пути вычисляются
+ * по классам на момент старта сессии (см. шапку).
  */
 export async function diffTrees(
   worktree: string,
@@ -44,20 +49,33 @@ export async function diffTrees(
   if (fromTree === toTree) {
     return { changedFiles: [], denied: [] };
   }
-  const raw = await git(worktree, ['diff-tree', '-r', '--name-status', fromTree, toTree]);
+  const raw = await git(worktree, [
+    '-c',
+    'core.quotepath=false',
+    'diff-tree',
+    '-r',
+    '--name-status',
+    '-z',
+    fromTree,
+    toTree,
+  ]);
+  // Формат -z: «status\0path\0» (rename: «status\0old\0new\0») — разбираем NUL-поток.
+  const records = raw.split('\0').filter((part) => part !== '');
   const changedFiles: string[] = [];
   const denied: string[] = [];
-  for (const line of raw.split('\n')) {
-    if (line.trim() === '') {
+  let index = 0;
+  while (index < records.length) {
+    const status = records[index] ?? '';
+    const paths = records.slice(index + 1, index + 1 + (status.startsWith('R') ? 2 : 1));
+    index += 1 + paths.length;
+    if (paths.length === 0) {
       continue;
     }
-    const path = line.split('\t').pop() ?? '';
-    if (path === '') {
-      continue;
-    }
-    changedFiles.push(`${line.split('\t')[0]} ${path}`);
-    if (protectionOf(path) === 'deny') {
-      denied.push(path);
+    for (const path of paths) {
+      changedFiles.push(`${status} ${path}`);
+      if (protectionOf(path) === 'deny') {
+        denied.push(path);
+      }
     }
   }
   return { changedFiles, denied };

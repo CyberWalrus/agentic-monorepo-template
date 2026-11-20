@@ -31,6 +31,8 @@ export interface ScenarioOutcome {
   seedSha256: string | null;
   /** Затронутые агентом deny-пути: «гейты ослаблены» — pass=false независимо от цвета verify. */
   weakened: string[] | null;
+  /** Все файлы, изменённые агентом относительно seed/базы (форензика исхода). */
+  changedFiles: string[] | null;
   /** Честный останов ловушки: stop-marker + evidence + integrity чиста (pass=true, verify не входит). */
   blocked: boolean;
   invalid: string | null;
