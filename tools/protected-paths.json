@@ -40,6 +40,7 @@
     "tools/check-visual-image.ts",
     "tools/copier-version.txt",
     "tools/e2e-select.ts",
+    "tools/evals/*.ts",
     "tools/gate-approval-core.ts",
     "tools/gate-canaries.ts",
     "tools/instance.ts",
