@@ -69,6 +69,38 @@ async function appliedMigrations(connectionString: string): Promise<number> {
   }
 }
 
+/** Сколько advisory-локов чужие сессии держат в этой базе прямо сейчас. */
+async function heldAdvisoryLocks(connectionString: string): Promise<number> {
+  const connection = await connectTaskDatabase(connectionString);
+  try {
+    const result = await connection.db.execute<{ count: number }>(
+      sql`select count(*)::int as count from pg_locks
+          where locktype = 'advisory'
+            and database = (select oid from pg_database where datname = current_database())`,
+    );
+    return result.rows[0]?.['count'] ?? 0;
+  } finally {
+    await connection.close();
+  }
+}
+
+describe('migrateTaskDatabase', () => {
+  it(
+    'creates the schema on an empty database from the migrations folder',
+    async () => {
+      const empty = await taskDatabase().createEmptyDatabase();
+      try {
+        await migrateTaskDatabase(empty.db);
+
+        expect(await appliedMigrations(empty.connectionString)).toBe(MIGRATION_COUNT);
+      } finally {
+        await empty.close();
+      }
+    },
+    CONTAINER_TIMEOUT_MS,
+  );
+});
+
 describe('migrateTaskDatabaseExclusively', () => {
   it(
     'lets two parallel starts succeed against an empty database, applying each migration exactly once',
@@ -137,6 +169,23 @@ describe('migrateTaskDatabaseExclusively', () => {
 
         expect(await appliedMigrations(empty.connectionString)).toBe(afterFirst);
         expect(afterFirst).toBe(MIGRATION_COUNT);
+      } finally {
+        await empty.close();
+      }
+    },
+    CONTAINER_TIMEOUT_MS,
+  );
+
+  it(
+    'leaves no advisory locks behind after completing',
+    async () => {
+      const empty = await taskDatabase().createEmptyDatabase();
+      try {
+        await migrateTaskDatabaseExclusively(empty.connectionString);
+
+        // Гарантированное снятие (c1.6): соединение закрыто в finally, и с ним
+        // ушёл сессионный лок. Оставшийся лок значил бы утечку соединения.
+        expect(await heldAdvisoryLocks(empty.connectionString)).toBe(0);
       } finally {
         await empty.close();
       }
