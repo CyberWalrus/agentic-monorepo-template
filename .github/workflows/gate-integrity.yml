@@ -75,7 +75,7 @@ jobs:
       # Только base.sha. Никогда не checkout head PR и merge ref (код PR под токеном
       # этого события — паттерн pwn request). Локальный экшен тоже резолвится из базы.
       - name: Checkout trusted base
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
       - uses: ./.github/actions/setup
@@ -153,7 +153,7 @@ jobs:
       # Только base.sha. Никогда не checkout head PR и merge ref (код PR под токеном
       # этого события — паттерн pwn request). Локальный экшен тоже резолвится из базы.
       - name: Checkout trusted base
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
       - uses: ./.github/actions/setup

@@ -19,14 +19,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
       - run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
       # Случайный порядок и повторы ловят зависимые и нестабильные тесты.
       - run: pnpm --filter @repo/e2e exec playwright test --project=functional --shuffle --repeat-each=5
         env: { CI: 'true' }
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with: { name: flake-report, path: e2e/playwright-report/ }
 
@@ -35,10 +35,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
       - run: pnpm --filter @repo/api exec stryker run --force
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with: { name: mutation-full, path: apps/api/reports/mutation/ }
 
@@ -51,7 +51,7 @@ jobs:
       issues: write
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
       # build/bundle ДО perf: perf-конфиг поднимает webServer = vite preview,
@@ -64,7 +64,7 @@ jobs:
         id: perf
         run: pnpm --filter @repo/e2e exec playwright test --project=perf --repeat-each=3
         env: { CI: 'true' }
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         # Диагностический артефакт тренда — всегда, даже с красного прогона.
         if: always()
         with:
@@ -108,7 +108,7 @@ jobs:
           mkdir -p perf-baseline
           cp e2e/reports/perf.json perf-baseline/perf.json
           node tools/check-perf-trend.main.ts write-meta --out perf-baseline --sha "${{ github.sha }}" --run-id "${{ github.run_id }}"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: >-
           always() && steps.perf.outcome == 'success' && steps.baseline.outcome == 'success' &&
           (steps.compare.outcome == 'success' || steps.compare.outcome == 'skipped')
@@ -131,7 +131,7 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
       - name: fetch baseline of this run
@@ -174,7 +174,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         # Полная история: bundle-delta (канарейка и негатив-проверки) строит базу
         # от merge-base(HEAD, origin/main) (A6 PR-2, ADR 0013).
         with: { fetch-depth: 0 }
@@ -193,7 +193,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         # Полная история: шаг bundle-delta строит базу от merge-base(HEAD,
         # origin/main) (A6 PR-2, ADR 0013); на main база == HEAD — шаг быстрый.
         with: { fetch-depth: 0 }
@@ -204,7 +204,7 @@ jobs:
       # калибровка порога — по тренд-данным, подъём — человеческим PR (З7).
       - run: mkdir -p reports && pnpm verify --full --enforce-budgets --json > reports/verify-durations.json
         env: { CI: 'true' }
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: verify-durations-${{ github.run_id }}
@@ -220,7 +220,7 @@ jobs:
       pull-requests: read
     steps:
       # Полная история: doctor сверяет ветки task/* с доской (ADR 0007, «Замыкание задачи»).
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
       # Гейт целостности доски — deny-модуль напрямую (ADR 0014): ночной контур

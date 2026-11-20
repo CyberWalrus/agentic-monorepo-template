@@ -20,6 +20,9 @@
     "sherif": "sherif",
     "bundle": "node tools/check-bundle.ts",
     "bundle:delta": "node tools/check-bundle-delta.ts",
+    "secrets:check": "secretlint \"**/*\"",
+    "audit:check": "node tools/check-audit.ts",
+    "sbom": "pnpm sbom",
     "visual": "tools/visual.sh",
     "visual:update": "VISUAL_UPDATE=1 tools/visual.sh",
     "verify": "node tools/verify.ts",
@@ -38,6 +41,7 @@
     "backlog": "node tools/backlog.ts"
   },
   "devDependencies": {
+    "@secretlint/secretlint-rule-preset-recommend": "catalog:",
     "@types/node": "catalog:",
     "chrome-devtools-mcp": "catalog:",
     "dependency-cruiser": "catalog:",
@@ -46,6 +50,7 @@
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
+    "secretlint": "catalog:",
     "sherif": "catalog:",
     "turbo": "catalog:",
     "typescript": "catalog:",

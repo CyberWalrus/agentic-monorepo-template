@@ -30,13 +30,13 @@ jobs:
         if: env.HAS_KEY != 'true'
         run: echo "::notice::ANTHROPIC_API_KEY is not configured, agent review skipped."
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: env.HAS_KEY == 'true'
         with: { fetch-depth: 0 }
 
       - name: General code review (official plugin)
         if: env.HAS_KEY == 'true'
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@c84e279f859e2591391e95bd309286eb111c345f # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -49,7 +49,7 @@ jobs:
 
       - name: Specialist reviewers (repo subagents)
         if: env.HAS_KEY == 'true'
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@c84e279f859e2591391e95bd309286eb111c345f # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
