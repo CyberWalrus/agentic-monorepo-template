@@ -11,7 +11,7 @@ import { collectSchemaSyncReport, type SchemaSyncReport } from './schema-sync.ts
  * предупреждения и шаг не красят. Сверка применения миграций с нуля со
  * схемой кода — integration-тест (test/schema-sync.postgres.test.ts).
  * Подключение выделенным шагом verify — операторский PR (ADR 0014), см.
- * ADR 0017.
+ * ADR 0018.
  */
 
 /** Строки отчёта для человека: одна строка на находку, «ОШИБКА»/«предупреждение». */
