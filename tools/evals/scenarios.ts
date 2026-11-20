@@ -18,6 +18,14 @@ export interface Scenario {
   name: string;
   description: string;
   guardsNotPresent: string[];
+  /** Ловушка (C9.2): seed + integrity + stop-marker вместо обычной семантики pass. */
+  trap: boolean;
+  /** Имя seed-действия из реестра tools/evals/seed.ts (только для ловушек). */
+  seed: string | null;
+  /** Маркер честного останова в финальном ответе агента (только для ловушек). */
+  stopMarker: string | null;
+  /** Строка-симптом из seed-состояния: агент называет её, только исследовав работу (только для ловушек). */
+  evidence: string | null;
   prompt: string;
 }
 
@@ -66,11 +74,42 @@ export function parseScenario(file: string, raw: string): Scenario {
     throw new ScenarioError('нет описания (description)', file);
   }
   const guardsRaw = fields.get('guards-not-present') ?? '';
-  if (guardsRaw === '') {
-    throw new ScenarioError(
-      'нет guards-not-present: сценарий обязан объявлять идентификаторы фичи, которых не должно быть в продуктовом коде, иначе реализованная фича тихо инвертирует смысл метрики',
-      file,
-    );
+  const trapRaw = fields.get('trap') ?? '';
+  if (trapRaw !== '' && trapRaw !== 'true') {
+    throw new ScenarioError(`trap: только «true» или отсутствие поля, получено «${trapRaw}»`, file);
+  }
+  const trap = trapRaw === 'true';
+  // Cross-field валидация (находка ревью плана C9.2): опечатка в поле не даёт
+  // «ловушку без seed» или «эталон с исполняемыми полями» — громкий отказ.
+  const optional = ['seed', 'stop-marker', 'evidence']
+    .filter((key) => (fields.get(key) ?? '') !== '')
+    .map((key) => key);
+  const missing = ['seed', 'stop-marker', 'evidence'].filter(
+    (key) => (fields.get(key) ?? '') === '',
+  );
+  if (trap) {
+    if (guardsRaw !== '') {
+      throw new ScenarioError(
+        'trap-сценарий не задаёт guards-not-present: приманка — не новая фича',
+        file,
+      );
+    }
+    if (missing.length > 0) {
+      throw new ScenarioError(`trap: не заданы обязательные поля ${missing.join(', ')}`, file);
+    }
+  } else {
+    if (guardsRaw === '') {
+      throw new ScenarioError(
+        'нет guards-not-present: сценарий обязан объявлять идентификаторы фичи, которых не должно быть в продуктовом коде, иначе реализованная фича тихо инвертирует смысл метрики',
+        file,
+      );
+    }
+    if (optional.length > 0) {
+      throw new ScenarioError(
+        `не-trap сценарий задаёт ловушечные поля ${optional.join(', ')} — опечатка?`,
+        file,
+      );
+    }
   }
   const guardsNotPresent = guardsRaw
     .split(',')
@@ -80,7 +119,20 @@ export function parseScenario(file: string, raw: string): Scenario {
   if (prompt === '') {
     throw new ScenarioError('пустой промпт (тело после front matter)', file);
   }
-  return { name, description, guardsNotPresent, prompt };
+  const value = (key: string): string | null => {
+    const fieldRaw = fields.get(key) ?? '';
+    return fieldRaw === '' ? null : fieldRaw;
+  };
+  return {
+    name,
+    description,
+    guardsNotPresent,
+    trap,
+    seed: value('seed'),
+    stopMarker: value('stop-marker'),
+    evidence: value('evidence'),
+    prompt,
+  };
 }
 
 export interface ScenarioRef {

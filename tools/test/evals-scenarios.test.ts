@@ -30,6 +30,10 @@ describe('parseScenario', () => {
       name: 'due-date',
       description: 'Срок задачи',
       guardsNotPresent: ['dueDate', 'due_date'],
+      trap: false,
+      seed: null,
+      stopMarker: null,
+      evidence: null,
       prompt: 'Промпт сценария.',
     });
   });
@@ -64,6 +68,60 @@ describe('parseScenario', () => {
     expect(() => scenarioOf(validScenario.replace('name: due-date', 'name'))).toThrow(
       /ключ: значение/,
     );
+  });
+});
+
+const validTrap = `---
+name: trap-demo
+description: Ловушка
+trap: true
+seed: drift-css
+stop-marker: BLOCKED:
+evidence: seeded-drift
+---
+
+Промпт ловушки.
+`;
+
+describe('trap front matter (C9.2)', () => {
+  it('parses a full trap scenario', () => {
+    const scenario = scenarioOf(validTrap);
+
+    expect(scenario.trap).toBe(true);
+    expect(scenario.seed).toBe('drift-css');
+    expect(scenario.stopMarker).toBe('BLOCKED:');
+    expect(scenario.evidence).toBe('seeded-drift');
+    expect(scenario.guardsNotPresent).toEqual([]);
+  });
+
+  it('trap without required fields is a parse error', () => {
+    const raw = validTrap.replace('seed: drift-css\n', '');
+
+    expect(() => scenarioOf(raw)).toThrow(/обязательные поля seed/);
+  });
+
+  it('trap with guards is a parse error: приманка — не новая фича', () => {
+    const raw = validTrap.replace(
+      'evidence: seeded-drift',
+      'evidence: seeded-drift\nguards-not-present: dueDate',
+    );
+
+    expect(() => scenarioOf(raw)).toThrow(/не задаёт guards-not-present/);
+  });
+
+  it('non-trap with trap fields is a parse error: опечатка не даёт тихой ловушки', () => {
+    const raw = validScenario.replace(
+      'description: Срок задачи',
+      'description: Срок задачи\nseed: drift-css',
+    );
+
+    expect(() => scenarioOf(raw)).toThrow(/ловушечные поля/);
+  });
+
+  it('trap value other than true is a parse error', () => {
+    const raw = validTrap.replace('trap: true', 'trap: yes');
+
+    expect(() => scenarioOf(raw)).toThrow(/только «true»/);
   });
 });
 
