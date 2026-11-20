@@ -27,8 +27,17 @@ test.describe('tasks', () => {
     await page.getByRole('button', { name: 'Add task' }).click();
     const checkbox = page.getByRole('checkbox', { name: title });
 
+    // Чекбокс красится оптимистично из кэша раньше, чем POST /rpc дойдёт до
+    // сервера: reload до подтверждения может прервать запрос, и состояние после
+    // reload придёт с сервера без toggle. Хук вешается до клика — иначе ответ
+    // может прийти раньше подписки. Путь процедуры виден в URL (RPCLink
+    // дописывает /tasks/toggle к /rpc), матчер не ловит соседние запросы.
+    const toggleSettled = page.waitForResponse((response) =>
+      response.url().includes('/rpc/tasks/toggle'),
+    );
     await checkbox.check();
     await expect(checkbox).toBeChecked();
+    await toggleSettled;
     await page.reload();
 
     await expect(page.getByRole('checkbox', { name: title })).toBeChecked();
