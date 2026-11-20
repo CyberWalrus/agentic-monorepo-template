@@ -1,6 +1,6 @@
 # ADR 0015: Доверенный workflow одобрения визуальных базлайнов
 
-- Статус: предложено (принимается merge этого PR человеком)
+- Статус: принято (внедрено: b3.1 — merge #76, 2026-11-19: двухфазный job `visual`, доверенный workflow `visual-approve.yml`, валидатор команды `/approve-visual`, канарейки; добавление `visual-approve.yml` в политику Actions и проба команды на реальном диффе — действия человека, github-setup.md п. 3)
 - Дата: 2026-11-19
 - Контекст: [ADR 0002](0002-gate-integrity.md) (доверенные workflow, З2), [ADR 0013](0013-bundle-delta-gate.md) (доверенное одобрение по API-фактам), [ADR 0004](0004-sandbox.md), [ADR 0009](0009-operator-delegation.md), задача b3.1, [architecture.md](../architecture.md) §3.6, [github-setup.md](../github-setup.md) п. 3
 
