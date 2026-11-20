@@ -60,6 +60,7 @@ const KNOWN_GATES: readonly string[] = [
   'tools/flaky-quarantine.json',
   'tools/check-flaky-rate.ts',
   'tools/check-gate-approval.ts',
+  'tools/check-registries.ts',
   'tools/check-perf-trend.main.ts',
   'tools/check-perf-trend.ts',
   'tools/check-protected-paths.ts',

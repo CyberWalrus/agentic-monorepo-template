@@ -674,6 +674,33 @@ export const CANARIES: GateCanary[] = [
       );
     },
   },
+  {
+    // b7: реестры держат одну строку на домен по алфавиту — конфликты
+    // слияния тривиальны. Плохое изменение — перестановка строк в UI-реестре;
+    // красит шаг registries (tools/check-registries.ts).
+    name: 'порядок реестров нарушен',
+    steps: 'registries',
+    failedStep: 'registries',
+    expect: /не в алфавитном порядке/,
+    apply: (root) => {
+      const path = join(root, 'packages', 'ui', 'src', 'index.ts');
+      const source = readFileSync(path, 'utf8');
+      const button =
+        "export { Button, type ButtonProps, type ButtonVariant } from './button/Button.tsx';";
+      const errorState =
+        "export { ErrorState, type ErrorStateProps } from './error-state/ErrorState.tsx';";
+      if (!source.includes(button) || !source.includes(errorState)) {
+        throw new Error('canary anchor not found: ui registry exports');
+      }
+      writeFileSync(
+        path,
+        source
+          .replace(button, '__SWAP__')
+          .replace(errorState, button)
+          .replace('__SWAP__', errorState),
+      );
+    },
+  },
 ];
 // Вывод портов (З9, A5 PR-3) канарейки шага не имеет: рантайм читает записанный
 // reports/ports.json (read-first — иначе зонд после старта серверов уезжал на

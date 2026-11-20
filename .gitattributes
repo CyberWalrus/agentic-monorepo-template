@@ -1,0 +1,3 @@
+# Производные файлы (b7): конфликт решается pnpm regen, руками не сливать.
+packages/contracts/openapi.json linguist-generated=true
+apps/web/src/routeTree.gen.ts linguist-generated=true

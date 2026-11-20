@@ -32,6 +32,8 @@ export const fast: Step[] = [
   // Классы защиты tools/ (ADR 0014): замыкание гейтов == deny protected-paths.json.
   { name: 'tool-class', command: 'pnpm', args: ['tool-class:check'] },
   { name: 'docs', command: 'pnpm', args: ['docs:check'] },
+  // Порядок реестров (b7): одна строка на домен по алфавиту.
+  { name: 'registries', command: 'pnpm', args: ['registries:check'] },
   // Карантин флаков (b4.4): валидность защищённого файла.
   { name: 'quarantine', command: 'pnpm', args: ['flaky:quarantine'] },
   { name: 'sherif', command: 'pnpm', args: ['sherif'] },
