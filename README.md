@@ -8,31 +8,28 @@
 
 Систему ведут три роли. Полные правила агента — [AGENTS.md](AGENTS.md); механика доски задач — [ADR 0007](docs/adr/0007-task-board.md); роль и границы оператора — [ADR 0009](docs/adr/0009-operator-delegation.md).
 
-| Роль     | Как запустить                              | Что делает                                                                         |
-| -------- | ------------------------------------------ | ---------------------------------------------------------------------------------- |
-| Агент    | обычная сессия, фраза «продолжай по плану» | берёт свободную задачу (`pnpm backlog next`) и доводит её до PR с зелёными гейтами |
-| Оператор | сессия с computer use, слова «ты оператор» | ведёт задачи режима обслуживания — те, что трогают защищённые пути гейтов          |
-| Человек  | —                                          | принимает решения, которые не делегируются (список ниже)                           |
+| Роль     | Как запустить                              | Что делает                                                                                    |
+| -------- | ------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| Агент    | обычная сессия, фраза «продолжай по плану» | берёт свободную задачу (`pnpm backlog next`) и доводит её до PR с зелёными гейтами            |
+| Оператор | сессия с computer use, слова «ты оператор» | ведёт задачи режима обслуживания — те, что трогают защищённые пути гейтов                     |
+| Человек  | —                                          | принимает решения, которые не делегируются ([ADR 0009](docs/adr/0009-operator-delegation.md)) |
 
-Что человек делает сам ([ADR 0009](docs/adr/0009-operator-delegation.md)):
+Что человек делает сам — приёмка PR (approve, label `gate-change-approved`, merge), одобрение базлайнов скриншот-тестов, секреты и аккаунты, `pnpm backlog release`. Полный канон с причинами и границами оператора — [ADR 0009](docs/adr/0009-operator-delegation.md), «Что остаётся человеку».
 
-- приёмка PR: ревью, approve; для изменений гейтов — label `gate-change-approved` последним шагом после финального push; merge (при строгой базе — [A9](docs/adr/0009-operator-delegation.md)): перед merge обновить ветку до `main` — это push, апрув и label ставятся после него;
-- одобрение базлайнов скриншот-тестов;
-- пароли, токены, секреты, коды подтверждения; создание аккаунтов и платных ресурсов;
-- `pnpm backlog release`.
-
-Только в репозитории шаблона: защищённый тег версии и запуск `copier update` ([ADR 0008](docs/adr/0008-template-distribution.md)), облачный контур агентов ([ADR 0010](docs/adr/0010-cloud-agents.md)). Проект из шаблона создаётся Copier из защищённого тега; на 2026-11-17 тега ещё нет — канарейка копии (d8.3) и первый тег (d8.6) в работе.
+Только в репозитории шаблона: защищённый тег версии и запуск `copier update` ([ADR 0008](docs/adr/0008-template-distribution.md)), облачный контур агентов ([ADR 0010](docs/adr/0010-cloud-agents.md)). Проект из шаблона создаётся Copier из защищённого тега — первый тег `v0.1.0` поставлен 2026-11-19; как создать проект — [github-setup.md](docs/github-setup.md), раздел 8.
 
 Очередь задач: `pnpm backlog list`.
 
 ## Быстрый старт
 
 ```bash
-nvm use            # Node из .nvmrc
-pnpm install       # pnpm из packageManager; ставит git-хуки
-pnpm verify        # все быстрые гейты; время — таблица 3.1 в docs/architecture.md
-pnpm dev           # web и api на портах из worktree (выбор — в reports/ports.json)
-                   # e2e против живого dev-сервера: REUSE_SERVER=1 pnpm e2e
+nvm use                     # Node из .nvmrc
+npm install -g pnpm@12.16.1 # pnpm: corepack в Node ≥25 не входит (ADR 0012); версия — дословно из packageManager
+pnpm install                # зависимости и git-хуки
+pnpm verify                 # все быстрые гейты; время — таблица 3.1 в docs/architecture.md
+                            # подмножество шагов: pnpm verify --only docs (список — через запятую)
+pnpm dev                    # web и api на портах из worktree (выбор — в reports/ports.json)
+                            # e2e против живого dev-сервера: REUSE_SERVER=1 pnpm e2e
 ```
 
 ## Требования окружения
@@ -71,7 +68,7 @@ E2E и перф пока гоняют `vite preview` (защищённый `e2e/
 
 ## Стек
 
-Node (`.nvmrc`) · pnpm (`packageManager`) · Turborepo · TypeScript · Oxlint + Oxfmt · Vite (Rolldown) · React + TanStack Start + TanStack Query · Hono + oRPC + Zod · Vitest browser mode · Playwright · dependency-cruiser · Knip · sherif · StrykerJS · Lefthook.
+Node (`.nvmrc`) · pnpm (`packageManager`) · Turborepo · TypeScript · Oxlint + Oxfmt · Vite (Rolldown) · React + TanStack Start + TanStack Query · Hono + oRPC + Zod · Vitest (browser mode) · Playwright · dependency-cruiser · Knip · sherif · StrykerJS · Lefthook.
 
 Версии зависимостей — только в каталоге `catalog:` в [pnpm-workspace.yaml](pnpm-workspace.yaml). Почему именно так: [ADR 0001](docs/adr/0001-initial-stack.md); исследование стека лежит в `docs/research/` и в проект из шаблона не едет, поэтому даётся без ссылки.
 
@@ -87,7 +84,7 @@ Node (`.nvmrc`) · pnpm (`packageManager`) · Turborepo · TypeScript · Oxlint 
 | **L3 PR**          | GitHub Actions `ci.yml`                    | статика, affected unit/mutation/E2E, скриншоты в Docker, перф-бюджеты, бюджет бандла, k6, защищённые пути → единый check **`gate`**                  | действует                                                                                                                                                                         |
 | **L4 merge queue** | ruleset + `merge_group`                    | всё то же на смёрженном состоянии, без affected-сокращений                                                                                           | частично (2026-11-17, A9): строгая база в снимке ruleset, применяется A9.1 — `gate` на смёрженном состоянии; affected-сокращения снимает только merge queue, недоступна на тарифе |
 | **L5 nightly**     | `nightly.yml`                              | E2E в случайном порядке x5, полный mutation, тренд перфа                                                                                             | действует                                                                                                                                                                         |
-| **Ревью**          | `agent-review.yml`                         | официальный `code-review` + 5 субагентов-ревьюеров (информационно, не блокирует)                                                                     | действует, информационно                                                                                                                                                          |
+| **Ревью**          | `agent-review.yml`                         | 5 субагентов-ревьюеров, read-only контур (b5), по `ready_for_review` и вручную; блокеры — аннотациями (информационно, не блокирует)                  | действует, информационно (живой прогон — после подключения ANTHROPIC_API_KEY)                                                                                                     |
 
 ## Что считается «достаточно хорошим» кодом
 
@@ -110,7 +107,7 @@ apps/api            Hono + oRPC, Node 26 запускает TS напрямую
 apps/web            TanStack Start, фичи в src/features/<feature>
 packages/contracts  oRPC-контракт + Zod — единый источник правды API
 packages/ui         презентационные компоненты + визуальные тесты
-e2e                 Playwright: features, visual, perf, agents (seed)
+e2e                 Playwright: features, visual, perf, specs (планы тестов), agents (seed)
 tools               гейты: verify, бюджеты, защищённые пути, Docker-скриншоты
 .claude             хуки, скилы, субагенты-ревьюеры, Playwright Test Agents
 .github             CI, агентное ревью, nightly, ruleset, Renovate; CODEOWNERS в docs/
@@ -122,6 +119,6 @@ tools               гейты: verify, бюджеты, защищённые п�
 - Исследование стека, ноябрь 2026 — `docs/research/` (в проект из шаблона не едет, поэтому без ссылки)
 - [ADR 0001: стек первой реализации](docs/adr/0001-initial-stack.md)
 - [Архитектурные и инфраструктурные подходы](docs/architecture.md): законы обвязки, слои, правила изменения гейтов
-- План развития обвязки: итог аудита и таблица стека — `docs/roadmap.md`; задачи развития — доска `backlog/` (`pnpm backlog`, ADR 0007)
+- Задачи развития обвязки — доска `backlog/` (`pnpm backlog`, [ADR 0007](docs/adr/0007-task-board.md))
 - [Настройка GitHub](docs/github-setup.md): ruleset, labels, секреты
 - [AGENTS.md](AGENTS.md): инструкции для агентов для всех клиентов; [CLAUDE.md](CLAUDE.md) только импортирует его для Claude Code

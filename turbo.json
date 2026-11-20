@@ -37,7 +37,10 @@
     "perf": {
       "dependsOn": ["transit", "^build"],
       "outputs": ["reports/**"],
-      "env": ["CI", "API_URL", "PORT_BASE"]
+      "env": ["CI", "API_URL", "PORT_BASE"],
+      // A7 (architecture.md §3.3): перф-замеры зависят от машины и между машинами
+      // не переиспользуются — задача вне кэша вовсе (ни локального, ни remote).
+      "cache": false
     },
     "mutation": {
       "dependsOn": ["transit"],

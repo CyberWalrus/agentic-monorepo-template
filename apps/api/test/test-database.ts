@@ -95,10 +95,24 @@ export interface PostgresTestDatabase {
   /** Имя базы воркера: уникально в контейнере, полезно в сообщениях тестов. */
   databaseName: string;
   /**
+   * Строка подключения к этой базе: тестам, вызывающим код по URI, а не через
+   * готовый drizzle (c1.6: миграции под advisory-локом открывают своё
+   * соединение по строке подключения).
+   */
+  connectionString: string;
+  /**
    * Удаляет базу воркера и снимает ссылку на контейнер. Последний
    * закрывший останавливает контейнер; его базу-шаблон не трогает.
+   * Базу из `createEmptyDatabase` закрывать раньше родительской: refcount
+   * у неё общий с родителем, и закрытие родителя может остановить контейнер.
    */
   close(): Promise<void>;
+  /**
+   * Пустая база (без схемы, не из шаблона) в том же контейнере: сценарии
+   * «поднялся с нуля» (c1.6: гонка миграций против пустой базы). Живёт
+   * за счёт refcount родителя — закрыть её раньше родительской `close()`.
+   */
+  createEmptyDatabase(): Promise<Omit<PostgresTestDatabase, 'createEmptyDatabase'>>;
 }
 
 interface InstanceState {
@@ -214,6 +228,11 @@ function migrationsFingerprint(image: string, migrationsFolder: string): string 
 /** Уникальная база воркера: pid + случайный суффикс, пересечений между воркерами нет. */
 function workerDatabaseName(): string {
   return `w_${process.pid}_${randomBytes(3).toString('hex')}`;
+}
+
+/** Пустая база в контейнере (для сценариев «с нуля»): тот же pid + случайный суффикс. */
+function emptyDatabaseName(): string {
+  return `e_${process.pid}_${randomBytes(3).toString('hex')}`;
 }
 
 function adminUriFor(uri: string, database: string): string {
@@ -478,22 +497,44 @@ export async function createPostgresTestDatabase(
   };
 
   const instance = await withLock(ensureSharedInstance);
+
+  // Подключение к базе экземпляра + общий вид базы (без `createEmptyDatabase`:
+  // он один на воркер). close() всегда удаляет базу; экземплярные хвосты
+  // (refcount) — в `afterDrop`.
+  const connectDatabase = async (
+    databaseName: string,
+    afterDrop: () => Promise<void>,
+  ): Promise<Omit<PostgresTestDatabase, 'createEmptyDatabase'>> => {
+    const connectionString = adminUriFor(instance.uri, databaseName);
+    const database = await connectTaskDatabase(connectionString);
+    return {
+      db: database.db,
+      databaseName,
+      connectionString,
+      close: async () => {
+        await database.close();
+        // WITH (FORCE): оборвать возможные остаточные подключения перед удалением.
+        await withAdminClient(instance.uri, (client) =>
+          client.query(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`),
+        );
+        await afterDrop();
+      },
+    };
+  };
+
   const databaseName = workerDatabaseName();
   await withAdminClient(instance.uri, (client) =>
     client.query(`CREATE DATABASE "${databaseName}" TEMPLATE "${instance.templateName}"`),
   );
-  const database = await connectTaskDatabase(adminUriFor(instance.uri, databaseName));
+  const worker = await connectDatabase(databaseName, () => withLock(releaseSharedInstance));
 
-  return {
-    db: database.db,
-    databaseName,
-    close: async () => {
-      await database.close();
-      // WITH (FORCE): оборвать возможные остаточные подключения перед удалением.
-      await withAdminClient(instance.uri, (client) =>
-        client.query(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`),
-      );
-      await withLock(releaseSharedInstance);
-    },
+  const createEmptyDatabase = async (): Promise<
+    Omit<PostgresTestDatabase, 'createEmptyDatabase'>
+  > => {
+    const name = emptyDatabaseName();
+    await withAdminClient(instance.uri, (client) => client.query(`CREATE DATABASE "${name}"`));
+    return connectDatabase(name, async () => {});
   };
+
+  return { ...worker, createEmptyDatabase };
 }

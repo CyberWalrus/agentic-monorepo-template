@@ -1,7 +1,7 @@
 import { serve } from '@hono/node-server';
 
 import { createApp } from './app.ts';
-import { connectTaskDatabase, migrateTaskDatabase } from './tasks/database.ts';
+import { connectTaskDatabase, migrateTaskDatabaseExclusively } from './tasks/database.ts';
 import { PostgresTaskRepository } from './tasks/postgres-repository.ts';
 import { InMemoryTaskRepository, type TaskRepository } from './tasks/repository.ts';
 import { createLogger } from './observability.ts';
@@ -24,7 +24,9 @@ let tasks: TaskRepository;
 if (storage.kind === 'postgres') {
   const database = await connectTaskDatabase(storage.connectionString);
   // Миграции применяются на старте: поднятый сервер всегда соответствует схеме.
-  await migrateTaskDatabase(database.db);
+  // Под advisory-локом (c1.6): реплики, стартовавшие одновременно, применяют
+  // DDL по очереди — подробности в tasks/database.ts.
+  await migrateTaskDatabaseExclusively(storage.connectionString);
   log('info', 'startup', { storage: 'postgres', migrationsApplied: true });
   tasks = new PostgresTaskRepository({ db: database.db });
 } else {
