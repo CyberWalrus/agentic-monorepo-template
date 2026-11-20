@@ -15,7 +15,8 @@
     "start": "vite preview",
     "start:prod": "node server.ts",
     "typecheck": "tsc",
-    "test": "vitest run --reporter=json --reporter=default --outputFile=reports/vitest.json"
+    "test": "vitest run --reporter=json --reporter=default --outputFile=reports/vitest.json",
+    "mutation": "stryker run"
   },
   "dependencies": {
     "@hono/node-server": "catalog:",
@@ -34,6 +35,8 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "catalog:",
+    "@stryker-mutator/vitest-runner": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
