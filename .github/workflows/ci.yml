@@ -61,7 +61,7 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           path: .turbo
-          key: turbo-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          key: turbo-pr-${{ github.event.pull_request.number }}-static-${{ github.sha }}
           restore-keys: |
             turbo-pr-${{ github.event.pull_request.number }}-
       - name: start clock
@@ -111,7 +111,7 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           path: .turbo
-          key: turbo-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          key: turbo-pr-${{ github.event.pull_request.number }}-unit-${{ github.sha }}
           restore-keys: |
             turbo-pr-${{ github.event.pull_request.number }}-
       - name: start clock
@@ -140,6 +140,13 @@ jobs:
     if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # A7: job исполняет код PR — токен только read-only (см. комментарий в static).
+    # Без environment сюда наследовал бы гипотетический repo-секрет TURBO_TOKEN.
+    environment: cache-read
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+      TURBO_API: ${{ vars.TURBO_API }}
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
@@ -153,7 +160,7 @@ jobs:
             stryker-main-
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-      - run: pnpm turbo run mutation $AFFECTED --output-logs=errors-only
+      - run: pnpm turbo run mutation $AFFECTED $TURBO_CACHE_ARGS --output-logs=errors-only
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -185,7 +192,7 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           path: .turbo
-          key: turbo-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          key: turbo-pr-${{ github.event.pull_request.number }}-e2e-${{ github.sha }}
           restore-keys: |
             turbo-pr-${{ github.event.pull_request.number }}-
       - name: start clock
@@ -241,7 +248,7 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           path: .turbo
-          key: turbo-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          key: turbo-pr-${{ github.event.pull_request.number }}-visual-${{ github.sha }}
           restore-keys: |
             turbo-pr-${{ github.event.pull_request.number }}-
       # Две фазы (b3.1, ADR 0015): обычный прогон (дифф = красный job и отчёт),
@@ -332,6 +339,12 @@ jobs:
     # 25 мин: капы чекера install 10 + build 15 на холодном раннере — job обязан
     # пережить худший случай сам, иначе SIGTERM вместо чистого fail-closed.
     timeout-minutes: 25
+    # A7: job исполняет код PR — токен только read-only (см. комментарий в static).
+    environment: cache-read
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+      TURBO_API: ${{ vars.TURBO_API }}
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
