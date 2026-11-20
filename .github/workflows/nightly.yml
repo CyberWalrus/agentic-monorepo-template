@@ -42,6 +42,40 @@ jobs:
         if: always()
         with: { name: mutation-full, path: apps/api/reports/mutation/ }
 
+  # Храповик числа тестов (a10): поднимает автоматика, не автор PR
+  # (test-count-baseline.json — «горячий» файл, З9). Update refuses to lower.
+  test-count-ratchet:
+    name: test count ratchet
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - run: pnpm turbo run test --output-logs=errors-only
+      - run: pnpm test:count:update
+      - name: PR with raised baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- test-count-baseline.json; then
+            echo "Базлайн актуален — PR храповика не нужен."
+            exit 0
+          fi
+          git config user.name "nightly-ratchet"
+          git config user.email "nightly-ratchet@users.noreply.github.com"
+          BRANCH="chore/test-count-ratchet"
+          git checkout -b "$BRANCH"
+          git commit -am "chore: поднятие храповика числа тестов (nightly, a10)"
+          git push origin ":refs/heads/$BRANCH" 2>/dev/null || true
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore: поднятие храповика числа тестов (nightly)" \
+            --body "Автоматическое поднятие test-count-baseline.json после зелёного nightly (a10): числовой храповик поднимает автоматика, а не автор PR. Update понижать отказывается — дифф только вверх." \
+            || echo "PR храповика уже открыт — ветка обновлена."
+
   perf-trend:
     name: perf trend
     runs-on: ubuntu-latest
