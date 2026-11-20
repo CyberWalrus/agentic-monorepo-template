@@ -720,6 +720,7 @@
       "delete": {
         "operationId": "tasks.remove",
         "summary": "Delete an owned task",
+        "description": "Authorization runs before input validation: a malformed id (not a uuid) is answered with 403 FORBIDDEN, indistinguishable from having no access.",
         "parameters": [
           {
             "name": "id",
