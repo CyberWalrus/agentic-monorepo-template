@@ -11,6 +11,7 @@
     "e2e": "turbo run e2e",
     "perf": "turbo run perf",
     "mutation": "turbo run mutation",
+    "probe:plugin": "node tools/probe-claude-plugin.ts",
     "lint": "oxlint --type-aware --deny-warnings",
     "lint:fix": "oxlint --type-aware --fix",
     "format": "oxfmt",
