@@ -27,7 +27,8 @@ export const fast: Step[] = [
   { name: 'boundaries', command: 'pnpm', args: ['boundaries'] },
   { name: 'knip', command: 'pnpm', args: ['knip'] },
   { name: 'test-integrity', command: 'pnpm', args: ['test:integrity'] },
-  { name: 'test:hooks', command: 'pnpm', args: ['test:hooks'] },
+  // Тесты обвязки под кэшем turbo (E1): inputs — tools/test-hooks-inputs.ts.
+  turbo('test:hooks'),
   { name: 'sandbox', command: 'pnpm', args: ['sandbox:check'] },
   // Классы защиты tools/ (ADR 0014): замыкание гейтов == deny protected-paths.json.
   { name: 'tool-class', command: 'pnpm', args: ['tool-class:check'] },

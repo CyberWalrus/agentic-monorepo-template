@@ -99,6 +99,7 @@
         "tools/perf-budgets.ts",
         "tools/perf-canary-patch.ts",
         "tools/perf-lock.ts",
+        "tools/test-hooks-inputs.ts",
         "tools/perf-metrics.ts",
         "tools/ports.ts",
         "tools/protected-paths.json",
