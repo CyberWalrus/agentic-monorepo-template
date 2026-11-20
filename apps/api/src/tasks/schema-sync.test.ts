@@ -611,11 +611,14 @@ describe('isDirectInvocation', () => {
 describe('schema-sync-cli как скрипт', () => {
   const cliPath = join(dirname(fileURLToPath(import.meta.url)), 'schema-sync-cli.ts');
 
+  // Таймаут 20с вместо дефолтных 5с: в копии шаблона (canaries) первый
+  // прогон CLI холодный — типскриптовый стриппинг+чтение журнала на CI-раннере
+  // выходит за 5с (b4.4, флак копии). Ассерт не ослаблен.
   it('прямой запуск на реальном каталоге печатает отчёт в stdout и даёт код 0', () => {
     const stdout = execFileSync(process.execPath, [cliPath], { encoding: 'utf8' });
 
     expect(stdout).toContain('schema-sync: схема кода совпадает с миграциями.');
-  });
+  }, 20_000);
 
   it('импорт модуля вне прямого запуска не трогает exitCode процесса', () => {
     expect(process.exitCode).toBeUndefined();
