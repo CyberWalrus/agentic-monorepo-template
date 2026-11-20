@@ -553,6 +553,32 @@ describe('tasks.remove access over both transports', () => {
     expect(await response.json()).toMatchObject({ code: 'FORBIDDEN' });
   });
 
+  it('answers 403, not 400, for a malformed id over REST: authorization runs before input validation', async () => {
+    const { app } = setupWithOwnedTask();
+
+    const response = await app.request('/api/tasks/not-a-uuid', {
+      method: 'DELETE',
+      headers: { 'x-actor-id': 'owner-1' },
+    });
+
+    // Владелец по форме input не вычислим — fail-closed: потребитель не
+    // отличает «битый формат» от «нет доступа» (описание операции в контракте,
+    // c1.7). BAD_REQUEST выдал бы формат поля наружу.
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'FORBIDDEN', message: 'Access denied' });
+  });
+
+  it('answers FORBIDDEN for a malformed id over RPC before input validation', async () => {
+    const { clientFor } = setupWithOwnedTask();
+
+    const error = await clientFor('owner-1')
+      .tasks.remove({ id: 'not-a-uuid' })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ORPCError);
+    expect(error).toMatchObject({ code: 'FORBIDDEN', message: 'Access denied' });
+  });
+
   it('distinguishes domain errors by code, not by text: NOT_FOUND vs FORBIDDEN', async () => {
     const { clientFor } = setupWithOwnedTask();
     const { client } = setup();
