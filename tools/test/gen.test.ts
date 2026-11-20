@@ -24,6 +24,7 @@ const PATCH_TARGETS = [
   'apps/api/src/router.ts',
   'apps/api/src/authorization.ts',
   'apps/api/src/app.ts',
+  'apps/api/src/server.ts',
 ];
 
 const tmpDirs: string[] = [];
@@ -109,20 +110,31 @@ describe('gen feature', () => {
     expect(contract).toContain("path: '/notes'");
 
     const router = read(root, 'apps/api/src/router.ts');
+    expect(router).toContain("import { noteRepositoryOf } from './notes/repository.ts';");
     expect(router).toContain('  notes: {\n    list: os.notes.list.handler(');
-    expect(router).toContain('context.notes.create(input.title)');
+    expect(router).toContain('noteRepositoryOf(context).create(input.title)');
 
     const authorization = read(root, 'apps/api/src/authorization.ts');
     expect(authorization).toContain("import type { NoteRepository } from './notes/repository.ts';");
-    expect(authorization).toContain('  tasks: TaskRepository;\n  notes: NoteRepository;');
+    expect(authorization).toContain('  tasks: TaskRepository;');
+    expect(authorization).toContain('  notes?: NoteRepository;');
 
     const app = read(root, 'apps/api/src/app.ts');
     expect(app).toContain("import type { NoteRepository } from './notes/repository.ts';");
-    expect(app).toContain('  tasks: TaskRepository;\n  notes: NoteRepository;');
+    expect(app).toContain('  notes?: NoteRepository;');
     expect(app).toContain('  notes,\n  tasks,\n  router = defaultRouter,');
     // Вставка сразу после открывающей строки buildContext: устойчиво к тому,
     // что в репозитории уже есть другие сгенерированные фичи.
-    expect(app).toContain('const buildContext = (request: Request): AppContext => ({\n    notes,');
+    expect(app).toContain(
+      'const buildContext = (request: Request): AppContext => ({\n    ...(notes === undefined ? {} : { notes }),',
+    );
+
+    const server = read(root, 'apps/api/src/server.ts');
+    expect(server).toContain("import { InMemoryNoteRepository } from './notes/repository.ts';");
+    expect(server).toContain('  tasks,\n  notes: new InMemoryNoteRepository(),');
+
+    const repository = read(root, 'apps/api/src/notes/repository.ts');
+    expect(repository).toContain('export function noteRepositoryOf(');
 
     const page = read(root, 'apps/web/src/features/notes/NotesPage.tsx');
     expect(page).toContain('export function NotesPage');
@@ -170,7 +182,7 @@ describe('gen feature', () => {
       'const listQuery = orpc.todoLists.list.queryOptions();',
     );
     expect(read(root, 'apps/api/src/authorization.ts')).toContain(
-      '  todoLists: TodoListRepository;',
+      '  todoLists?: TodoListRepository;',
     );
     expect(read(root, 'apps/api/src/todo-lists/repository.test.ts')).toContain(
       'const todoList = await repository.create',

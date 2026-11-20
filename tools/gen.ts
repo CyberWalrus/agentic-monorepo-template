@@ -185,6 +185,8 @@ function repositoryTemplate(f: FeatureNames): string {
 
 import type { ${E} } from '@repo/contracts';
 
+import type { AppContext } from '../authorization.ts';
+
 export interface ${E}Repository {
   list(): Promise<${E}[]>;
   create(title: string): Promise<${E}>;
@@ -234,6 +236,19 @@ export class InMemory${E}Repository implements ${E}Repository {
       this.#${f.camel}.set(${f.entityCamel}.id, ${f.entityCamel});
     }
   }
+}
+
+/**
+ * Репозиторий заготовки из контекста. Поле контекста опционально, пока фича
+ * не подключена к createApp/server.ts явно; отсутствие хранилища — отказ
+ * (INTERNAL), а не молча пустой список (fail-loud).
+ */
+export function ${f.entityCamel}RepositoryOf(context: Pick<AppContext, '${f.camel}'>): ${E}Repository {
+  const repository = context.${f.camel};
+  if (repository === undefined) {
+    throw new Error('${f.pascal} repository is not configured: pass it to createApp');
+  }
+  return repository;
 }
 `;
 }
@@ -793,8 +808,13 @@ function patchesFor(f: FeatureNames): Patch[] {
     },
     {
       file: 'apps/api/src/router.ts',
+      anchor: `import { authorizationMiddleware, type AppContext } from './authorization.ts';`,
+      replacement: `import { authorizationMiddleware, type AppContext } from './authorization.ts';\nimport { ${f.entityCamel}RepositoryOf } from './${f.name}/repository.ts';`,
+    },
+    {
+      file: 'apps/api/src/router.ts',
       anchor: `  },\n});`,
-      replacement: `  },\n  ${f.camel}: {\n    list: os.${f.camel}.list.handler(({ context }) => context.${f.camel}.list()),\n    create: os.${f.camel}.create.handler(({ input, context }) =>\n      context.${f.camel}.create(input.title),\n    ),\n  },\n});`,
+      replacement: `  },\n  ${f.camel}: {\n    list: os.${f.camel}.list.handler(({ context }) => ${f.entityCamel}RepositoryOf(context).list()),\n    create: os.${f.camel}.create.handler(({ input, context }) =>\n      ${f.entityCamel}RepositoryOf(context).create(input.title),\n    ),\n  },\n});`,
     },
     {
       file: 'apps/api/src/authorization.ts',
@@ -804,7 +824,7 @@ function patchesFor(f: FeatureNames): Patch[] {
     {
       file: 'apps/api/src/authorization.ts',
       anchor: `  tasks: TaskRepository;`,
-      replacement: `  tasks: TaskRepository;\n  ${f.camel}: ${E}Repository;`,
+      replacement: `  tasks: TaskRepository;\n  /** Заготовка ${f.name}: опциональна — процедуры отказывают (fail-loud), пока createApp её не получит. */\n  ${f.camel}?: ${E}Repository;`,
     },
     {
       file: 'apps/api/src/app.ts',
@@ -814,7 +834,7 @@ function patchesFor(f: FeatureNames): Patch[] {
     {
       file: 'apps/api/src/app.ts',
       anchor: `  tasks: TaskRepository;`,
-      replacement: `  tasks: TaskRepository;\n  ${f.camel}: ${E}Repository;`,
+      replacement: `  tasks: TaskRepository;\n  /** Заготовка ${f.name}: опциональна, чтобы существующие вызовы createApp не ломались. */\n  ${f.camel}?: ${E}Repository;`,
     },
     {
       file: 'apps/api/src/app.ts',
@@ -822,9 +842,23 @@ function patchesFor(f: FeatureNames): Patch[] {
       replacement: `  ${f.camel},\n  tasks,\n  router = defaultRouter,`,
     },
     {
+      // exactOptionalPropertyTypes: undefined в опциональное поле явно не
+      // передаётся — ключ добавляется условным спредом (паттерн app.test.ts).
       file: 'apps/api/src/app.ts',
       anchor: `const buildContext = (request: Request): AppContext => ({`,
-      replacement: `const buildContext = (request: Request): AppContext => ({\n    ${f.camel},`,
+      replacement: `const buildContext = (request: Request): AppContext => ({\n    ...(${f.camel} === undefined ? {} : { ${f.camel} }),`,
+    },
+    {
+      file: 'apps/api/src/server.ts',
+      anchor: `import { InMemoryTaskRepository, type TaskRepository } from './tasks/repository.ts';`,
+      replacement: `import { InMemory${E}Repository } from './${f.name}/repository.ts';\nimport { InMemoryTaskRepository, type TaskRepository } from './tasks/repository.ts';`,
+    },
+    {
+      // server.ts — точка композиции: заготовка получает in-memory хранилище,
+      // настоящее (Postgres за тем же интерфейсом) подключает автор фичи.
+      file: 'apps/api/src/server.ts',
+      anchor: `const app = createApp({\n  tasks,`,
+      replacement: `const app = createApp({\n  tasks,\n  ${f.camel}: new InMemory${E}Repository(),`,
     },
   ];
 }
