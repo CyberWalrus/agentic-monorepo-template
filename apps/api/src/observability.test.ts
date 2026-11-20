@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.ts';
 import {
+  createLogBuffer,
   createLogger,
+  isSafeRequestId,
   requestIdOf,
   serializeError,
   type LogRecord,
@@ -270,5 +272,73 @@ describe('logger unit behaviour', () => {
     expect(writes[0]).toContain('"level":"info","event":"startup","storage":"memory"');
     // часы по умолчанию — настоящие: ts начинается с ISO-даты, а не пустышки
     expect(writes[0]).toMatch(/^\{"ts":"\d{4}-\d{2}-\d{2}T\d{2}:/);
+  });
+});
+
+const bufferedRecord = (requestId: string): LogRecord => ({
+  ts: '2026-11-17T12:00:00.000Z',
+  level: 'info',
+  event: 'request',
+  requestId,
+});
+
+describe('safe request id predicate', () => {
+  it('accepts the same shapes requestIdOf accepts', () => {
+    expect(isSafeRequestId('client-id-42')).toBe(true);
+    expect(isSafeRequestId('00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01')).toBe(true);
+    expect(isSafeRequestId('7chars7')).toBe(false);
+    expect(isSafeRequestId('bad id with spaces')).toBe(false);
+    expect(isSafeRequestId('../etc/passwd')).toBe(false);
+    expect(isSafeRequestId('a'.repeat(129))).toBe(false);
+  });
+});
+
+describe('log buffer', () => {
+  it('keeps every written record until capacity is reached', () => {
+    const buffer = createLogBuffer(3);
+
+    buffer.write(bufferedRecord('first'));
+    buffer.write(bufferedRecord('second'));
+
+    expect(buffer.records().map((written) => written['requestId'])).toEqual(['first', 'second']);
+  });
+
+  it('evicts the oldest records once capacity overflows', () => {
+    const buffer = createLogBuffer(3);
+
+    for (const requestId of ['first', 'second', 'third', 'fourth']) {
+      buffer.write(bufferedRecord(requestId));
+    }
+
+    expect(buffer.records().map((written) => written['requestId'])).toEqual([
+      'second',
+      'third',
+      'fourth',
+    ]);
+  });
+
+  it('returns a snapshot per call instead of the live ring', () => {
+    const buffer = createLogBuffer(3);
+
+    buffer.write(bufferedRecord('first'));
+    const first = buffer.records();
+    const second = buffer.records();
+
+    expect(first).not.toBe(second);
+    expect(first).toEqual(second);
+  });
+
+  it('defaults to a capacity that holds a whole run without manual sizing', () => {
+    const buffer = createLogBuffer();
+
+    for (let index = 0; index < 5000; index += 1) {
+      buffer.write(bufferedRecord(`id-${index}`));
+    }
+    const records = buffer.records();
+
+    expect(records).toHaveLength(4096);
+    // первые записи вытеснены, последняя на месте
+    expect(records[0]?.['requestId']).toBe('id-904');
+    expect(records.at(-1)?.['requestId']).toBe('id-4999');
   });
 });

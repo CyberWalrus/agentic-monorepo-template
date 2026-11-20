@@ -9,6 +9,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { budgetMsFor, parseBudgets } from '../verify-budgets-loader.ts';
 import { fast, post, slow } from '../verify-steps.ts';
+import { stripCodeComments } from '../check-tool-class.ts';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -96,10 +97,18 @@ describe('verify-budgets.json', () => {
       isRecord(denyWrite) && Array.isArray(denyWrite['denyWrite']) ? denyWrite['denyWrite'] : [];
     expect(denyList).toContain('verify-budgets.json');
 
-    // turbo.json — JSONC (комментарии): проверяем текстом, что budgets-файл
-    // не объявлен в globalDependencies (правка калибровки не обваливает кэш turbo).
-    const turboText = readFileSync(resolve(repoDir, 'turbo.json'), 'utf8');
-    expect(turboText.includes('"verify-budgets.json"')).toBe(false);
+    // turbo.json — JSONC (комментарии): инвариант — budgets-файл не объявлен в
+    // globalDependencies (правка калибровки не обваливает кэш turbo). Проверяем
+    // парс глобального списка: текстовый includes давал бы ложное срабатывание
+    // на легитимное появление имени в inputs //#test:hooks (E1).
+    const turbo: unknown = JSON.parse(
+      stripCodeComments(readFileSync(resolve(repoDir, 'turbo.json'), 'utf8')),
+    );
+    const globalDeps =
+      isRecord(turbo) && Array.isArray(turbo['globalDependencies'])
+        ? turbo['globalDependencies']
+        : [];
+    expect(globalDeps).not.toContain('verify-budgets.json');
   });
 });
 

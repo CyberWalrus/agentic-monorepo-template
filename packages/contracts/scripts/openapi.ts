@@ -6,18 +6,12 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { OpenAPIGenerator } from '@orpc/openapi';
-import { ZodToJsonSchemaConverter } from '@orpc/zod/zod4';
-
 import { contract } from '../src/index.ts';
+import { generateSpec } from './openapi-spec.ts';
 
 const specPath = fileURLToPath(new URL('../openapi.json', import.meta.url));
 
-const generator = new OpenAPIGenerator({ schemaConverters: [new ZodToJsonSchemaConverter()] });
-const spec = await generator.generate(contract, {
-  info: { title: 'Agentic Template API', version: '0.0.0' },
-  servers: [{ url: '/api' }],
-});
+const spec = await generateSpec(contract);
 const content = `${JSON.stringify(spec, null, 2)}\n`;
 
 if (process.argv.includes('--check')) {

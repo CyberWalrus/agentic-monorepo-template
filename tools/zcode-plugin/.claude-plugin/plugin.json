@@ -1,0 +1,8 @@
+{
+  "name": "agentic-monorepo-gates",
+  "version": "0.1.0",
+  "description": "Контур L0 репозитория agentic-monorepo-template для ZCode: защищённые пути, guard Bash, проверка результата и Stop-verify — те же CLI из tools/hooks/, что исполняют хуки Claude Code (C10.1/C10.3). Ставится локально из чекаута репозитория: tools/zcode-plugin.",
+  "author": {
+    "name": "agentic-monorepo-template"
+  }
+}
