@@ -12,6 +12,12 @@ export const TEST_HOOKS_INPUTS = [
   '.claude/agents/**',
   '.claude/settings.json',
   '.github/**',
+  // Тесты обвязки читают конфиги контуров за пределами tools/ (канарейки
+  // visual-гейта, updateSnapshots и e2e-выбора мутируют их в проверках):
+  // пропущенный каталог = кэш отдаёт зелёный результат на изменённый конфиг.
+  'e2e/**',
+  'packages/ui/**',
+  'apps/**',
   'vitest.config.ts',
   'tsconfig.json',
   'tsconfig.base.json',
