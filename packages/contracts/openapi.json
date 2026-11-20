@@ -232,6 +232,70 @@
               }
             }
           },
+          "400": {
+            "description": "400",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "defined": {
+                      "const": false
+                    },
+                    "code": {
+                      "const": "BAD_REQUEST"
+                    },
+                    "status": {
+                      "const": 400
+                    },
+                    "message": {
+                      "type": "string",
+                      "default": "Input validation failed"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "issues": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "array",
+                                "items": {
+                                  "type": [
+                                    "string",
+                                    "number"
+                                  ]
+                                }
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path",
+                              "message"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "issues"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "defined",
+                    "code",
+                    "status",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
           "403": {
             "description": "403",
             "content": {
@@ -400,6 +464,70 @@
                     "title",
                     "completed",
                     "createdAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "400",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "defined": {
+                      "const": false
+                    },
+                    "code": {
+                      "const": "BAD_REQUEST"
+                    },
+                    "status": {
+                      "const": 400
+                    },
+                    "message": {
+                      "type": "string",
+                      "default": "Input validation failed"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "issues": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "array",
+                                "items": {
+                                  "type": [
+                                    "string",
+                                    "number"
+                                  ]
+                                }
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path",
+                              "message"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "issues"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "defined",
+                    "code",
+                    "status",
+                    "message",
+                    "data"
                   ]
                 }
               }
@@ -605,21 +733,7 @@
         ],
         "responses": {
           "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "not": {}
-                    },
-                    {
-                      "not": {}
-                    }
-                  ]
-                }
-              }
-            }
+            "description": "OK"
           },
           "403": {
             "description": "403",
