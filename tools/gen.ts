@@ -185,8 +185,6 @@ function repositoryTemplate(f: FeatureNames): string {
 
 import type { ${E} } from '@repo/contracts';
 
-import type { AppContext } from '../authorization.ts';
-
 export interface ${E}Repository {
   list(): Promise<${E}[]>;
   create(title: string): Promise<${E}>;
@@ -241,9 +239,11 @@ export class InMemory${E}Repository implements ${E}Repository {
 /**
  * Репозиторий заготовки из контекста. Поле контекста опционально, пока фича
  * не подключена к createApp/server.ts явно; отсутствие хранилища — отказ
- * (INTERNAL), а не молча пустой список (fail-loud).
+ * (INTERNAL), а не молча пустой список (fail-loud). Тип параметра структурный:
+ * импорт AppContext сюда замкнул бы цикл authorization → repository →
+ * authorization (гейт boundaries).
  */
-export function ${f.entityCamel}RepositoryOf(context: Pick<AppContext, '${f.camel}'>): ${E}Repository {
+export function ${f.entityCamel}RepositoryOf(context: { ${f.camel}?: ${E}Repository }): ${E}Repository {
   const repository = context.${f.camel};
   if (repository === undefined) {
     throw new Error('${f.pascal} repository is not configured: pass it to createApp');
