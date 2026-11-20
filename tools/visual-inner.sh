@@ -16,6 +16,10 @@ fi
 
 status=0
 pnpm --filter @repo/ui exec vitest run --project visual "${vitest_flags[@]}" || status=$?
-pnpm turbo run build --filter=@repo/web --output-logs=errors-only
+# A7: режим кэша — как у всех задач turbo в CI (TURBO_CACHE_ARGS из ci.yml):
+# без флага turbo по умолчанию local:rw,remote:rw, и merge queue читала бы
+# remote-кэш main, а PR пытался бы писать read-only токеном. Локально переменная
+# пуста — поведение не меняется.
+pnpm turbo run build --filter=@repo/web ${TURBO_CACHE_ARGS:-} --output-logs=errors-only
 pnpm --filter @repo/e2e exec playwright test --project=visual "${playwright_flags[@]}" || status=$?
 exit "$status"

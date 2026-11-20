@@ -15,7 +15,13 @@ import type { Request as HttpRequest } from '@playwright/test';
 
 import { acquirePerfLock, type PerfLock } from '../../tools/perf-lock.ts';
 import { loadPerfBudgets } from '../../tools/perf-budgets.ts';
-import { median, type PerfReport } from '../../tools/perf-metrics.ts';
+import {
+  median,
+  PerfReportSchema,
+  type PageMetrics,
+  type PerfReport,
+  type ScenarioMetrics,
+} from '../../tools/perf-metrics.ts';
 import { expect, makeTasks, SHARED_DATA_LOCK, test } from '../fixtures.ts';
 
 const budgets = loadPerfBudgets();
@@ -196,22 +202,51 @@ test.beforeEach(async ({ page, seedTasks }) => {
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: CPU_THROTTLING_RATE });
 });
 
-const report: PerfReport = {
-  'page:/': {
-    ttfbMs: Number.NaN,
-    lcpMs: Number.NaN,
-    cls: Number.NaN,
-    lcpNetMs: 0,
-    requests: 0,
-    apiRequests: 0,
-    jsWireKb: 0,
-    cssWireKb: 0,
-  },
-  'scenario:create-task': { ms: Number.NaN, apiRequests: 0, longTasks: 0 },
-  'scenario:toggle-task': { ms: Number.NaN, apiRequests: 0, longTasks: 0 },
+// Ретрай повтора (retries: 1 в CI) добавляет четвёртый замер: медиана из
+// четырёх берёт верхний из двух средних — лёгкий сдвиг в красную сторону,
+// допустимо (красный ретрай и так краснит прогон).
+// Каждый повтор (--repeat-each) добавляет свой замер: отчёт — медиана ПО
+// ПОВТОРАМ, иначе в perf.json попадает значение последнего повтора и
+// межповторный шум ночных раннеров не сглажен (находка sanity-ревью A6.1).
+const repeats: {
+  'page:/': PageMetrics[];
+  'scenario:create-task': ScenarioMetrics[];
+  'scenario:toggle-task': ScenarioMetrics[];
+} = {
+  'page:/': [],
+  'scenario:create-task': [],
+  'scenario:toggle-task': [],
 };
 
+const pageMedian = (items: PageMetrics[]): PageMetrics => ({
+  ttfbMs: median(items.map((m) => m.ttfbMs)),
+  lcpMs: median(items.map((m) => m.lcpMs)),
+  cls: median(items.map((m) => m.cls)),
+  lcpNetMs: median(items.map((m) => m.lcpNetMs)),
+  requests: median(items.map((m) => m.requests)),
+  apiRequests: median(items.map((m) => m.apiRequests)),
+  jsWireKb: median(items.map((m) => m.jsWireKb)),
+  cssWireKb: median(items.map((m) => m.cssWireKb)),
+});
+
+const scenarioMedian = (items: ScenarioMetrics[]): ScenarioMetrics => ({
+  ms: median(items.map((m) => m.ms)),
+  apiRequests: median(items.map((m) => m.apiRequests)),
+  longTasks: median(items.map((m) => m.longTasks)),
+});
+
 test.afterAll(async () => {
+  const report: PerfReport = {
+    'page:/': pageMedian(repeats['page:/']),
+    'scenario:create-task': scenarioMedian(repeats['scenario:create-task']),
+    'scenario:toggle-task': scenarioMedian(repeats['scenario:toggle-task']),
+  };
+  // Схема — общий источник с тренд-чекером: невалидный отчёт не должен
+  // уезжать в артефакт и красить сравнение «неизвестной» формой (З4).
+  const parsed = PerfReportSchema.safeParse(report);
+  if (!parsed.success) {
+    throw new Error(`perf report failed schema: ${parsed.error.message}`);
+  }
   await mkdir('reports', { recursive: true });
   await writeFile('reports/perf.json', `${JSON.stringify(report, null, 2)}\n`);
 });
@@ -243,7 +278,7 @@ test.describe('perf budgets', { lock: SHARED_DATA_LOCK }, () => {
       jsWireKb: median(net.map((c) => c.jsWireKb)),
       cssWireKb: median(net.map((c) => c.cssWireKb)),
     };
-    report['page:/'] = measured;
+    repeats['page:/'].push(measured);
     await testInfo.attach('vitals', {
       body: JSON.stringify({ measured, budget }, null, 2),
       contentType: 'application/json',
@@ -281,7 +316,7 @@ test.describe('perf budgets', { lock: SHARED_DATA_LOCK }, () => {
       apiRequests: stopApiRequests(),
       longTasks: await readLongTasks(page),
     };
-    report['scenario:create-task'] = measured;
+    repeats['scenario:create-task'].push(measured);
     await testInfo.attach('timings', {
       body: JSON.stringify({ durations, budget }, null, 2),
       contentType: 'application/json',
@@ -313,7 +348,7 @@ test.describe('perf budgets', { lock: SHARED_DATA_LOCK }, () => {
       apiRequests: stopApiRequests(),
       longTasks: await readLongTasks(page),
     };
-    report['scenario:toggle-task'] = measured;
+    repeats['scenario:toggle-task'].push(measured);
     await testInfo.attach('timings', {
       body: JSON.stringify({ durations, budget }, null, 2),
       contentType: 'application/json',

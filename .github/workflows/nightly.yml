@@ -46,15 +46,26 @@ jobs:
     name: perf trend
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+      actions: read
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
-      - run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
-      - run: pnpm bundle
-      - run: pnpm --filter @repo/e2e exec playwright test --project=perf --repeat-each=3
+      # build/bundle ДО perf: perf-конфиг поднимает webServer = vite preview,
+      # которому нужен dist (turbo-задача perf зависит от ^build — как в PR).
+      - name: build
+        run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
+      - name: bundle
+        run: pnpm bundle
+      - name: perf
+        id: perf
+        run: pnpm --filter @repo/e2e exec playwright test --project=perf --repeat-each=3
         env: { CI: 'true' }
       - uses: actions/upload-artifact@v7
+        # Диагностический артефакт тренда — всегда, даже с красного прогона.
         if: always()
         with:
           name: perf-trend-${{ github.run_id }}
@@ -62,6 +73,98 @@ jobs:
             reports/bundle.json
             e2e/reports/perf.json
           retention-days: 90
+      # База — артефакт perf-baseline последнего зелёного nightly (ADR 0006,
+      # уровень 2; чекер и коды выходов — шапка tools/check-perf-trend.ts).
+      # Коды fetch-baseline: 0 found/stale, 3 none (первый запуск), 1 ошибка API.
+      - name: fetch baseline
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          code=0
+          node tools/check-perf-trend.main.ts fetch-baseline --out baseline --exclude-run "${{ github.run_id }}" --create-issue --run-url "$RUN_URL" || code=$?
+          case "$code" in
+            0) echo "mode=found" >> "$GITHUB_OUTPUT";;
+            3) echo "mode=none" >> "$GITHUB_OUTPUT";;
+            *) exit 1;;
+          esac
+      - name: compare against baseline
+        id: compare
+        if: steps.baseline.outputs.mode == 'found'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node tools/check-perf-trend.main.ts compare --candidate e2e/reports/perf.json --baseline baseline --create-issue --head-sha "${{ github.sha }}" --run-url "$RUN_URL"
+      # База двигается только от зелёного сравнения или первого запуска; с
+      # красного прогона артефакт не пишется — база не дрейфует по красному.
+      - name: prepare baseline artifact
+        if: >-
+          always() && steps.perf.outcome == 'success' && steps.baseline.outcome == 'success' &&
+          (steps.compare.outcome == 'success' || steps.compare.outcome == 'skipped')
+        run: |
+          mkdir -p perf-baseline
+          cp e2e/reports/perf.json perf-baseline/perf.json
+          node tools/check-perf-trend.main.ts write-meta --out perf-baseline --sha "${{ github.sha }}" --run-id "${{ github.run_id }}"
+      - uses: actions/upload-artifact@v7
+        if: >-
+          always() && steps.perf.outcome == 'success' && steps.baseline.outcome == 'success' &&
+          (steps.compare.outcome == 'success' || steps.compare.outcome == 'skipped')
+        with:
+          name: perf-baseline
+          path: perf-baseline/
+          retention-days: 90
+
+  # Канарейка 200 мс (A6 PR-3): в обработчик create вставляется задержка, и
+  # сравнение ОБЯЗАНО стать красным — иначе job красный («канарейка не ловит»).
+  # Read-only к базлайну этого же прогона: свой отчёт под perf-baseline не
+  # заливается никогда (находка sanity-ревью A6.1). На первом запуске базлайна
+  # ещё нет — инверсия честно пропускается с записью в лог.
+  perf-canary:
+    name: perf canary (200 ms)
+    needs: [perf-trend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+        with: { playwright: 'true' }
+      - name: fetch baseline of this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          # Различаем «артефакта нет» (первый запуск или база не обновилась —
+          # см. perf-trend) и «ошибка API/скачивания» (красный: канарейка —
+          # единственный самоконтроль детектора, молчать он не имеет права).
+          if ! ARTIFACT=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" --jq 'first(.artifacts[] | select(.name == "perf-baseline" and .expired != true) | .name)' 2>/dev/null); then
+            echo "✗ артефактное API недоступно"; exit 1
+          fi
+          if [ -z "$ARTIFACT" ]; then
+            echo "perf-baseline у этого прогона нет (база не обновилась — см. job perf-trend) — инверсия пропускается"
+            exit 0
+          fi
+          gh run download "${{ github.run_id }}" -n perf-baseline -D baseline
+      - name: apply 200 ms canary patch
+        run: node tools/perf-canary-patch.ts
+      - run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
+      - name: perf with slow create
+        run: pnpm --filter @repo/e2e exec playwright test --project=perf --repeat-each=3
+        env: { CI: 'true' }
+      - name: compare must fail
+        if: ${{ hashFiles('baseline/**') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node tools/check-perf-trend.main.ts compare --candidate e2e/reports/perf.json --baseline baseline --expect-regression
+      - name: no baseline — inversion skipped
+        if: ${{ hashFiles('baseline/**') == '' }}
+        run: echo "сравнение с базлайном этого прогона невозможно — см. шаг fetch"
 
   gate-canaries:
     name: gate canaries
@@ -128,7 +231,16 @@ jobs:
 
   report:
     name: report failure
-    needs: [flake-hunt, mutation-full, perf-trend, gate-canaries, verify-budgets, backlog-doctor]
+    needs:
+      [
+        flake-hunt,
+        mutation-full,
+        perf-trend,
+        perf-canary,
+        gate-canaries,
+        verify-budgets,
+        backlog-doctor,
+      ]
     if: failure()
     runs-on: ubuntu-latest
     steps:

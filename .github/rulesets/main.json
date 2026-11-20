@@ -23,6 +23,7 @@
     },
     {
       "type": "required_status_checks",
+      "$comment": "Третий обязательный check bundle-approval добавляется вручную по docs/github-setup.md §1 после создания label (ADR 0013 — сознательное окно до создания label); согласованность снимка и документации держит канарейка tools/test/setup-docs-consistency.test.ts",
       "parameters": {
         "strict_required_status_checks_policy": true,
         "do_not_enforce_on_create": false,
