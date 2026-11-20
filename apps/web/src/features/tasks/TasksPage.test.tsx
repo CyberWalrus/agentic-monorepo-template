@@ -1,4 +1,5 @@
 import type { Task } from '@repo/contracts';
+import { renderToString } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
@@ -30,6 +31,31 @@ function deferred() {
 }
 
 describe('TasksPage', () => {
+  it('server-renders disabled controls with an explanation before hydration', () => {
+    // SSR-разметка — ровно то, что видит пользователь без JavaScript: контролы
+    // disabled, main помечен aria-disabled, видна подсказка (b12, AC-5).
+    const html = renderToString(
+      <TasksPage tasks={tasks} onCreate={async () => {}} onToggle={async () => {}} />,
+    );
+
+    expect(html).toContain('aria-disabled="true"');
+    expect(html).toContain('disabled=""');
+    expect(html).toContain(
+      'Interactive controls are disabled until the page finishes loading. JavaScript is required.',
+    );
+  });
+
+  it('removes the pre-hydration indication once interactive', async () => {
+    const screen = await render(
+      <TasksPage tasks={tasks} onCreate={async () => {}} onToggle={async () => {}} />,
+    );
+
+    await expect
+      .element(screen.getByText(/Interactive controls are disabled/))
+      .not.toBeInTheDocument();
+    await expect.element(screen.getByRole('main')).not.toHaveAttribute('aria-disabled');
+  });
+
   it('shows the empty state', async () => {
     const screen = await render(
       <TasksPage tasks={[]} onCreate={async () => {}} onToggle={async () => {}} />,

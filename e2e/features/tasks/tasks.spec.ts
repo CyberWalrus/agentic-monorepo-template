@@ -68,5 +68,26 @@ test.describe('tasks', () => {
 
       await expect(page.getByText(title)).toBeVisible();
     });
+
+    test('explains why controls are not interactive [AC-5]', async ({
+      page,
+      request,
+      uniqueTitle,
+    }) => {
+      const title = uniqueTitle('Pre-hydration probe');
+      const response = await request.post(`${API_URL}/api/tasks`, { data: { title } });
+      expect(response.ok()).toBe(true);
+
+      await page.goto('/');
+
+      await expect(
+        page.getByText(
+          'Interactive controls are disabled until the page finishes loading. JavaScript is required.',
+        ),
+      ).toBeVisible();
+      await expect(page.getByRole('main')).toHaveAttribute('aria-disabled', 'true');
+      await expect(page.getByRole('checkbox', { name: title })).toBeDisabled();
+      await expect(page.getByRole('button', { name: 'Add task' })).toBeDisabled();
+    });
   });
 });
