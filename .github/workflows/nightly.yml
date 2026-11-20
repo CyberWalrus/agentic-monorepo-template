@@ -24,8 +24,31 @@ jobs:
         with: { playwright: 'true' }
       - run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
       # Случайный порядок и повторы ловят зависимые и нестабильные тесты.
-      - run: pnpm --filter @repo/e2e exec playwright test --project=functional --shuffle --repeat-each=5
-        env: { CI: 'true' }
+      # Случайный порядок и повторы ловят зависимые и нестабильные тесты.
+      # JSON-репорт пишет файл (PLAYWRIGHT_JSON_OUTPUT_NAME), stdout — человек.
+      - run: pnpm --filter @repo/e2e exec playwright test --project=functional --shuffle --repeat-each=5 --reporter=json
+        env: { CI: 'true', PLAYWRIGHT_JSON_OUTPUT_NAME: 'e2e/reports/flake.json' }
+        continue-on-error: true
+      - name: flaky rate + quarantine (b4.4)
+        run: node tools/check-flaky-rate.ts --report e2e/reports/flake.json --quarantine tools/flaky-quarantine.json --repeat 5 --flaky-out e2e/reports/flaky-titles.txt
+      - name: flaky issues — один на тест (b4.4, дедуп)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          test -f e2e/reports/flaky-titles.txt || exit 0
+          while IFS= read -r TITLE; do
+            [ -z "$TITLE" ] && continue
+            FOUND=$(gh issue list --repo "${{ github.repository }}" --state open --search "[flaky] $TITLE in:title" --limit 1 --json number --jq '.[0].number' 2>/dev/null || true)
+            BODY="Воспроизвёл в flake-hunt: $RUN_URL"
+            if [ -n "$FOUND" ]; then
+              echo "[flaky] $TITLE — существующий issue #$FOUND, комментирую"
+              gh issue comment "$FOUND" --repo "${{ github.repository }}" --body "$BODY"
+            else
+              gh issue create --repo "${{ github.repository }}" --title "[flaky] $TITLE" --body "$BODY"
+            fi
+          done < e2e/reports/flaky-titles.txt
       - uses: actions/upload-artifact@v7
         if: failure()
         with: { name: flake-report, path: e2e/playwright-report/ }

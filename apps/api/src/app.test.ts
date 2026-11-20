@@ -5,10 +5,11 @@ import { implement } from '@orpc/server';
 import type { ContractRouterClient } from '@orpc/contract';
 import { ocAccess, type Contract } from '@repo/contracts';
 import * as z from 'zod';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createApp } from './app.ts';
+import { createApp, REQUEST_BODY_LIMIT_BYTES, REQUEST_TIMEOUT_MS } from './app.ts';
 import { authorizationMiddleware, type Actor, type AppContext } from './authorization.ts';
+import type { LogRecord, LogSink } from './observability.ts';
 import { InMemoryTaskRepository } from './tasks/repository.ts';
 
 const UNKNOWN_ID = '00000000-0000-4000-8000-999999999999';
@@ -21,12 +22,24 @@ const actorFromHeader = (request: Request): Actor | null => {
 function setup({
   enableTestApi = false,
   instanceId,
-}: { enableTestApi?: boolean; instanceId?: string } = {}) {
+  log,
+  bodyLimitBytes,
+  requestTimeoutMs,
+}: {
+  enableTestApi?: boolean;
+  instanceId?: string;
+  log?: LogSink;
+  bodyLimitBytes?: number;
+  requestTimeoutMs?: number;
+} = {}) {
   const app = createApp({
     tasks: new InMemoryTaskRepository(),
     enableTestApi,
     // exactOptionalPropertyTypes: undefined нельзя передавать явно.
     ...(instanceId === undefined ? {} : { instanceId }),
+    ...(log === undefined ? {} : { log }),
+    ...(bodyLimitBytes === undefined ? {} : { bodyLimitBytes }),
+    ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }),
   });
   const client: ContractRouterClient<Contract> = createORPCClient(
     new RPCLink({ url: 'http://api.test/rpc', fetch: async (request) => app.fetch(request) }),
@@ -133,6 +146,94 @@ describe('HTTP concerns', () => {
   });
 });
 
+describe('request guards', () => {
+  // Дефолты закреплены как контракт (c1.7): рост значения — осознанная правка
+  // этого теста, а не дрейф; поведение ниже гоняется на инъекциях ради скорости.
+  it('pins the defaults of the body limit and the request timeout', () => {
+    expect(REQUEST_BODY_LIMIT_BYTES).toBe(1_048_576);
+    expect(REQUEST_TIMEOUT_MS).toBe(30_000);
+  });
+
+  it('rejects a body over the limit with 413 before the procedure runs', async () => {
+    const { app, client } = setup({ bodyLimitBytes: 1024 });
+    await client.tasks.create({ title: 'Keep me' });
+
+    const response = await app.request('/rpc/tasks/create', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'x'.repeat(2048) }),
+    });
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: 'Payload too large' });
+    // Отклонённое тело не дошло до процедуры: данные не тронуты.
+    expect(await client.tasks.list()).toHaveLength(1);
+  });
+
+  it('lets a request within the limit through to the procedure', async () => {
+    const { app, client } = setup({ bodyLimitBytes: 1024 });
+
+    const response = await app.request('/api/tasks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Within the limit' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect((await client.tasks.list()).map((task) => task.title)).toEqual(['Within the limit']);
+  });
+
+  it('bounds the reset body with the same guard as the API routes', async () => {
+    const { app } = setup({ enableTestApi: true, bodyLimitBytes: 64 });
+
+    const response = await app.request('/__test__/reset', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tasks: [], padding: 'x'.repeat(128) }),
+    });
+
+    expect(response.status).toBe(413);
+  });
+
+  it('answers 504 when the handler exceeds the request timeout', async () => {
+    const slowContract = {
+      stall: ocAccess
+        .route({ method: 'GET', path: '/fixture/stall', summary: 'Never answers in time' })
+        .meta({ access: { type: 'public' } })
+        .output(z.string()),
+    };
+    const os = implement(slowContract).$context<AppContext>().use(authorizationMiddleware);
+    const router = os.router({
+      // Хендлер отвечает позже таймаута: гонку обязан выиграть таймер.
+      stall: os.stall.handler(
+        () => new Promise<string>((resolve) => setTimeout(() => resolve('too late'), 500)),
+      ),
+    });
+    const app = createApp({
+      tasks: new InMemoryTaskRepository(),
+      router,
+      requestTimeoutMs: 50,
+    });
+
+    const response = await app.request('/api/fixture/stall');
+
+    expect(response.status).toBe(504);
+    expect(await response.json()).toEqual({ error: 'Request timed out' });
+  });
+
+  it('clears the pending timeout timer once the request settles', async () => {
+    const { app } = setup({ requestTimeoutMs: 60_000 });
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+    await app.request('/api/tasks');
+
+    // Гигиена таймера: обработавшийся запрос не оставляет висящий таймер,
+    // который выстрелит на уже законченном контексте (мутационный прогон c1.7).
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    clearTimeoutSpy.mockRestore();
+  });
+});
+
 describe('test API', () => {
   const seeded = {
     id: '00000000-0000-4000-8000-000000000001',
@@ -141,12 +242,34 @@ describe('test API', () => {
     createdAt: '2026-11-01T10:00:00.000Z',
   };
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('is not exposed unless explicitly enabled', async () => {
     const app = createApp({ tasks: new InMemoryTaskRepository() });
 
     const response = await app.request('/__test__/reset', { method: 'POST', body: '{"tasks":[]}' });
 
     expect(response.status).toBe(404);
+  });
+
+  it('refuses to start in production even when enabled directly, bypassing loadServerEnv', () => {
+    // Второй рубеж (c1.7): другой вход мог бы поднять приложение с
+    // enableTestApi: true мимо env-схемы — createApp проверяет сам.
+    vi.stubEnv('NODE_ENV', 'production');
+
+    expect(() => createApp({ tasks: new InMemoryTaskRepository(), enableTestApi: true })).toThrow(
+      'ENABLE_TEST_API must never be set in production',
+    );
+  });
+
+  it('starts with the test API enabled outside production', () => {
+    vi.stubEnv('NODE_ENV', 'development');
+
+    expect(() =>
+      createApp({ tasks: new InMemoryTaskRepository(), enableTestApi: true }),
+    ).not.toThrow();
   });
 
   it('replaces data when enabled', async () => {
@@ -181,6 +304,48 @@ describe('test API', () => {
     expect(await client.tasks.list()).toEqual([existing]);
   });
 
+  it('rejects an unknown top-level field loudly instead of silently stripping it', async () => {
+    const { app, client } = setup({ enableTestApi: true });
+    const existing = await client.tasks.create({ title: 'Keep me' });
+
+    // z.object здесь стрипнул бы ключ: сидирование прошло бы «успешно» с
+    // не тем, что задумала фикстура (c1.7).
+    const response = await app.request('/__test__/reset', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ taskz: [seeded] }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: 'Invalid seed data',
+      issues: expect.arrayContaining([expect.objectContaining({ path: [] })]),
+    });
+    expect(await client.tasks.list()).toEqual([existing]);
+  });
+
+  it('rejects an unknown field inside a seeded task instead of stripping it', async () => {
+    const { app, client } = setup({ enableTestApi: true });
+    const existing = await client.tasks.create({ title: 'Keep me' });
+
+    const response = await app.request('/__test__/reset', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tasks: [{ ...seeded, complated: seeded.completed }] }),
+    });
+
+    expect(response.status).toBe(400);
+    // zod v4 прикладывает unrecognized_keys к пути объекта-нарушителя,
+    // сам лишний ключ — в `keys` issue.
+    expect(await response.json()).toMatchObject({
+      error: 'Invalid seed data',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'unrecognized_keys', path: ['tasks', 0] }),
+      ]),
+    });
+    expect(await client.tasks.list()).toEqual([existing]);
+  });
+
   it.each([
     ['invalid JSON', 'not json'],
     ['a body without tasks', '{}'],
@@ -196,6 +361,81 @@ describe('test API', () => {
 
     expect(response.status).toBe(400);
     expect(await client.tasks.list()).toHaveLength(1);
+  });
+});
+
+describe('test API log slice', () => {
+  it('is not exposed unless the test API is enabled', async () => {
+    const app = createApp({ tasks: new InMemoryTaskRepository() });
+
+    const response = await app.request('/__test__/logs?requestId=scenario-request-1');
+
+    expect(response.status).toBe(404);
+  });
+
+  it('returns the records of the given request ids and none of the neighbors', async () => {
+    const records: LogRecord[] = [];
+    const log: LogSink = (record) => records.push(record);
+    const { app } = setup({ enableTestApi: true, log });
+
+    // три «параллельных» запроса с разными идентификаторами: два — свой сценарий, один — сосед
+    await app.request('/health', { headers: { 'x-request-id': 'scenario-request-1' } });
+    await app.request('/api/tasks', { headers: { 'x-request-id': 'scenario-request-2' } });
+    await app.request('/health', { headers: { 'x-request-id': 'neighbor-request-9' } });
+
+    const response = await app.request(
+      '/__test__/logs?requestId=scenario-request-1&requestId=scenario-request-2',
+    );
+
+    expect(response.status).toBe(200);
+    // срез — в точности записи основного лога этих двух идентификаторов:
+    // соседний при параллельной записи в общий буфер не попадает
+    const ownIds = new Set(['scenario-request-1', 'scenario-request-2']);
+    expect(await response.json()).toEqual({
+      records: records.filter(
+        (record) => typeof record['requestId'] === 'string' && ownIds.has(record['requestId']),
+      ),
+    });
+  });
+
+  it('finds records by the generated id returned in the response header', async () => {
+    const { app } = setup({ enableTestApi: true });
+
+    const response = await app.request('/health');
+    const requestId = response.headers.get('x-request-id');
+    const sliceResponse = await app.request(`/__test__/logs?requestId=${requestId}`);
+
+    expect(sliceResponse.status).toBe(200);
+    const slice = z
+      .object({ records: z.array(z.object({ requestId: z.string() })).length(1) })
+      .parse(await sliceResponse.json());
+    expect(slice.records[0]?.requestId).toBe(requestId);
+  });
+
+  it('rejects missing or malformed request ids instead of returning the whole buffer', async () => {
+    const { app } = setup({ enableTestApi: true });
+
+    const responses = [
+      await app.request('/__test__/logs'),
+      await app.request('/__test__/logs?requestId=bad id with spaces'),
+      await app.request('/__test__/logs?requestId=../../etc/passwd'),
+    ];
+
+    const bodies = await Promise.all(responses.map((response) => response.json()));
+    expect(responses.map((response) => response.status)).toEqual([400, 400, 400]);
+    for (const body of bodies) {
+      expect(body).toMatchObject({ error: 'Invalid requestId query' });
+    }
+  });
+
+  it('rejects a query mixing a valid id with a malformed one', async () => {
+    const { app } = setup({ enableTestApi: true });
+
+    const response = await app.request(
+      '/__test__/logs?requestId=scenario-request-1&requestId=bad id with spaces',
+    );
+
+    expect(response.status).toBe(400);
   });
 });
 
@@ -402,6 +642,32 @@ describe('tasks.remove access over both transports', () => {
 
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('answers 403, not 400, for a malformed id over REST: authorization runs before input validation', async () => {
+    const { app } = setupWithOwnedTask();
+
+    const response = await app.request('/api/tasks/not-a-uuid', {
+      method: 'DELETE',
+      headers: { 'x-actor-id': 'owner-1' },
+    });
+
+    // Владелец по форме input не вычислим — fail-closed: потребитель не
+    // отличает «битый формат» от «нет доступа» (описание операции в контракте,
+    // c1.7). BAD_REQUEST выдал бы формат поля наружу.
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'FORBIDDEN', message: 'Access denied' });
+  });
+
+  it('answers FORBIDDEN for a malformed id over RPC before input validation', async () => {
+    const { clientFor } = setupWithOwnedTask();
+
+    const error = await clientFor('owner-1')
+      .tasks.remove({ id: 'not-a-uuid' })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ORPCError);
+    expect(error).toMatchObject({ code: 'FORBIDDEN', message: 'Access denied' });
   });
 
   it('distinguishes domain errors by code, not by text: NOT_FOUND vs FORBIDDEN', async () => {
