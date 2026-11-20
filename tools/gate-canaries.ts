@@ -651,6 +651,29 @@ export const CANARIES: GateCanary[] = [
       writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
     },
   },
+  {
+    // b4.4: карантин не узаконенный .skip — @critical в карантин запрещён
+    // (максимум 3 записи, срок обязателен; остальное валидирует тот же чекер).
+    // Красит шаг quarantine (tools/check-flaky-rate.ts --validate-quarantine).
+    name: 'quarantine: @critical в карантине',
+    steps: 'quarantine',
+    failedStep: 'quarantine',
+    expect: /@critical/,
+    apply: (root) => {
+      const path = join(root, 'tools', 'flaky-quarantine.json');
+      const source = readFileSync(path, 'utf8');
+      if (!source.includes('"quarantine": []')) {
+        throw new Error('canary anchor not found: quarantine array');
+      }
+      writeFileSync(
+        path,
+        source.replace(
+          '"quarantine": []',
+          '"quarantine": [{ "test": "smoke.spec.ts :: @critical вход", "until": "2099-01-01T00:00:00Z", "issue": "#1" }]',
+        ),
+      );
+    },
+  },
 ];
 // Вывод портов (З9, A5 PR-3) канарейки шага не имеет: рантайм читает записанный
 // reports/ports.json (read-first — иначе зонд после старта серверов уезжал на
