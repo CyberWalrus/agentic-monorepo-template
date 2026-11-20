@@ -1,0 +1,14 @@
+{
+  "name": "agentic-monorepo-template",
+  "owner": {
+    "name": "Андрей Пахомов"
+  },
+  "plugins": [
+    {
+      "name": "agent-harness",
+      "source": "./.claude",
+      "description": "Хуки-гейты, скилы процессов и ревьюеры из шаблона agentic-monorepo-template. Требует tools/hooks из шаблона в репозитории-потребителе.",
+      "version": "0.1.0"
+    }
+  ]
+}
