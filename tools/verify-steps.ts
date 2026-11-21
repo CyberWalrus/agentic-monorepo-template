@@ -28,6 +28,10 @@ export const fast: Step[] = [
   turbo('test'),
   { name: 'boundaries', command: 'pnpm', args: ['boundaries'] },
   { name: 'knip', command: 'pnpm', args: ['knip'] },
+  // Состав workspace (e20): каждая обязательная задача turbo объявлена хотя бы
+  // одним пакетом. turbo-прогон без носителей завершается exit 0 — без этого
+  // гейта удаление последнего пакета с mutation/e2e тихо выключает CI.
+  { name: 'required-tasks', command: 'pnpm', args: ['required-tasks:check'] },
   { name: 'test-integrity', command: 'pnpm', args: ['test:integrity'] },
   // Тесты обвязки под кэшем turbo (E1): inputs — tools/test-hooks-inputs.ts.
   turbo('test:hooks'),
