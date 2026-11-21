@@ -38,7 +38,8 @@
     "docs:check": "node tools/check-docs.ts",
     "flaky:quarantine": "node tools/check-flaky-rate.ts --validate-quarantine --quarantine tools/flaky-quarantine.json",
     "visual-image:check": "node tools/check-visual-image.ts",
-    "backlog": "node tools/backlog.ts"
+    "backlog": "node tools/backlog.ts",
+    "gen": "node tools/gen.ts"
   },
   "devDependencies": {
     "@types/node": "catalog:",
