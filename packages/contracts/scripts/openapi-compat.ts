@@ -632,13 +632,21 @@ function main(): void {
     }
   } else {
     const mergeBase = git(['merge-base', 'HEAD', 'origin/main']);
-    if (mergeBase.status !== 0) {
-      fail([
-        'openapi-compat: база не определена: git merge-base HEAD origin/main завершился с ошибкой.',
-        '  Выполни git fetch origin main или передай --base <ref> (в CI base приходит в TURBO_SCM_BASE).',
-      ]);
+    if (mergeBase.status === 0) {
+      baseRef = mergeBase.output.trim().split('\n').at(-1) ?? '';
+    } else {
+      // Копия шаблона (канарейка d8.3) — git без origin: сравнить не с чем,
+      // вся спека из истории копии. База = HEAD: несовместимые изменения
+      // внутри копии невозможны по построению (копия стартует с зелёного).
+      const head = git(['rev-parse', '--verify', 'HEAD^{commit}']);
+      if (head.status !== 0) {
+        fail([
+          'openapi-compat: база не определена: ни merge-base с origin/main, ни HEAD.',
+          '  Выполни git fetch origin main или передай --base <ref> (в CI base приходит в TURBO_SCM_BASE).',
+        ]);
+      }
+      baseRef = head.output.trim().split('\n').at(-1) ?? '';
     }
-    baseRef = mergeBase.output.trim().split('\n').at(-1) ?? '';
   }
 
   const shown = git(['show', `${baseRef}:${specRelative}`]);
