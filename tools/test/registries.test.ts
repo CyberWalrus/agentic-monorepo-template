@@ -2,7 +2,7 @@
  * Канарейка b7: гейт порядка реестров ловит перестановку строк; проводка
  * (шаг verify, pnpm regen, .gitattributes, правило AGENTS.md) на месте.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { expect, it } from 'vitest';
 
@@ -22,7 +22,13 @@ it('проводка: шаг registries в verify, pnpm regen, .gitattributes, �
 });
 
 it('b7.1 заведена: гейт дрейфа routeTree — отдельная задача (выделена при реализации)', () => {
-  const task = readFileSync(join(repoDir, 'backlog', 'b7.1.md'), 'utf8');
+  // Доска задач — dev-документ шаблона: в проект из копии backlog/ не едет
+  // (copier _exclude, ADR 0008), проверять существование задачи там нечего.
+  const taskPath = join(repoDir, 'backlog', 'b7.1.md');
+  if (!existsSync(taskPath)) {
+    return;
+  }
+  const task = readFileSync(taskPath, 'utf8');
   expect(task).toContain('routeTree.gen.ts');
   expect(task).toContain('@tanstack/router-cli');
 });
