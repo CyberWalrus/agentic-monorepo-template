@@ -29,15 +29,22 @@
       "dependsOn": ["transit", "^build"],
       "outputs": ["playwright-report/**", "test-results/**", "reports/**"],
       // VIDEO=on — видео прогона как доказательство для PR; без env Turborepo не передаст его и не учтёт в хеше.
-      // API_URL — цель прокси /rpc; PORT_BASE — явная база портов (ADR 0005, З9); оба читает конфиг Playwright.
+      // PORT_BASE — явная база портов (ADR 0005, З9); REUSE_SERVER=1 — ручной reuse dev-сервера
+      // по токену этого worktree (ADR 0005). Обе читает конфиг Playwright из process.env, и обе
+      // обязаны быть объявлены: strict env-режим передаёт задаче только объявленное, а переменная
+      // вне env не попадает и в хеш — кэш реплеит чужой прогон (класс дефекта VIDEO=on, §3.2).
+      // API_URL здесь нет намеренно: адрес вычисляется в tools/ports.ts (apiOrigin), из env его
+      // не читает никто — объявление лишь раздувало ключ кэша.
       // E2E_FEATURES — выбор фич (B4.1): без него перезапуск PR с тем же SHA
       // реплеил бы из кэша отчёт старого подмножества.
-      "env": ["CI", "VIDEO", "API_URL", "PORT_BASE", "E2E_FEATURES"]
+      "env": ["CI", "VIDEO", "PORT_BASE", "E2E_FEATURES", "REUSE_SERVER"]
     },
     "perf": {
       "dependsOn": ["transit", "^build"],
       "outputs": ["reports/**"],
-      "env": ["CI", "API_URL", "PORT_BASE"],
+      // REUSE_SERVER — конфиг Playwright общий с e2e: perf-прогон переиспользует
+      // ручной сервер так же (токен этого worktree).
+      "env": ["CI", "PORT_BASE", "REUSE_SERVER"],
       // A7 (architecture.md §3.3): перф-замеры зависят от машины и между машинами
       // не переиспользуются — задача вне кэша вовсе (ни локального, ни remote).
       "cache": false
