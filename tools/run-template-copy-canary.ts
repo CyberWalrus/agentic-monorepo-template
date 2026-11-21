@@ -170,16 +170,23 @@ try {
   // не уложиться в дефолтные 60 с готовности iframe (browser.connectTimeout)
   // либо уронить первый динамический импорт тест-файла (Failed to fetch
   // dynamically imported module — тот же холодный transform, наблюдение на
-  // TasksPage.test.tsx/CreateTaskForm.test.tsx в копии). Тёплый повтор один —
-  // по образцу retry-по-сигналу в run-gate-canaries: латентность холодного
+  // TasksPage.test.tsx/CreateTaskForm.test.tsx в копии; на загруженном CI
+  // второй старт тоже может оказаться холодным — поэтому до двух повторов).
+  // По образцу retry-по-сигналу в run-gate-canaries: латентность холодного
   // старта — не вердикт гейта, а ошибка кода копии (падающий импорт в браузере)
-  // остаётся красной и на тёплом прогоне.
-  const coldBrowserStart =
-    verified.output.includes('did not become ready within') ||
-    verified.output.includes('Failed to fetch dynamically imported module');
-  if (verified.status !== 0 && coldBrowserStart) {
+  // остаётся красной и на тёплых прогонах.
+  for (let retry = 1; retry <= 2; retry += 1) {
+    if (verified.status === 0) {
+      break;
+    }
+    const coldBrowserStart =
+      verified.output.includes('did not become ready within') ||
+      verified.output.includes('Failed to fetch dynamically imported module');
+    if (!coldBrowserStart) {
+      break;
+    }
     console.error(
-      'тестер browser-режима не уложился в 60 с на холодном transform копии — повтор на тёплых кэшах',
+      `тестер browser-режима не уложился в 60 с на холодном transform копии — повтор ${retry}/2 на тёплых кэшах`,
     );
     verified = verifyInCopy();
   }
