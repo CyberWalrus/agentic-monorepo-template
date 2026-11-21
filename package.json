@@ -32,6 +32,7 @@
     "typecheck:tools": "tsc -p tsconfig.json",
     "test:integrity": "node tools/check-test-integrity.ts",
     "test:hooks": "vitest run --reporter=json --reporter=default --outputFile=reports/vitest-hooks.json",
+    "test:inbox": "vitest run --root tools backlog-inbox",
     "test:report": "node tools/check-test-report.ts",
     "test:count": "node tools/check-test-count.ts",
     "test:count:update": "node tools/check-test-count.ts --update",
@@ -40,7 +41,8 @@
     "docs:check": "node tools/check-docs.ts",
     "flaky:quarantine": "node tools/check-flaky-rate.ts --validate-quarantine --quarantine tools/flaky-quarantine.json",
     "visual-image:check": "node tools/check-visual-image.ts",
-    "backlog": "node tools/backlog.ts"
+    "backlog": "node tools/backlog.ts",
+    "gen": "node tools/gen.ts"
   },
   "devDependencies": {
     "@secretlint/secretlint-rule-preset-recommend": "catalog:",
