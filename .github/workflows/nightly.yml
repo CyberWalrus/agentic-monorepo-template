@@ -8,7 +8,10 @@ on:
 
 permissions:
   contents: read
-  issues: write
+  # issues: write срезан на job-уровень (e16): workflow-уровень доставал его
+  # jobs без нужды (mutation-full не создаёт issues вовсе; flake-hunt и report —
+  # создают, но job-level permissions заменяет workflow-level целиком, поэтому
+  # каждому — свой полный набор).
 
 env:
   TURBO_TELEMETRY_DISABLED: 1
@@ -18,6 +21,12 @@ jobs:
     name: e2e flake hunt
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Полный набор обязателен: job-level permissions заменяет workflow-уровень
+    # целиком (e16). issues: write нужен gh issue list/comment/create (дедуп
+    # flaky-issue); contents: read — checkout.
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
@@ -57,6 +66,9 @@ jobs:
     name: mutation (full)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Явный contents: read (e16): job issues не создаёт — читает, а не наследует.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
@@ -318,6 +330,11 @@ jobs:
       ]
     if: failure()
     runs-on: ubuntu-latest
+    # issues: write — gh issue create о падении; contents: read для единого
+    # полного набора (e16).
+    permissions:
+      contents: read
+      issues: write
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}

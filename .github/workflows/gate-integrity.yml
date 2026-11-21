@@ -93,7 +93,15 @@ jobs:
           # время последнего push — самое раннее started_at check-run'а на
           # head-коммите; ставит его GitHub, автор подделать не может.
           # Нет ни одного check-run — fail-closed (ремонт: перезапуск job).
-          gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > pushed-check-runs.json
+          # e16: --paginate — чек-ранов на head-коммите может быть больше 100
+          # (per_page — размер страницы, не предел); обрезка сдвигала бы
+          # min started_at в будущее — fail-open freshness-метки.
+          # Две команды, не пайп: bash шага — bash -e без pipefail, сбой gh
+          # на второй странице в пайпе дал бы зелёный шаг на усечённых данных.
+          # jq -s склеивает страницы в один объект с полем check_runs —
+          # форма входа jq-агрегаций и node-чекеров не меняется.
+          gh api --paginate "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > check-runs-pages.json
+          jq -s '{total_count: length, check_runs: [.[].check_runs[]]}' check-runs-pages.json > pushed-check-runs.json
           PUSHED_AT=$(jq -r '[.check_runs[].started_at] | min // empty' pushed-check-runs.json)
           if [ -z "$PUSHED_AT" ]; then
             echo "check-run'ов на $HEAD_SHA нет — время последнего push не вычислить" >&2
@@ -184,7 +192,15 @@ jobs:
           # время последнего push — самое раннее started_at check-run'а на
           # head-коммите; ставит его GitHub, автор подделать не может.
           # Нет ни одного check-run — fail-closed (ремонт: перезапуск job).
-          gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > pushed-check-runs.json
+          # e16: --paginate — чек-ранов на head-коммите может быть больше 100
+          # (per_page — размер страницы, не предел); обрезка сдвигала бы
+          # min started_at в будущее — fail-open freshness-метки.
+          # Две команды, не пайп: bash шага — bash -e без pipefail, сбой gh
+          # на второй странице в пайпе дал бы зелёный шаг на усечённых данных.
+          # jq -s склеивает страницы в один объект с полем check_runs —
+          # форма входа jq-агрегаций и node-чекеров не меняется.
+          gh api --paginate "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > check-runs-pages.json
+          jq -s '{total_count: length, check_runs: [.[].check_runs[]]}' check-runs-pages.json > pushed-check-runs.json
           PUSHED_AT=$(jq -r '[.check_runs[].started_at] | min // empty' pushed-check-runs.json)
           if [ -z "$PUSHED_AT" ]; then
             echo "check-run'ов на $HEAD_SHA нет — время последнего push не вычислить" >&2
@@ -207,7 +223,8 @@ jobs:
           # или не появился вовсе — fail-closed, ремонт: перезапустить job
           # bundle-approval (ADR 0013, «красный по таймауту ≠ рост»).
           for _ in $(seq 1 80); do
-            gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > check-runs.json
+            gh api --paginate "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > check-runs-pages.json
+            jq -s '{total_count: length, check_runs: [.[].check_runs[]]}' check-runs-pages.json > check-runs.json
             TOTAL=$(jq '[.check_runs[] | select(.name == "bundle-delta")] | length' check-runs.json)
             PENDING=$(jq '[.check_runs[] | select(.name == "bundle-delta" and .status != "completed")] | length' check-runs.json)
             if [ "$TOTAL" -gt 0 ] && [ "$PENDING" -eq 0 ]; then
@@ -216,7 +233,8 @@ jobs:
             echo "bundle-delta ещё не завершён (total=$TOTAL, pending=$PENDING) — ждём 15 с."
             sleep 15
           done
-          gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > check-runs.json
+          gh api --paginate "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > check-runs-pages.json
+          jq -s '{total_count: length, check_runs: [.[].check_runs[]]}' check-runs-pages.json > check-runs.json
 
       - name: Bundle growth gate
         # Кандидаты CODEOWNERS в порядке приоритета GitHub (как в integrity).

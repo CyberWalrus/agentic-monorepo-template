@@ -169,10 +169,13 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: apps/api/reports/mutation/stryker-incremental.json
+          # Restore-key stryker-main- удалён (e16): mutation не бежит на push в main
+          # (if: github.event_name != 'push') — ключ stryker-main-* не пишется никем,
+          # чтение несуществующего ключа всегда мимо. Межветочный кэш — отдельная
+          # задача при появлении потребности.
           key: stryker-${{ github.head_ref || github.ref_name }}-${{ github.sha }}
           restore-keys: |
             stryker-${{ github.head_ref || github.ref_name }}-
-            stryker-main-
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - run: pnpm turbo run mutation $AFFECTED $TURBO_CACHE_ARGS --output-logs=errors-only
