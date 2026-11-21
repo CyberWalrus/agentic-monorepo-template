@@ -866,10 +866,13 @@ export const CANARIES: GateCanary[] = [
     // таблицы становится громким (З6). Граница: держится проводка генерации
     // (перебор → integrity-тесты → it.each), не тела строк сценария. Якоря:
     // первая `\n};` — закрывающая скобка contract-объекта tasks.ts (образец —
-    // канарейка «процедура контракта без политики доступа»), первая `\n});` —
-    // закрывающая скобка os.router. Вторая правка обязательна: роутер содержит
-    // только объявленные handler'ы, контрактный зонд без handler'а до перебора
-    // не доходит и шаг остаётся зелёным.
+    // канарейка «процедура контракта без политики доступа»); `\n  },\n});` —
+    // закрытие объекта tasks и os.router (единственное `\n});` в файле).
+    // Вставлять перед `\n});` нельзя: зонд оказался бы рядом с tasks, а не
+    // внутри, путь терял бы префикс (наблюдение первого dry-run: перебор видел
+    // «evilOwnerProbe» вместо «tasks.evilOwnerProbe»). Вторая правка
+    // обязательна: роутер содержит только объявленные handler'ы, контрактный
+    // зонд без handler'а до перебора не доходит и шаг остаётся зелёным.
     name: 'owner-процедура без строки сценария таблицы',
     steps: 'test',
     failedStep: 'test',
@@ -893,11 +896,11 @@ export const CANARIES: GateCanary[] = [
       const routerPath = join(root, 'apps', 'api', 'src', 'router.ts');
       const router = readFileSync(routerPath, 'utf8');
       const withHandler = router.replace(
-        /\n}\);/,
-        `\n    evilOwnerProbe: os.tasks.evilOwnerProbe.handler(async () => {}),\n});`,
+        /\n  },\n}\);/,
+        `\n    evilOwnerProbe: os.tasks.evilOwnerProbe.handler(async () => {}),\n  },\n});`,
       );
       if (withHandler === router) {
-        throw new Error('canary anchor not found: apps/api/src/router.ts has no os.router closing');
+        throw new Error('canary anchor not found: apps/api/src/router.ts has no tasks closing');
       }
       writeFileSync(routerPath, withHandler);
     },
