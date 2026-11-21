@@ -164,6 +164,10 @@ jobs:
           case "$BRANCH" in
             *[!A-Za-z0-9._/-]*|*..*) echo "Небезопасное имя ветки: ${BRANCH}" >&2; exit 1 ;;
           esac
+          # lefthook pre-push гоняет boundaries (dependency-cruiser) — без
+          # node_modules все импорты «не резолвятся» (22× not-to-unresolvable,
+          # b12): push базлайна отклонялся. Устанавливаем зависимости до пуша.
+          pnpm install --frozen-lockfile
           while IFS= read -r file; do
             mkdir -p "$(dirname "$file")"
             cp "actuals/${file}" "$file"
