@@ -11,7 +11,7 @@
     "test": "vitest run --reporter=json --reporter=default --outputFile=reports/vitest.json",
     "mutation": "stryker run",
     "openapi": "node scripts/openapi.ts",
-    "openapi:check": "node scripts/openapi.ts --check"
+    "openapi:check": "node scripts/openapi.ts --check && node scripts/openapi-compat.ts"
   },
   "dependencies": {
     "@orpc/contract": "catalog:",

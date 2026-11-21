@@ -22,3 +22,5 @@ description: Contract-first procedure for adding or changing an API procedure �
 ## Breaking changes
 
 Удаление поля, сужение типа, переименование, новое обязательное поле во входе — всё это breaking. Делай аддитивно: новое опциональное поле или новая процедура, затем миграция клиентов, удаление старого отдельным PR. Breaking change требует ADR в `docs/adr/` и явного согласия человека.
+
+Детерминированную часть этого списка держит гейт (C6): `openapi:check` — шаг verify `openapi` — сравнивает закоммиченный `openapi.json` с версией на merge-base (`packages/contracts/scripts/openapi-compat.ts`) и красит verify на удаления процедур и полей, новые обязательные поля, сужение входа и расширение выхода. Добавления проходят. Согласие человека — ревью PR.
