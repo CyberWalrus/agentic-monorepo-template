@@ -690,6 +690,30 @@ export const CANARIES: GateCanary[] = [
     },
   },
   {
+    // E1: turbo.json обязан соответствовать каноническому списку входов
+    // //#test:hooks (tools/test-hooks-inputs.ts): пропущенный input — тихо
+    // устаревший зелёный результат (З6). Красит тест синхронизации в test:hooks.
+    // Плохое изменение — пополнение канонического списка без turbo.json: mutation
+    // в tools/** гарантированно меняет хеш задачи (turbo свой конфиг в хеш
+    // задачи с явными inputs не включает — проверено первым прогоном канарейки:
+    // правка turbo.json реплеила кэш и канарейка не срабатывала).
+    name: 'test:hooks inputs разошлись с каноническим списком',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    // Основа слова: имя теста стоит в творительном падеже («каноническим
+    // списком») — номинатив в expect не матчился и канарейка не засчитывалась
+    // при красном гейте (первый прогон).
+    expect: /каноническ/,
+    apply: (root) => {
+      const path = join(root, 'tools', 'test-hooks-inputs.ts');
+      const source = readFileSync(path, 'utf8');
+      if (!source.includes("'pnpm-lock.yaml',")) {
+        throw new Error('canary anchor not found: TEST_HOOKS_INPUTS');
+      }
+      writeFileSync(path, source.replace("'pnpm-lock.yaml',", "'pnpm-lock.yaml',\n  'docs/**',"));
+    },
+  },
+  {
     // b4.4: карантин не узаконенный .skip — @critical в карантин запрещён
     // (максимум 3 записи, срок обязателен; остальное валидирует тот же чекер).
     // Красит шаг quarantine (tools/check-flaky-rate.ts --validate-quarantine).

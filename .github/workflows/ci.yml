@@ -78,8 +78,10 @@ jobs:
       - run: pnpm sherif
       - run: pnpm visual-image:check
       - run: pnpm test:integrity
-      - run: pnpm test:hooks
-      # Корневой vitest вне turbo: его отчёт проверяется здесь явным --only (A3).
+      # Тесты обвязки под кэшем turbo (E1): отчёт восстанавливается из кэша,
+      # проверка отчёта идёт ниже явным --only (A3).
+      - run: pnpm turbo run test:hooks $TURBO_CACHE_ARGS --output-logs=errors-only
+      # Корневой vitest: отчёт проверяется здесь явным --only (A3).
       - run: pnpm test:report --only reports/vitest-hooks.json
       # Храповик здесь сравнит только hooks-строку базлайна (остальные отчёты
       # пишет job unit): корневые хуки не остаются без проверки числа тестов.
