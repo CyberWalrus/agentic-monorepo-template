@@ -113,6 +113,8 @@ tools               гейты: verify, бюджеты, защищённые п�
 .github             CI, агентное ревью, nightly, ruleset, Renovate; CODEOWNERS в docs/
 ```
 
+Если проекту нужна другая форма — части шаблона удаляются по [docs/removal.md](docs/removal.md): по каждой части чек-лист «что удалить → что краснеет → что переделать в CI»; профили Copier не вводятся ([ADR 0008](docs/adr/0008-template-distribution.md)).
+
 ## Документы
 
 - [Зачем нужна система](docs/vision.md)
