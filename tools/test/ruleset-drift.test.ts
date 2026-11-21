@@ -87,11 +87,27 @@ it('fail-loud (З11): нет данных API — exit 2, а не «дрейфа
   expect(run.stderr).toContain('fail-loud');
 });
 
+it('копия без снимка — exit 0: дрейф ruleset неприменим вне шаблона', () => {
+  // docs/template-state.md в копию не едет (copier _exclude, ADR 0008):
+  // чекер обязан зелёно молчать, а не красить nightly копии.
+  const root = join(tmp, 'copy');
+  mkdirSync(join(root, 'api'), { recursive: true });
+  writeFileSync(join(root, 'api', '111.json'), JSON.stringify(snapshot, null, 2));
+  const run = runChecker(root);
+  expect(run.status).toBe(0);
+});
+
 it('проводка: nightly-джоб и реестр в template-state.md (a11)', () => {
   const nightly = readFileSync(join(repoDir, '.github', 'workflows', 'nightly.yml'), 'utf8');
   expect(nightly).toContain('ruleset drift');
   expect(nightly).toContain('check-ruleset-drift.ts');
-  const state = readFileSync(join(repoDir, 'docs', 'template-state.md'), 'utf8');
+  // Снимок живого ruleset — dev-документ шаблона: в копию не едет. В копии
+  // проверяем только проводку nightly; реестр существует лишь в шаблоне.
+  const statePath = join(repoDir, 'docs', 'template-state.md');
+  if (!existsSync(statePath)) {
+    return;
+  }
+  const state = readFileSync(statePath, 'utf8');
   expect(state).toContain('Реестр живых правил');
   expect(state).toMatch(/27137353[^\n]*rulesets\/main\.json/);
   expect(existsSync(join(repoDir, '.github', 'rulesets', 'main.json'))).toBe(true);

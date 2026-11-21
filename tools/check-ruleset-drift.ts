@@ -129,9 +129,16 @@ function main(): void {
   const createIssue = args.includes('--create-issue');
   const runUrl = flag('--run-url');
 
+  // Снимок живого ruleset — dev-документ шаблона: в проект из копии он не едет
+  // (copier _exclude, ADR 0008). Дрейф там не применим в принципе — живого
+  // контракта ruleset у копии нет. Отсутствие реестра в копии — не дрейф и не
+  // ошибка: тихий exit 0 (проверка применима только в шаблонном репозитории).
+  // РЕЕСТР НА МЕСТЕ, но битый/пустой — по-прежнему fail-loud (ниже).
   if (!existsSync(registryPath)) {
-    console.error(`ruleset-drift: реестр не найден: ${registryPath} (fail-loud, З11)`);
-    process.exit(2);
+    console.log(
+      `ruleset-drift: ${registryPath} отсутствует — это копия шаблона, дрейф ruleset не применим.`,
+    );
+    process.exit(0);
   }
   const pairs = parseRegistry(registryPath);
   if (pairs.length === 0) {
