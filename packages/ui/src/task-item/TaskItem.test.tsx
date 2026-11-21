@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
-import { collectA11yViolations } from '../testing/a11y.ts';
+import { collectA11yViolations } from '../../testing/a11y.ts';
 import { TaskItem } from './TaskItem.tsx';
 
 const task = { id: 'task-1', title: 'Write the docs', completed: false };

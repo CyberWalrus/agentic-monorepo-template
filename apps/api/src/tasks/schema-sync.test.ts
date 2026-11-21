@@ -8,12 +8,12 @@ import { generateDrizzleJson } from 'drizzle-kit/api';
 import { pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { collectSchemaSyncReport, type SchemaSyncReport } from './schema-sync.ts';
+import { collectSchemaSyncReport, type SchemaSyncReport } from '../../scripts/schema-sync.ts';
 import {
   formatSchemaSyncReport,
   isDirectInvocation,
   runSchemaSyncCheck,
-} from './schema-sync-cli.ts';
+} from '../../scripts/schema-sync-cli.ts';
 
 // Синтетический домен вместо tasks: дифф считается на модуле схемы, база
 // не нужна. «Широкая» таблица — правка schema.ts, которой ещё нет в снапшоте.
@@ -581,9 +581,10 @@ describe('formatSchemaSyncReport', () => {
 
 describe('isDirectInvocation', () => {
   const syntheticUrl = pathToFileURL('/repo/apps/api/src/tasks/schema-sync-cli.ts').href;
-  // Реальное положение cli относительно этого теста: src/tasks/<name>.ts.
+  // Реальное положение cli относительно этого теста: ../../scripts/<name>.ts
+  // (перенос dev-CLI из src в scripts: not-to-dev-dep, e15).
   const cliUrl = pathToFileURL(
-    join(dirname(fileURLToPath(import.meta.url)), 'schema-sync-cli.ts'),
+    join(dirname(fileURLToPath(import.meta.url)), '../../scripts/schema-sync-cli.ts'),
   ).href;
 
   it('прямой запуск: модуль совпадает с argv1', () => {
@@ -595,7 +596,10 @@ describe('isDirectInvocation', () => {
   it('относительный argv1 резолвится против cwd', () => {
     // Без process.chdir: он запрещён в воркерах (stryker, rev c1.3). Относительный
     // путь от текущего cwd к cli проверяет тот же контракт в любом cwd.
-    const cliPath = join(dirname(fileURLToPath(import.meta.url)), 'schema-sync-cli.ts');
+    const cliPath = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '../../scripts/schema-sync-cli.ts',
+    );
     expect(isDirectInvocation(cliUrl, relative(process.cwd(), cliPath))).toBe(true);
   });
 
@@ -609,7 +613,7 @@ describe('isDirectInvocation', () => {
 });
 
 describe('schema-sync-cli как скрипт', () => {
-  const cliPath = join(dirname(fileURLToPath(import.meta.url)), 'schema-sync-cli.ts');
+  const cliPath = join(dirname(fileURLToPath(import.meta.url)), '../../scripts/schema-sync-cli.ts');
 
   // Таймаут 20с вместо дефолтных 5с: в копии шаблона (canaries) первый
   // прогон CLI холодный — типскриптовый стриппинг+чтение журнала на CI-раннере

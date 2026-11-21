@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-react';
 
-import { Frame } from '../testing/visual-frame.tsx';
+import { Frame } from '../../testing/visual-frame.tsx';
 import { TaskItem } from './TaskItem.tsx';
 
 describe('visual', () => {

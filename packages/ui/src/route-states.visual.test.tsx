@@ -11,7 +11,7 @@ import { render } from 'vitest-browser-react';
 import { ErrorState } from './error-state/ErrorState.tsx';
 import { NotFoundState } from './not-found-state/NotFoundState.tsx';
 import { PendingState } from './pending-state/PendingState.tsx';
-import { Frame } from './testing/visual-frame.tsx';
+import { Frame } from '../testing/visual-frame.tsx';
 
 describe('visual', () => {
   it('Route states', async () => {
