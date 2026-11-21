@@ -57,9 +57,12 @@ const KNOWN_GATES: readonly string[] = [
   'tools/check-bundle-gate.ts',
   'tools/check-bundle.ts',
   'tools/check-docs.ts',
+  'tools/flaky-quarantine.json',
+  'tools/check-flaky-rate.ts',
   'tools/check-gate-approval.ts',
   'tools/check-perf-trend.main.ts',
   'tools/check-perf-trend.ts',
+  'tools/test-hooks-inputs.ts',
   'tools/check-protected-paths.ts',
   'tools/check-sandbox-paths.ts',
   'tools/check-template-copy.ts',
@@ -154,7 +157,7 @@ export interface ToolClassReport {
 // --- Комментарии ----------------------------------------------------------------
 
 /** Срезает комментарии TS-подобного кода; содержимое строк сохраняется. */
-function stripCodeComments(text: string): string {
+export function stripCodeComments(text: string): string {
   const out: string[] = [];
   let state: 'code' | 'line' | 'block' | 'single' | 'double' | 'template' = 'code';
   let i = 0;
@@ -599,7 +602,13 @@ function loadScriptsIndex(root: string, files: string[]): ScriptsIndex {
       const parsed: unknown = JSON.parse(stripCodeComments(readFileSync(turboPath, 'utf8')));
       const tasksBlock = isRecord(parsed) ? parsed['tasks'] : undefined;
       if (isRecord(tasksBlock)) {
-        index.turboTasks = new Set(Object.keys(tasksBlock));
+        // Корневые задачи объявляются с префиксом «//#» (turbo), шаг verify
+        // ссылается на них по короткому имени (E1): резолвим оба вида.
+        index.turboTasks = new Set(
+          Object.keys(tasksBlock).flatMap((name) =>
+            name.startsWith('//#') ? [name, name.slice(3)] : [name],
+          ),
+        );
       }
     } catch {
       // turbo.json защищён и валиден в репозитории; в синтетических деревьях его нет.
