@@ -221,3 +221,18 @@ describe('createPostgresTestDatabase', () => {
     CONTAINER_TIMEOUT_MS,
   );
 });
+
+describe('postgresTestInstanceKey', () => {
+  it('разные migrate на одной папке — разные ключи (урок c1.7: общая заглушка опустошала шаблон)', () => {
+    const base = { image: POSTGRES_TEST_IMAGE, migrationsFolder: taskMigrationsFolder };
+
+    const migrated = postgresTestInstanceKey({ ...base, migrate: migrateTaskDatabase });
+    const stubbed = postgresTestInstanceKey({ ...base, migrate: () => Promise.resolve() });
+
+    expect(stubbed).not.toBe(migrated);
+    // Контракт стабилен: тот же набор опций — тот же ключ (переиспользование
+    // контейнера внутри прогона и между прогонами сохраняется).
+    expect(postgresTestInstanceKey({ ...base, migrate: migrateTaskDatabase })).toBe(migrated);
+    expect(postgresTestInstanceKey({ ...base, migrate: () => Promise.resolve() })).toBe(stubbed);
+  });
+});

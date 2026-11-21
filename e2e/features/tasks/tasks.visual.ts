@@ -39,4 +39,19 @@ test.describe('tasks page', { lock: SHARED_DATA_LOCK }, () => {
 
     await expect(page.locator('form')).toHaveScreenshot('create-form-error.webp');
   });
+
+  test('error banner after a failed toggle', async ({ page, seedTasks }) => {
+    await seedTasks(makeTasks(2));
+    // Баннер ошибки после неудачного toggle — единственное состояние страницы,
+    // меняющееся по рантайм-данным (b12). Запрос блокируется до клика:
+    // оптимистичная галочка откатывается, остаётся баннер role="alert".
+    // Кликается неотмеченная задача: makeTasks отмечает каждую третью (index % 3 === 0),
+    // check() по уже отмеченному чекбоксу — no-op без мутации.
+    await page.route('**/rpc/tasks/toggle', (route) => route.abort());
+    await openHydrated(page);
+    await page.getByRole('checkbox', { name: 'Seeded task #2' }).check();
+    await expect(page.getByRole('alert')).toHaveText('Could not update the task. Try again.');
+
+    await expect(page).toHaveScreenshot('tasks-page-error.webp', { fullPage: true });
+  });
 });

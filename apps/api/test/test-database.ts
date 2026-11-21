@@ -54,7 +54,11 @@ export interface PostgresTestDatabaseOptions {
   image: string;
   /** Каталог миграций модуля: участвует в fingerprint шаблона и ключе экземпляра. */
   migrationsFolder: string;
-  /** Применение миграций к базе-шаблону (для drizzle — migrateTaskDatabase). */
+  /**
+   * Применение миграций к базе-шаблону (для drizzle — migrateTaskDatabase).
+   * Личность функции входит в ключ экземпляра: файлы с разными контрактами
+   * миграции получают разные контейнеры и не оспаривают содержимое шаблона.
+   */
   migrate: (db: NodePgDatabase) => Promise<void>;
   /**
    * Каталог координации воркеров. По умолчанию tmpdir с ключом пути репозитория
@@ -65,15 +69,23 @@ export interface PostgresTestDatabaseOptions {
 }
 
 /**
- * Ключ экземпляра координации: образ + каталог миграций. Файлы состояния —
- * `instance-<key>.json` и `lock-<key>` в каталоге координации. Экспортирован
- * для тестов самого хелпера: они моделируют состояния координации (мёртвый
- * лок, протухший fingerprint) по этому контракту.
+ * Ключ экземпляра координации: образ + каталог миграций + личность migrate.
+ * Личность migrate обязательна в ключе: файлы с одинаковыми образом и папкой,
+ * но разными контрактами миграции делили один контейнер, и содержимое шаблона
+ * определялось тем, кто первым взял лок координации (c1.7: заглушка
+ * task-pool опустошала общий шаблон → клонировавшие её postgres-тесты падали
+ * 42P01 волной, копийные канарейки стояли красными). Теперь разные migrate —
+ * разные контейнеры, коллизия контрактов невозможна по построению. Файлы
+ * состояния — `instance-<key>.json` и `lock-<key>` в каталоге координации.
+ * Экспортирован для тестов самого хелпера: они моделируют состояния
+ * координации (мёртвый лок, протухший fingerprint) по этому контракту.
  */
 export function postgresTestInstanceKey(
-  options: Pick<PostgresTestDatabaseOptions, 'image' | 'migrationsFolder'>,
+  options: Pick<PostgresTestDatabaseOptions, 'image' | 'migrationsFolder' | 'migrate'>,
 ): string {
-  return sha256(`${options.image}\n${resolve(options.migrationsFolder)}`).slice(0, 12);
+  return sha256(
+    `${options.image}\n${resolve(options.migrationsFolder)}\n${String(options.migrate)}`,
+  ).slice(0, 12);
 }
 
 /**
@@ -83,7 +95,7 @@ export function postgresTestInstanceKey(
  */
 export function postgresTestContainerName(
   coordinationDir: string,
-  options: Pick<PostgresTestDatabaseOptions, 'image' | 'migrationsFolder'>,
+  options: Pick<PostgresTestDatabaseOptions, 'image' | 'migrationsFolder' | 'migrate'>,
 ): string {
   const instanceKey = postgresTestInstanceKey(options);
   return `agentic-pg-test-${sha256(`${coordinationDir}\n${instanceKey}`).slice(0, 12)}`;
@@ -307,7 +319,9 @@ async function removeContainersByName(name: string): Promise<void> {
  *
  * Координация воркеров — mkdir-мьютекс + instance-файл в каталоге координации:
  * первый воркер стартует контейнер и мигрирует шаблон, остальные подключаются;
- * последний закрывший останавливает контейнер. Ryuk отключён (см. выше).
+ * последний закрывший останавливает контейнер. Ключ экземпляра включает
+ * личность migrate (см. postgresTestInstanceKey): разные контракты миграции
+ * не делят контейнер. Ryuk отключён (см. выше).
  *
  * Фича копирует вызов со своими параметрами — см.
  * docs/test-database-isolation.md.

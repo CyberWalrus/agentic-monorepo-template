@@ -52,12 +52,12 @@ jobs:
       TURBO_TEAM: ${{ vars.TURBO_TEAM }}
       TURBO_API: ${{ vars.TURBO_API }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
       # A7: локальный кэш PR — свой, изолированный от main и других PR по номеру
       # PR; компенсирует отсутствие remote-записи из PR (architecture.md §3.3).
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         if: github.event_name == 'pull_request'
         with:
           path: .turbo
@@ -68,6 +68,9 @@ jobs:
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - run: pnpm format:check
       - run: pnpm lint --format github
+      # Гейт окружения (C3.1): process.env/import.meta.env только в env-модулях,
+      # env.example на месте и в формате KEY=VALUE (полнота — в тестах приложений).
+      - run: pnpm env:check
       - run: pnpm turbo run typecheck $AFFECTED $TURBO_CACHE_ARGS --output-logs=errors-only
       - run: pnpm typecheck:tools
       - run: pnpm boundaries
@@ -88,6 +91,10 @@ jobs:
       - run: pnpm tool-class:check
       - run: pnpm docs:check
       - run: pnpm --filter @repo/contracts openapi:check
+      # Сканер секретов и аудит зависимостей (b6): audit в CI, где есть сеть;
+      # порог high и только production — dev-зависимости шумят (подводный камень задачи).
+      - run: pnpm secrets:check
+      - run: pnpm audit:check
       - name: duration to summary
         if: always()
         env: { JOB: static }
@@ -104,12 +111,12 @@ jobs:
       TURBO_TEAM: ${{ vars.TURBO_TEAM }}
       TURBO_API: ${{ vars.TURBO_API }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
       # A7: локальный кэш PR — см. комментарий в job static.
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         if: github.event_name == 'pull_request'
         with:
           path: .turbo
@@ -126,7 +133,7 @@ jobs:
       # Храповик числа тестов (З7, A3): warning-only, предупреждение идёт в сводку PR.
       # pipefail: краш чекера не должен маскироваться exit-кодом tee.
       - run: set -o pipefail && pnpm test:count | tee "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: coverage
@@ -150,10 +157,10 @@ jobs:
       TURBO_TEAM: ${{ vars.TURBO_TEAM }}
       TURBO_API: ${{ vars.TURBO_API }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: apps/api/reports/mutation/stryker-incremental.json
           key: stryker-${{ github.head_ref || github.ref_name }}-${{ github.sha }}
@@ -163,7 +170,7 @@ jobs:
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - run: pnpm turbo run mutation $AFFECTED $TURBO_CACHE_ARGS --output-logs=errors-only
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: mutation-report
@@ -185,12 +192,12 @@ jobs:
       TURBO_TEAM: ${{ vars.TURBO_TEAM }}
       TURBO_API: ${{ vars.TURBO_API }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
       # A7: локальный кэш PR — см. комментарий в job static.
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         if: github.event_name == 'pull_request'
         with:
           path: .turbo
@@ -214,7 +221,7 @@ jobs:
       # Проект functional с default:false не запускается без явного --project —
       # гейт требует его присутствия в отчёте (A3). $AFFECTED — как у прогона.
       - run: pnpm test:report --from-turbo e2e $AFFECTED --expect-project functional
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: e2e-report
@@ -241,12 +248,12 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.64.1-noble
       options: --ipc=host
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup
       # A7: локальный кэш PR — см. комментарий в job static.
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         if: github.event_name == 'pull_request'
         with:
           path: .turbo
@@ -263,14 +270,14 @@ jobs:
           # visual-approve (b3.1, ADR 0015); на workflow_dispatch пусто —
           # повторный прогон идёт уже по исправленному дереву.
           CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: visual-actuals
           path: visual-actuals/
           if-no-files-found: ignore
           retention-days: 30
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: visual-report
@@ -296,7 +303,7 @@ jobs:
       TURBO_TEAM: ${{ vars.TURBO_TEAM }}
       TURBO_API: ${{ vars.TURBO_API }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
@@ -305,7 +312,7 @@ jobs:
       - run: pnpm turbo run build --filter=@repo/web $TURBO_CACHE_ARGS --output-logs=errors-only
       - run: pnpm bundle
       - run: pnpm turbo run perf $TURBO_CACHE_ARGS --output-logs=errors-only
-      - uses: grafana/setup-k6-action@v1
+      - uses: grafana/setup-k6-action@c47136d33d365efbeb9ae7266908b5dcf98cdece # v1
       - name: API smoke (k6)
         # Порты из tools/ports.ts (ADR 0005, З9): PORT_BASE=3300 задан на уровне workflow.
         run: |
@@ -313,7 +320,7 @@ jobs:
           pnpm --filter @repo/api start &
           for _ in $(seq 1 30); do curl -sf "$API_URL/health" > /dev/null && break; sleep 1; done
           k6 run --summary-export=reports/k6.json e2e/perf/k6/api-smoke.js
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: perf-report
@@ -348,14 +355,14 @@ jobs:
       TURBO_TEAM: ${{ vars.TURBO_TEAM }}
       TURBO_API: ${{ vars.TURBO_API }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - run: pnpm turbo run build --filter=@repo/web $TURBO_CACHE_ARGS --output-logs=errors-only
       - run: pnpm bundle:delta --base "${{ github.event.pull_request.base.sha }}"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: bundle-delta-report
