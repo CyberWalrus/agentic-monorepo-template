@@ -3,6 +3,7 @@
   "fast": {
     "format": 5,
     "lint": 16,
+    "env": 10,
     "typecheck": 20,
     "typecheck:tools": 10,
     "test": 90,

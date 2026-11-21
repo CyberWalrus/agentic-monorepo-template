@@ -5,6 +5,7 @@
   "scripts": {
     "prepare": "if [ -e .git ]; then lefthook install; fi",
     "dev": "node tools/dev.ts",
+    "preflight": "node packages/preflight/src/cli.ts",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
@@ -21,6 +22,9 @@
     "sherif": "sherif",
     "bundle": "node tools/check-bundle.ts",
     "bundle:delta": "node tools/check-bundle-delta.ts",
+    "secrets:check": "secretlint \"**/*\"",
+    "audit:check": "node tools/check-audit.ts",
+    "sbom": "pnpm sbom",
     "visual": "tools/visual.sh",
     "visual:update": "VISUAL_UPDATE=1 tools/visual.sh",
     "verify": "node tools/verify.ts",
@@ -36,6 +40,7 @@
     "sandbox:check": "node tools/check-sandbox-paths.ts",
     "registries:check": "node tools/check-registries.ts",
     "regen": "pnpm --filter @repo/contracts openapi && pnpm --filter @repo/web build",
+    "env:check": "node tools/check-env-usage.ts && node tools/check-env-example.ts",
     "denial:report": "node tools/denial-trend.ts",
     "tool-class:check": "node tools/check-tool-class.ts",
     "docs:check": "node tools/check-docs.ts",
@@ -45,6 +50,7 @@
     "gen": "node tools/gen.ts"
   },
   "devDependencies": {
+    "@secretlint/secretlint-rule-preset-recommend": "catalog:",
     "@types/node": "catalog:",
     "chrome-devtools-mcp": "catalog:",
     "dependency-cruiser": "catalog:",
@@ -53,6 +59,7 @@
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
+    "secretlint": "catalog:",
     "sherif": "catalog:",
     "turbo": "catalog:",
     "typescript": "catalog:",
