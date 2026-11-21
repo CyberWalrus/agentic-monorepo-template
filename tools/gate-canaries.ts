@@ -853,6 +853,55 @@ export const CANARIES: GateCanary[] = [
       writeFileSync(path, `${source}\n// evil routetree drift probe\n`);
     },
   },
+  {
+    // Табличный тест доступа «чужой ресурс — отказ» (C2.3, C2.4): owner-процедуры
+    // перебираются из реального роутера (collectProcedures + accessPolicyFromMeta),
+    // целостность генерации красит набор. Плохое изменение — owner-процедура
+    // с валидной meta, добавленная в копии контракта и роутера: перебор C2.0 её
+    // пропускает (политика объявлена), router-divergence зелёный (контракт ≡
+    // роутер) — её замечает только генерация таблицы (тест «no empty rows» и
+    // ячейки it.each через scenarioOf). Красит гейт зонд, а не сужение: тихое
+    // сужение генерации (фильтр перебора, хардкод списка) сделало бы зонд
+    // невидимым и шаг зелёным — тогда канарейка красная, и обезвреживание
+    // таблицы становится громким (З6). Граница: держится проводка генерации
+    // (перебор → integrity-тесты → it.each), не тела строк сценария. Якоря:
+    // первая `\n};` — закрывающая скобка contract-объекта tasks.ts (образец —
+    // канарейка «процедура контракта без политики доступа»), первая `\n});` —
+    // закрывающая скобка os.router. Вторая правка обязательна: роутер содержит
+    // только объявленные handler'ы, контрактный зонд без handler'а до перебора
+    // не доходит и шаг остаётся зелёным.
+    name: 'owner-процедура без строки сценария таблицы',
+    steps: 'test',
+    failedStep: 'test',
+    expect: /access scenario row for tasks\.evilOwnerProbe/,
+    apply: (root) => {
+      const contractPath = join(root, 'packages', 'contracts', 'src', 'tasks.ts');
+      const contract = readFileSync(contractPath, 'utf8');
+      const withProbe = contract.replace(
+        /\n};/,
+        `\n  evilOwnerProbe: ocAccess
+    .route({ method: 'DELETE', path: '/tasks/evil-owner-probe', summary: 'Evil owner probe' })
+    .meta({ access: { type: 'owner' } })
+    .input(TaskIdInputSchema)
+    .output(z.void()),
+};`,
+      );
+      if (withProbe === contract) {
+        throw new Error('canary anchor not found: contracts/src/tasks.ts has no closing brace');
+      }
+      writeFileSync(contractPath, withProbe);
+      const routerPath = join(root, 'apps', 'api', 'src', 'router.ts');
+      const router = readFileSync(routerPath, 'utf8');
+      const withHandler = router.replace(
+        /\n}\);/,
+        `\n    evilOwnerProbe: os.tasks.evilOwnerProbe.handler(async () => {}),\n});`,
+      );
+      if (withHandler === router) {
+        throw new Error('canary anchor not found: apps/api/src/router.ts has no os.router closing');
+      }
+      writeFileSync(routerPath, withHandler);
+    },
+  },
 ];
 // Вывод портов (З9, A5 PR-3) канарейки шага не имеет: рантайм читает записанный
 // reports/ports.json (read-first — иначе зонд после старта серверов уезжал на
