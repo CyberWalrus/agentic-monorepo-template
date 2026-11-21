@@ -17,6 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { checkHookInstall } from './check-hook-install.ts';
 import { CANARIES } from './gate-canaries.ts';
 // Список slow-шагов — из того же источника, что у verify: негатив-контроль
 // не должен дрейфовать от определения шагов (см. verify-steps.ts).
@@ -225,6 +226,20 @@ try {
 }
 
 console.log(`\ngate canaries (${CANARIES.length}):`);
+for (const row of rows) {
+  console.log(`  ${row}`);
+}
+
+// d12: позитивная проверка контура установки хуков. Вне таблицы GateCanary:
+// prepare — не шаг verify, откат условия в нём не роняет ни один шаг verify.
+// Полный клон обязателен: хуки общие на клон, в worktree самого раннера они
+// уже поставлены корневой установкой — проверка внутри worktree даст
+// ложно-зелёный результат (журнал backlog/done/d11.md).
+const installRow = await checkHookInstall(repoDir);
+rows.push(installRow);
+if (installRow.startsWith('✗')) failures += 1;
+
+console.log(`\ngate canaries (${CANARIES.length + 1}):`);
 for (const row of rows) {
   console.log(`  ${row}`);
 }

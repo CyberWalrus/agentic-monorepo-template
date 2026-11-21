@@ -60,6 +60,7 @@ const KNOWN_GATES: readonly string[] = [
   'tools/check-bundle-gate.ts',
   'tools/check-bundle.ts',
   'tools/check-docs.ts',
+  'tools/check-hook-install.ts',
   'tools/check-env-example.ts',
   'tools/check-env-usage.ts',
   'tools/flaky-quarantine.json',
