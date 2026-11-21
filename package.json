@@ -30,6 +30,7 @@
     "typecheck:tools": "tsc -p tsconfig.json",
     "test:integrity": "node tools/check-test-integrity.ts",
     "test:hooks": "vitest run --reporter=json --reporter=default --outputFile=reports/vitest-hooks.json",
+    "test:inbox": "vitest run --root tools backlog-inbox",
     "test:report": "node tools/check-test-report.ts",
     "test:count": "node tools/check-test-count.ts",
     "test:count:update": "node tools/check-test-count.ts --update",
