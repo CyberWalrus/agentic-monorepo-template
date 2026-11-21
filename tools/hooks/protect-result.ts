@@ -6,7 +6,8 @@
  * триажа в __screenshots__, settings.local.json создаёт сам Claude Code).
  * Отсутствие снимка не притворяется успехом — сообщается как слепая проверка.
  */
-import { failClosedExit, projectDir, readHookInput } from './lib.ts';
+import { appendDenial, failClosedExit, projectDir, readHookInput } from './lib.ts';
+process.env['HOOK_GATE_NAME'] ??= 'protect-result';
 
 // Прямой вызов CLI наследует fail-closed: необработанный сбой — exit 2 (З4, C10.1).
 process.on('uncaughtException', failClosedExit);
@@ -41,6 +42,9 @@ if (outcome.kind === 'broken') {
   process.exit(0);
 }
 
+if (outcome.restored.length > 0) {
+  appendDenial('protect-result', 'protected-file-restored');
+}
 const parts: string[] = [];
 for (const path of outcome.restored) {
   parts.push(

@@ -1,4 +1,6 @@
-import { relative } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join, relative } from 'node:path';
 
 export interface HookInput {
   session_id: string;
@@ -22,7 +24,64 @@ export function failClosedExit(reason: unknown): never {
   console.error(
     `hook failed closed (З4): ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`,
   );
+  // C9.3: факт fail-closed — в журнал отказов (гейт — из HOOK_GATE_NAME).
+  appendDenial(process.env['HOOK_GATE_NAME'] ?? 'unknown-hook', 'fail-closed');
   process.exit(2);
+}
+
+export interface DenialRecord {
+  /** ISO-дата отказа. */
+  date: string;
+  /** Имя гейта/хука, который отказал. */
+  gate: string;
+  /** Тип причины (категория, не текст команды и не код). */
+  reason: string;
+}
+
+export function journalPath(): string {
+  // Пустая строка env = не задан (||, не ?? — иначе '' перебивает дефолт).
+  return (
+    process.env['DENIAL_JOURNAL_PATH'] ||
+    join(homedir(), '.agentic-monorepo-template', 'denials.jsonl')
+  );
+}
+
+/** Пишет одну строку отказа; сбои журнала не ломают отказ гейта (best-effort). */
+export function appendDenial(gate: string, reason: string): void {
+  try {
+    const path = journalPath();
+    mkdirSync(join(path, '..'), { recursive: true });
+    const record: DenialRecord = { date: new Date().toISOString(), gate, reason };
+    appendFileSync(path, `${JSON.stringify(record)}\n`);
+  } catch {
+    // Журнал — наблюдаемость, не граница: границу держит сам отказ хука.
+  }
+}
+
+/** Читает журнал; отсутствующий файл — пустой список, а не ошибка. */
+export function readDenials(path: string = journalPath()): DenialRecord[] {
+  if (!existsSync(path)) return [];
+  const records: DenialRecord[] = [];
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    if (line.trim() === '') continue;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (
+        isRecord(parsed) &&
+        typeof parsed['gate'] === 'string' &&
+        typeof parsed['reason'] === 'string'
+      ) {
+        records.push({
+          date: typeof parsed['date'] === 'string' ? parsed['date'] : '',
+          gate: parsed['gate'],
+          reason: parsed['reason'],
+        });
+      }
+    } catch {
+      // Битая строка не роняет отчёт.
+    }
+  }
+  return records;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -83,7 +142,10 @@ export function targetFile(input: HookInput): string | null {
   return rel.startsWith('..') ? null : rel;
 }
 
-export function deny(reason: string): never {
+/** Отказ хука: решение клиенту (JSON, exit 0) + факт отказа в журнал (C9.3).
+ *  В журнал идёт только гейт и категория причины — не текст команды и не код. */
+export function deny(gate: string, reason: string): never {
+  appendDenial(gate, denyCategory(gate, reason));
   console.log(
     JSON.stringify({
       hookSpecificOutput: {
@@ -94,4 +156,19 @@ export function deny(reason: string): never {
     }),
   );
   process.exit(0);
+}
+
+/** Категория причины для журнала: словарь по гейтам, без содержимого команд. */
+function denyCategory(gate: string, reason: string): string {
+  if (gate === 'protect-paths') return 'protected-path-write';
+  if (gate === 'guard-bash') {
+    if (reason.includes('over the')) return 'oversized-command';
+    if (reason.includes('screenshot baselines')) return 'baseline-update';
+    if (reason.includes('Skipping git hooks')) return 'hooks-skip';
+    if (reason.includes('Force-push')) return 'force-push';
+    if (reason.includes('Destructive git')) return 'destructive-git';
+    if (reason.includes('protected path')) return 'protected-path-write';
+    return 'blocked-command';
+  }
+  return 'denied';
 }
