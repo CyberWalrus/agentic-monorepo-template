@@ -36,6 +36,7 @@
     "sandbox:check": "node tools/check-sandbox-paths.ts",
     "registries:check": "node tools/check-registries.ts",
     "regen": "pnpm --filter @repo/contracts openapi && pnpm --filter @repo/web build",
+    "denial:report": "node tools/denial-trend.ts",
     "tool-class:check": "node tools/check-tool-class.ts",
     "docs:check": "node tools/check-docs.ts",
     "flaky:quarantine": "node tools/check-flaky-rate.ts --validate-quarantine --quarantine tools/flaky-quarantine.json",

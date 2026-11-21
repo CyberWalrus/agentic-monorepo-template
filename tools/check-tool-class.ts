@@ -52,6 +52,8 @@ const IGNORED_DIRS = new Set([
 const KNOWN_GATES: readonly string[] = [
   'tools/analyze-command.ts',
   'tools/backlog-board.ts',
+  'tools/denial-journal.ts',
+  'tools/denial-trend.ts',
   'tools/backlog-doctor.ts',
   'tools/check-bundle-delta.ts',
   'tools/check-bundle-gate.ts',
