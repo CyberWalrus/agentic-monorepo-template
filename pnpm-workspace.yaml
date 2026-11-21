@@ -50,6 +50,11 @@ catalog:
   '@tanstack/react-router': ^1.170.0
   '@tanstack/react-router-ssr-query': ^1.167.0
   '@tanstack/react-start': ^1.169.0
+  # Точный пин без каретки (b7.1): CLI жёстко пиннит @tanstack/router-generator
+  # своей версии (1.167.46 == генератор в чейне react-start@1.169.4 по pnpm-lock),
+  # а каретка допустила бы 1.168.0 с другим генератором — ложный дрейф гейта
+  # routeTree.gen.ts. При подъёме react-start пин поднимать вслед (гейт сверяет).
+  '@tanstack/router-cli': 1.167.46
   '@testcontainers/postgresql': ^12.2.1
   '@types/node': ^26.6.0
   '@types/pg': ^8.23.1

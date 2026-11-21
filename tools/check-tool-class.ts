@@ -69,6 +69,7 @@ const KNOWN_GATES: readonly string[] = [
   'tools/check-gate-approval.ts',
   'tools/check-registries.ts',
   'tools/check-required-tasks.ts',
+  'tools/check-routetree-drift.ts',
   'tools/check-perf-trend.main.ts',
   'tools/check-perf-trend.ts',
   'tools/test-hooks-inputs.ts',

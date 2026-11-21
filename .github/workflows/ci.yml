@@ -94,6 +94,9 @@ jobs:
       - run: pnpm tool-class:check
       - run: pnpm docs:check
       - run: pnpm --filter @repo/contracts openapi:check
+      # Дрейф routeTree.gen.ts (b7.1): committed-файл == свежая генерация без
+      # сборки; конфликт производного файла решает pnpm regen (З10).
+      - run: pnpm routetree:check
       # Сканер секретов и аудит зависимостей (b6): audit в CI, где есть сеть;
       # порог high и только production — dev-зависимости шумят (подводный камень задачи).
       - run: pnpm secrets:check
