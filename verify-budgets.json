@@ -9,6 +9,7 @@
     "test": 90,
     "boundaries": 12,
     "knip": 22,
+    "required-tasks": 15,
     "test-integrity": 5,
     "test:hooks": 50,
     "sandbox": 5,

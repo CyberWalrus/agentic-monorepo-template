@@ -75,6 +75,9 @@ jobs:
       - run: pnpm typecheck:tools
       - run: pnpm boundaries
       - run: pnpm knip
+      # Состав workspace (e20): обязательные задачи turbo объявлены пакетами —
+      # turbo-прогон без носителей завершается exit 0 и тихо выключает job.
+      - run: pnpm required-tasks:check
       - run: pnpm sherif
       - run: pnpm visual-image:check
       - run: pnpm test:integrity

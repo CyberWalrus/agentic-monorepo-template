@@ -805,6 +805,34 @@ export const CANARIES: GateCanary[] = [
       );
     },
   },
+  {
+    // Состав workspace (e20): turbo-прогон без носителей обязательной задачи
+    // завершается exit 0, поэтому последний носитель mutation может исчезнуть
+    // тихо. Плохое изменение — все три пакета-носителя (apps/api, apps/web,
+    // packages/contracts) теряют скрипт: шаг required-tasks краснеет сообщением
+    // чекера. Призраки <NONEXISTENT> (@repo/e2e, @repo/preflight, @repo/ui —
+    // задача из глобального определения turbo.json без скрипта) носителями не
+    // считаются — тот же фильтр, что в чекере.
+    name: 'последний носитель mutation потерял задачу',
+    steps: 'required-tasks',
+    failedStep: 'required-tasks',
+    expect: /mutation: ни одного пакета/,
+    apply: (root) => {
+      for (const pkg of ['apps/api', 'apps/web', 'packages/contracts']) {
+        const path = join(root, ...pkg.split('/'), 'package.json');
+        const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+        if (!isRecord(parsed) || !isRecord(parsed['scripts'])) {
+          throw new Error(`canary anchor not found: ${pkg}/package.json scripts`);
+        }
+        const scripts = parsed['scripts'];
+        if (typeof scripts['mutation'] !== 'string') {
+          throw new Error(`canary anchor not found: ${pkg} has no mutation script`);
+        }
+        delete scripts['mutation'];
+        writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
+      }
+    },
+  },
 ];
 // Вывод портов (З9, A5 PR-3) канарейки шага не имеет: рантайм читает записанный
 // reports/ports.json (read-first — иначе зонд после старта серверов уезжал на

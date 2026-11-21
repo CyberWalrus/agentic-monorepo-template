@@ -40,6 +40,7 @@
     "tools/flaky-quarantine.json",
     "tools/check-gate-approval.ts",
     "tools/check-registries.ts",
+    "tools/check-required-tasks.ts",
     "tools/check-perf-trend.main.ts",
     "tools/check-perf-trend.ts",
     "tools/check-protected-paths.ts",
