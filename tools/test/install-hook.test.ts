@@ -60,7 +60,7 @@ it('красная: откат prepare до [ -d .git ] не ставит хук
 
 it('проводка: раннер зовёт checkHookInstall от корня репо; canaries.yml триггерится на package.json', () => {
   const runner = readFileSync(join(repoDir, 'tools', 'run-gate-canaries.ts'), 'utf8');
-  expect(runner).toContain('checkHookInstall(repoDir)');
+  expect(runner).toContain("checkHookInstall(resolve(import.meta.dirname, '..'))");
   const canaries = readFileSync(join(repoDir, '.github', 'workflows', 'canaries.yml'), 'utf8');
   expect(canaries).toContain('package.json');
   expect(existsSync(join(repoDir, '.github', 'workflows', 'canaries.yml'))).toBe(true);
