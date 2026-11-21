@@ -35,7 +35,7 @@ pnpm dev                    # web и api на портах из worktree (выб
 ## Требования окружения
 
 - Node из `.nvmrc` и pnpm из `packageManager`;
-- Docker: интеграционные тесты API поднимают Postgres через Testcontainers (это часть `pnpm verify`); скриншот-тесты (`pnpm visual`) — тоже Docker;
+- Docker: интеграционные тесты API поднимают Postgres через Testcontainers (это часть `pnpm verify`); скриншот-тесты (`pnpm visual`) — тоже Docker: первый прогон собирает образ с зависимостями (слой привязан к `pnpm-lock.yaml`), повторные без смены локфайла его переиспользуют;
 - Chromium: браузеры Playwright для browser-тестов unit и E2E (`playwright install --with-deps chromium`); нужна сеть до npm registry и CDN Playwright;
 - для облачных агентов — минимальный контур в [ADR 0010](docs/adr/0010-cloud-agents.md);
 - телеметрия Turborepo: в CI выключена переменной `TURBO_TELEMETRY_DISABLED`, локально один раз на машину выполни `pnpm exec turbo telemetry disable` (иначе turbo ходит на `telemetry.vercel.com`, а песочница агента режет эти запросы).

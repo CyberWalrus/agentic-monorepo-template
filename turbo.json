@@ -53,6 +53,35 @@
       "dependsOn": ["transit"],
       "outputs": ["reports/mutation/**"],
       "cache": false
+    },
+    "//#test:hooks": {
+      // E1: тесты обвязки под кэшем turbo. Явные inputs — потому что корневой
+      // прогон вне пакетов: пропущенный input = тихо устаревший зелёный результат
+      // (З6). Канонический список — tools/test-hooks-inputs.ts (единственное
+      // место определения); расхождение ловит канарейка в test:hooks.
+      "inputs": [
+        "tools/**",
+        ".claude/hooks/**",
+        ".claude/agents/**",
+        ".claude/settings.json",
+        ".github/**",
+        "e2e/**",
+        "packages/ui/**",
+        "apps/**",
+        "vitest.config.ts",
+        "tsconfig.json",
+        "tsconfig.base.json",
+        ".dependency-cruiser.cjs",
+        "knip.json",
+        ".oxlintrc.json",
+        "turbo.json",
+        "verify-budgets.json",
+        "perf-budgets.json",
+        "test-count-baseline.json",
+        "package.json",
+        "pnpm-lock.yaml"
+      ],
+      "outputs": ["reports/vitest-hooks.json"]
     }
   }
 }
