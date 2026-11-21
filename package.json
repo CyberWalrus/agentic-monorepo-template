@@ -34,6 +34,7 @@
     "test:count": "node tools/check-test-count.ts",
     "test:count:update": "node tools/check-test-count.ts --update",
     "sandbox:check": "node tools/check-sandbox-paths.ts",
+    "denial:report": "node tools/denial-trend.ts",
     "tool-class:check": "node tools/check-tool-class.ts",
     "docs:check": "node tools/check-docs.ts",
     "flaky:quarantine": "node tools/check-flaky-rate.ts --validate-quarantine --quarantine tools/flaky-quarantine.json",
