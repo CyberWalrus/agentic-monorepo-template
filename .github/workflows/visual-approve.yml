@@ -39,7 +39,7 @@ jobs:
     timeout-minutes: 10
     steps:
       # Только дефолтная ветка (github.sha события): CODEOWNERS и tools валидатора.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       # playwright: true — pre-push базлайна гоняет turbo test из дерева PR:

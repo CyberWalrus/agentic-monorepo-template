@@ -53,7 +53,7 @@ jobs:
     # 45 мин: slow-канарейки с perf (A6 PR-1) на холодном кэше раннера.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         # Полная история: bundle-delta в негатив-проверках и канарейке строит
         # базу от merge-base(HEAD, origin/main) (A6 PR-2, ADR 0013).
         with: { fetch-depth: 0 }

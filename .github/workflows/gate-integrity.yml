@@ -75,7 +75,7 @@ jobs:
       # Только base.sha. Никогда не checkout head PR и merge ref (код PR под токеном
       # этого события — паттерн pwn request). Локальный экшен тоже резолвится из базы.
       - name: Checkout trusted base
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
       - uses: ./.github/actions/setup
@@ -131,7 +131,7 @@ jobs:
         run: |
           mkdir -p reports
           printf '%s\n' "{\"date\":\"$(date -u +%FT%TZ)\",\"gate\":\"gate-integrity\",\"reason\":\"protected-path-change\"}" >> reports/denials.jsonl
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: gate-denials
@@ -167,7 +167,7 @@ jobs:
       # Только base.sha. Никогда не checkout head PR и merge ref (код PR под токеном
       # этого события — паттерн pwn request). Локальный экшен тоже резолвится из базы.
       - name: Checkout trusted base
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
       - uses: ./.github/actions/setup

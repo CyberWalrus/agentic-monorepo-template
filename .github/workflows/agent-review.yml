@@ -50,14 +50,7 @@ jobs:
         if: env.HAS_KEY != 'true'
         run: echo "::notice::ANTHROPIC_API_KEY is not configured, agent review skipped."
 
-      # Граница ввода — до первого использования (dispatch доступен write-актёрам,
-      # но номер валидируем явно и до checkout).
-      - name: Validate PR number
-        if: env.HAS_KEY == 'true'
-        run: |
-          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::PR_NUMBER must be numeric"; exit 1; }
-
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: env.HAS_KEY == 'true'
         with: { fetch-depth: 0 }
 
@@ -65,17 +58,20 @@ jobs:
       # checkout уже стоит на head — fetch той же SHA идемпотентен.
       - name: Checkout PR head
         if: env.HAS_KEY == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          HEAD_SHA=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')
-          git fetch origin "${HEAD_SHA}"
-          git checkout "${HEAD_SHA}"
+        uses: anthropics/claude-code-action@c84e279f859e2591391e95bd309286eb111c345f # v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: https://github.com/anthropics/claude-plugins-official.git
+          plugins: code-review@claude-plugins-official
+          prompt: /code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+          # Локальные хуки (Stop → pnpm verify) не нужны: детерминированные проверки делает CI.
+          settings: '{"disableAllHooks": true}'
+          claude_args: --max-turns 40
 
       - name: Specialist reviewers (repo subagents)
         if: env.HAS_KEY == 'true'
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@c84e279f859e2591391e95bd309286eb111c345f # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
