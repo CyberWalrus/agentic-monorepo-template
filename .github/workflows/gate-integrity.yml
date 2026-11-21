@@ -124,6 +124,20 @@ jobs:
           APPROVED: ${{ steps.approval.outputs.approved }}
         run: node tools/check-protected-paths.ts --api-files files.json ${{ env.APPROVED == 'true' && '--approved' || '' }}
 
+      # C9.3: попытка обхода гейтов в CI — факт в журнал отказов (артефакт);
+      # в записи только дата/гейт/тип, содержимого кода и сообщений нет.
+      - name: Denial journal (C9.3)
+        if: failure()
+        run: |
+          mkdir -p reports
+          printf '%s\n' "{\"date\":\"$(date -u +%FT%TZ)\",\"gate\":\"gate-integrity\",\"reason\":\"protected-path-change\"}" >> reports/denials.jsonl
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: gate-denials
+          path: reports/denials.jsonl
+          if-no-files-found: ignore
+
   # Дельта-гейт бандла: доверенное одобрение роста (A6 PR-2, ADR 0013).
   # Определение из base (pull_request_target), код PR не исполняется — по
   # образцу ADR 0002: замер делает ci-job bundle-delta (untrusted, merge-ref),
