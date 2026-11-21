@@ -23,6 +23,11 @@ beforeAll(async () => {
   database = await createPostgresTestDatabase({
     image: POSTGRES_TEST_IMAGE,
     migrationsFolder: taskMigrationsFolder,
+    // Заглушка осознанна: пулу схема tasks не нужна. Личность migrate входит
+    // в ключ экземпляра (см. postgresTestInstanceKey) — этот файл получает
+    // свой контейнер с пустым шаблоном и не оспаривает мигрированный шаблон
+    // postgres-тестов (урок c1.7: общая заглушка опустошала общий шаблон,
+    // 42P01 волной в копийных канарейках).
     migrate: () => Promise.resolve(),
   });
 }, CONTAINER_TIMEOUT_MS);
