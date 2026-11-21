@@ -5,6 +5,8 @@
   "minimumReleaseAge": "3 days",
   "labels": ["dependencies"],
   "rangeStrategy": "bump",
+  "_comment": "b6: GitHub Actions закрепляются по SHA (pinDigests) — Renovate поднимает дайджесты и обновляет комментарий-версию рядом.",
+  "pinDigests": true,
   "packageRules": [
     {
       "description": "Playwright: базлайны и Docker-образ зависят от версии — один PR, обязательный pnpm visual и tools/playwright-agents.sh",

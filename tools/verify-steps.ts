@@ -21,6 +21,8 @@ const turbo = (task: string): Step => ({
 export const fast: Step[] = [
   { name: 'format', command: 'pnpm', args: ['format:check'] },
   { name: 'lint', command: 'pnpm', args: ['lint', '--format', 'agent'] },
+  // Гейт окружения (C3.1): чтение env только в модулях окружения + env.example.
+  { name: 'env', command: 'pnpm', args: ['env:check'] },
   turbo('typecheck'),
   { name: 'typecheck:tools', command: 'pnpm', args: ['typecheck:tools'] },
   turbo('test'),

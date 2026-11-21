@@ -13,7 +13,7 @@
       // во время теста, а шаги verify идут параллельно — без ignore knip ловит
       // «Unused files» в момент жизни пробника.
       "ignore": ["tools/hooks/.lint-probe.fixture.ts"],
-      "ignoreDependencies": ["chrome-devtools-mcp"]
+      "ignoreDependencies": ["chrome-devtools-mcp", "@secretlint/secretlint-rule-preset-recommend"]
     },
     "apps/web": {
       "entry": ["src/routes/**/*.tsx"]
