@@ -54,3 +54,11 @@
   color: var(--color-danger);
   font-size: 14px;
 }
+
+/* Подсказка под disabled-формой до гидратации (b12): подтягивается к форме
+   поверх её нижнего отступа, после гидратации элемент удаляется. */
+.ssr-hint {
+  margin: -16px 0 16px;
+  color: var(--color-text-muted);
+  font-size: 14px;
+}
