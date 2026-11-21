@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { taskMigrationsFolder } from './database.ts';
+import { taskMigrationsFolder } from '../src/tasks/database.ts';
 import { collectSchemaSyncReport, type SchemaSyncReport } from './schema-sync.ts';
 
 /**
@@ -41,7 +41,7 @@ export interface SchemaSyncCheckOptions {
 /** Возвращает код выхода: 0 — гейт зелёный, 1 — красный (errors непуст). */
 export async function runSchemaSyncCheck(options: SchemaSyncCheckOptions = {}): Promise<number> {
   const migrationsFolder = options.migrationsFolder ?? taskMigrationsFolder;
-  const schemaImports = options.schemaImports ?? (await import('./schema.ts'));
+  const schemaImports = options.schemaImports ?? (await import('../src/tasks/schema.ts'));
   // process.stdout.write, а не console.log: no-console в src/ (правило
   // смягчено только для tools/ и scripts/, .oxlintrc.json защищён).
   const log = options.log ?? ((line: string) => process.stdout.write(`${line}\n`));

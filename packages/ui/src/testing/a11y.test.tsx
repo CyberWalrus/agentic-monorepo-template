@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { collectA11yViolations } from './a11y.ts';
+import { collectA11yViolations } from '../../testing/a11y.ts';
 
 describe('a11y helper canary', () => {
   // Канарейка гейта a11y: если axe перестал ловить нарушения, этот тест

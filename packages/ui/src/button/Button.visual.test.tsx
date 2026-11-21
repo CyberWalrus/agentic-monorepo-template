@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-react';
 
-import { Frame } from '../testing/visual-frame.tsx';
+import { Frame } from '../../testing/visual-frame.tsx';
 import { Button } from './Button.tsx';
 
 describe('visual', () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-react';
 
-import { collectA11yViolations } from '../testing/a11y.ts';
+import { collectA11yViolations } from '../../testing/a11y.ts';
 import { NotFoundState } from './NotFoundState.tsx';
 
 describe('NotFoundState', () => {

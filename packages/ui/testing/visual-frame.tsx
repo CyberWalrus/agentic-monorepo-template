@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-import '../tokens.css';
+import '../src/tokens.css';
 
 /**
  * Общая рамка визуальных сценариев: одинаковая ширина и отступы дают

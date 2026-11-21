@@ -65,6 +65,24 @@ jobs:
         if: always()
         with: { name: mutation-full, path: apps/api/reports/mutation/ }
 
+  # Дрейф живого ruleset от снимка (a11): живое правило меняется в интерфейсе
+  # в любой момент — снимок продолжит утверждать защиту, которой нет.
+  ruleset-drift:
+    name: ruleset drift (a11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: ruleset drift check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node tools/check-ruleset-drift.ts --create-issue --run-url "$RUN_URL"
+
   # Храповик числа тестов (a10): поднимает автоматика, не автор PR
   # (test-count-baseline.json — «горячий» файл, З9). Update refuses to lower.
   test-count-ratchet:
