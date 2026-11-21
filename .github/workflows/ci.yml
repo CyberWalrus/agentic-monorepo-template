@@ -88,7 +88,10 @@ jobs:
       - run: pnpm test:report --only reports/vitest-hooks.json
       # Храповик здесь сравнит только hooks-строку базлайна (остальные отчёты
       # пишет job unit): корневые хуки не остаются без проверки числа тестов.
-      - run: pnpm test:count
+      # --affected литеральный (e21): static не гоняет пакетные тесты даже на
+      # merge_group/push — отчёты пакетов отсутствуют легально, а $AFFECTED на
+      # этих событиях пуст и вернул бы 4 ложных WARNING на полном прогоне.
+      - run: pnpm test:count --affected
       - run: pnpm sandbox:check
       # Классы защиты tools/ (ADR 0014): замыкание == deny protected-paths.json.
       - run: pnpm tool-class:check
@@ -136,9 +139,18 @@ jobs:
       # поэтому требуются отчёты ровно гонявшихся задач. Тот же $AFFECTED, что
       # у прогона выше: на merge_group и push оба без --affected.
       - run: pnpm test:report --from-turbo test $AFFECTED
+      # hooks-отчёт для храповика ниже (e21): на merge_group/push test:count
+      # идёт без --affected и требует полный набор отчётов базлайна, а
+      # test:hooks — отдельная turbo-задача (turbo.json #test:hooks), которую
+      # unit иначе не гоняет. На PR дубль со static безвреден: --affected у
+      # храповика легализует отсутствие не затронутых отчётов.
+      - run: pnpm turbo run test:hooks $TURBO_CACHE_ARGS --output-logs=errors-only
       # Храповик числа тестов (З7, A3): warning-only, предупреждение идёт в сводку PR.
+      # $AFFECTED — тот же контракт, что у test:report выше: на PR отчёты
+      # не затронутых пакетов отсутствуют легально; на merge_group/push прогон
+      # полный и WARNING «report is missing» честно ловит удалённый пакет.
       # pipefail: краш чекера не должен маскироваться exit-кодом tee.
-      - run: set -o pipefail && pnpm test:count | tee "$GITHUB_STEP_SUMMARY"
+      - run: set -o pipefail && pnpm test:count $AFFECTED | tee "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

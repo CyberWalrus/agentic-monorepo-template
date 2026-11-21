@@ -5,8 +5,9 @@
  * (имя файла и оба числа), но не блокирует; решение о блокировке за человеком.
  * `--update` поднимает базлайн и добавляет новые отчёты, понижать не умеет.
  * Базлайн — map «путь отчёта → число тестов»: сам же перечисляет, что храповик
- * смотрит. Отсутствующий отчёт (turbo --affected не гонял пакет) молча
- * пропускается — сравнивается только то, что реально гонялось.
+ * смотрит. Без --affected отсутствующий отчёт из базлайна — WARNING «report
+ * is missing» (e21: храповик не имеет права молча ослепнуть к удалению
+ * пакета); с --affected — тихий пропуск (пакет мог не попасть в прогон).
  */
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -108,12 +109,26 @@ it('падение числа тестов — WARNING с именем файл�
   expect(result.output).toContain('15');
 });
 
-it('отсутствующий отчёт (не затронут в --affected) молча пропускается', () => {
+it('отсутствующий отчёт без --affected — WARNING «report is missing» (храповик не слепнет)', () => {
   const f = fixture();
-  f.write(BASELINE, { 'apps/api/reports/vitest.json': 18, 'packages/ui/reports/vitest.json': 11 });
+  f.write(BASELINE, { 'reports/vitest-hooks.json': 5 });
   const result = runChecker(f.dir);
   expect(result.status).toBe(0);
-  expect(result.output).not.toMatch(/ui/);
+  expect(result.output).toMatch(/WARNING/);
+  expect(result.output).toContain(
+    'baseline entry "apps/api/reports/vitest.json": report is missing (package deleted or report no longer produced)',
+  );
+  // Предупреждение суммируется в счётчик warnings итоговой строки.
+  expect(result.output).toMatch(/1 warning\(s\), 1 report\(s\) compared/);
+});
+
+it('отсутствующий отчёт с --affected — тихий пропуск (пакет не попал в прогон)', () => {
+  const f = fixture();
+  f.write(BASELINE, { 'reports/vitest-hooks.json': 5 });
+  const result = runChecker(f.dir, ['--affected']);
+  expect(result.status).toBe(0);
+  expect(result.output).not.toMatch(/WARNING/);
+  expect(result.output).toMatch(/ok \(1 report\(s\) compared\)/);
 });
 
 it('понижение базлайна против merge-base — WARNING с именем файла и обоими числами', () => {
@@ -139,7 +154,7 @@ it('удаление записи базлайна против merge-base — W
     JSON.stringify({ 'apps/api/reports/vitest.json': 18, 'reports/vitest-hooks.json': 5 }),
     JSON.stringify({ 'apps/api/reports/vitest.json': 18 }),
   );
-  const result = runChecker(dir, ['--merge-base', 'HEAD~1']);
+  const result = runChecker(dir, ['--merge-base', 'HEAD~1', '--affected']);
   expect(result.status).toBe(0);
   expect(result.output).toMatch(/WARNING/);
   expect(result.output).toContain('removed');
@@ -152,7 +167,9 @@ it('нечитаемый отчёт при валидном базлайне —
   f.write(BASELINE, {});
   mkdirSync(join(f.dir, 'apps/api/reports'), { recursive: true });
   writeFileSync(join(f.dir, 'apps/api/reports/vitest.json'), '{broken json');
-  const result = runChecker(f.dir);
+  // --affected: тест ровно про нечитаемый отчёт, отсутствующий hooks-отчёт
+  // не должен добавлять второй WARNING «report is missing».
+  const result = runChecker(f.dir, ['--affected']);
   expect(result.status).toBe(0);
   const warnings = result.output.split('\n').filter((line) => line.startsWith('WARNING:'));
   expect(warnings).toHaveLength(1);
