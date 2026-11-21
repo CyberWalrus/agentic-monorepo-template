@@ -10,6 +10,10 @@
  *   pnpm backlog doctor          расхождения «смержена — доска не знает» (делегирование
  *                                tools/backlog-doctor.ts: логика doctor живёт там —
  *                                гейт review-класса не ослабляет, ADR 0014)
+ *   pnpm backlog inbox [--json]  что ждёт человека: PR веток task/* на approve/label/merge,
+ *                                needs_human «человек: …», «отложено: …», брошенные захваты,
+ *                                забытый файл режима обслуживания (e8; логика —
+ *                                tools/backlog-inbox.ts, вердикт label — gate-approval-core)
  *
  * Флаг оператора (ADR 0009): `next --operator` выдаёт следующую задачу режима
  * обслуживания или needs_human «оператор: …», `start <id> --operator` захватывает
@@ -38,6 +42,7 @@ import {
   openPrHeads,
   runDoctor,
   tryGit,
+  tryRun,
   type BoardSource,
 } from './backlog-doctor.ts';
 import {
@@ -54,6 +59,17 @@ import {
   type TaskFile,
   type TaskStatus,
 } from './backlog-board.ts';
+import {
+  buildInboxItems,
+  GATE_LABEL,
+  parsePrView,
+  sortInboxItems,
+  type Inbox,
+  type LabelState,
+  type PrFact,
+} from './backlog-inbox.ts';
+import { evaluateApproval, lastLabeledEvent, maintainersOf } from './gate-approval-core.ts';
+import { protectionOf } from './protected-paths.ts';
 
 const LABEL: Record<TaskStatus, string> = {
   done: 'закрыта',
@@ -453,30 +469,242 @@ function commandClose(id: string, source: BoardSource): void {
   );
 }
 
+// --- inbox -----------------------------------------------------------------------
+
+/** Путь основного checkout: общий .git лежит в нём даже из worktree. */
+function mainCheckoutRoot(): string {
+  return path.dirname(git('rev-parse', '--path-format=absolute', '--git-common-dir'));
+}
+
+/** Возраст веток task/* в часах — тот же расчёт, что у doctor (idle-claim). */
+function branchAgeHoursOf(ids: Set<string>): Map<string, number> {
+  const ages = new Map<string, number>();
+  for (const id of ids) {
+    const timestamp = tryGit('log', '-1', '--format=%ct', `task/${id}`);
+    if (timestamp !== null && Number.isFinite(Number(timestamp))) {
+      ages.set(id, Math.max(0, (Date.now() / 1000 - Number(timestamp)) / 3600));
+    }
+  }
+  return ages;
+}
+
+/**
+ * Открытые PR веток task/* с разбором вывода gh. gh недоступен — null: инбокс
+ * печатает неполноту, а не пустой список (З11); нечитаемый view одного PR —
+ * строка в неполные, остальные PR собираются.
+ */
+function collectPrFacts(): { prs: PrFact[]; incomplete: string[] } | null {
+  const raw = tryRun('gh', [
+    'pr',
+    'list',
+    '--state',
+    'open',
+    '--limit',
+    '200',
+    '--json',
+    'headRefName',
+    '--jq',
+    '.[].headRefName',
+  ]);
+  if (raw === null) {
+    return null;
+  }
+  const prs: PrFact[] = [];
+  const incomplete: string[] = [];
+  for (const branch of raw.split('\n').filter((name) => name.startsWith('task/'))) {
+    const view = tryRun('gh', [
+      'pr',
+      'view',
+      branch,
+      '--json',
+      'number,headRefName,title,reviewDecision,labels,files,commits,statusCheckRollup,mergeable,isDraft',
+    ]);
+    if (view === null) {
+      incomplete.push(`PR ветки ${branch}: вывод gh не прочитан — строка неполная (З11)`);
+      continue;
+    }
+    const fact = parsePrView(view);
+    if (fact === null) {
+      incomplete.push(
+        `PR ветки ${branch}: вывод gh не разобран (неожиданная форма JSON) — строка неполная (З11)`,
+      );
+      continue;
+    }
+    prs.push(fact);
+  }
+  return { prs, incomplete };
+}
+
+/**
+ * Состояние label-гейта для PR, правящего защищённые пути (ADR 0002): вердикт
+ * считает evaluateApproval из gate-approval-core — та же семантика, что у CI
+ * (label действителен, только если поставлен владельцем CODEOWNERS после
+ * последнего push). Отдельно вычисляется «снят новым push» — та же пара
+ * сравнений дат, что в ядре: на этот случай инбокс заводит свою строку
+ * с призывом поставить label заново.
+ */
+function labelStateFor(pr: PrFact, repo: string | null, maintainers: Set<string>): LabelState {
+  const needed = pr.files.some((file) => protectionOf(file) === 'deny');
+  if (!needed) {
+    return { needed: false, approved: true, reason: '', staleByPush: false };
+  }
+  const eventsRaw =
+    repo === null ? null : tryRun('gh', ['api', `repos/${repo}/issues/${pr.number}/events`]);
+  let events: unknown[] = [];
+  if (eventsRaw !== null) {
+    try {
+      const parsed: unknown = JSON.parse(eventsRaw);
+      if (Array.isArray(parsed)) {
+        events = parsed;
+      }
+    } catch {
+      events = [];
+    }
+  }
+  const verdict = evaluateApproval({
+    label: GATE_LABEL,
+    prLabels: pr.labels,
+    events,
+    pushedAt: pr.headCommittedAt ?? undefined,
+    maintainers,
+  });
+  const event = lastLabeledEvent(events, GATE_LABEL);
+  const staleByPush =
+    pr.labels.includes(GATE_LABEL) &&
+    event !== undefined &&
+    pr.headCommittedAt !== null &&
+    !Number.isNaN(Date.parse(pr.headCommittedAt)) &&
+    Date.parse(event.createdAt) <= Date.parse(pr.headCommittedAt);
+  return { needed: true, approved: verdict.approved, reason: verdict.reason, staleByPush };
+}
+
+function reportInbox(source: BoardSource, inbox: Inbox): void {
+  console.log(
+    `Инбокс человека — доска из ${source.ref ?? 'рабочего дерева'} (${humanAge(source.age)}):\n`,
+  );
+  const actionable = inbox.items.filter((item) => item.actionable);
+  const passive = inbox.items.filter((item) => !item.actionable);
+  if (actionable.length === 0) {
+    console.log('Действий человека нет.');
+  } else {
+    console.log(
+      actionable
+        .map((item, index) => {
+          const weight = item.unblocks > 0 ? ` [разблокирует: ${item.unblocks}]` : '';
+          return `${index + 1}. ${item.action}${weight}\n     — ${item.note}`;
+        })
+        .join('\n'),
+    );
+  }
+  if (passive.length > 0) {
+    console.log(
+      `\nБез действий (перечислено состояние, не призыв):\n${passive
+        .map((item) => `  - ${item.target}: ${item.note}`)
+        .join('\n')}`,
+    );
+  }
+  if (inbox.incomplete.length > 0) {
+    console.error(
+      `\nИнбокс неполный (${inbox.incomplete.length}) — не принимай его за «человеку делать нечего»:\n${inbox.incomplete
+        .map((line) => `  - ${line}`)
+        .join('\n')}`,
+    );
+  }
+}
+
+function commandInbox(source: BoardSource, json: boolean): void {
+  const collected = collectPrFacts();
+  const prs = collected === null ? null : collected.prs;
+  const claims = claimedIds();
+  // Repo и владельцы CODEOWNERS читаются лениво: нужны только PR, правящим
+  // защищённые пути (у остальных label-гейт не применяется, ADR 0002).
+  let labelContext: { repo: string | null; maintainers: Set<string> } | null = null;
+  const labelStates = new Map<number, LabelState>();
+  for (const pr of prs ?? []) {
+    if (!pr.files.some((file) => protectionOf(file) === 'deny')) {
+      continue;
+    }
+    if (labelContext === null) {
+      labelContext = {
+        repo: tryRun('gh', ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']),
+        maintainers: maintainersOf([
+          path.join(repoRoot(), '.github', 'CODEOWNERS'),
+          path.join(repoRoot(), 'CODEOWNERS'),
+          path.join(repoRoot(), 'docs', 'CODEOWNERS'),
+        ]),
+      };
+    }
+    labelStates.set(pr.number, labelStateFor(pr, labelContext.repo, labelContext.maintainers));
+  }
+  const inbox = buildInboxItems({
+    tasks: source.tasks,
+    prs,
+    labelStates,
+    branchAgeHours: branchAgeHoursOf(claims),
+    claimedIds: claims,
+    maintenanceFileFound: existsSync(
+      path.join(mainCheckoutRoot(), '.claude', 'settings.local.json'),
+    ),
+  });
+  if (collected !== null) {
+    inbox.incomplete.push(...collected.incomplete);
+  }
+  const items = sortInboxItems(inbox.items);
+  if (json) {
+    console.log(
+      JSON.stringify(
+        {
+          source: source.ref ?? 'рабочее дерево',
+          complete: inbox.incomplete.length === 0,
+          incomplete: inbox.incomplete,
+          items: items.map((item) => ({
+            kind: item.kind,
+            action: item.action,
+            target: item.target,
+            unblocks: item.unblocks,
+            note: item.note,
+            actionable: item.actionable,
+          })),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  reportInbox(source, { items, incomplete: inbox.incomplete });
+}
+
 // --- Вход ------------------------------------------------------------------------
 
 const argv = process.argv.slice(2);
 const operator = argv.includes('--operator');
-const unknownFlags = argv.filter((arg) => arg.startsWith('--') && arg !== '--operator');
+const json = argv.includes('--json');
+const unknownFlags = argv.filter(
+  (arg) => arg.startsWith('--') && arg !== '--operator' && arg !== '--json',
+);
 if (unknownFlags.length > 0) {
   die(
-    `Неизвестный флаг: ${unknownFlags.join(', ')}. Единственный флаг доски — --operator (ADR 0009).`,
+    `Неизвестный флаг: ${unknownFlags.join(', ')}. Флаги доски — --operator (ADR 0009) и --json у inbox.`,
   );
 }
-const positional = argv.filter((arg) => arg !== '--operator');
+const positional = argv.filter((arg) => arg !== '--operator' && arg !== '--json');
 const [command, id] = positional;
 const source = loadBoard();
 const cycles = dependencyCycles(source.tasks);
 if (cycles.length > 0) {
   die(`Доска содержит цикл зависимостей: ${cycles.join(' → ')}. Чинить в PR, не в ветке задачи.`);
 }
+if (json && command !== 'inbox') {
+  die('Флаг --json поддерживает только pnpm backlog inbox.');
+}
 
 if (
   command === undefined ||
-  !['list', 'next', 'start', 'close', 'resume', 'release', 'doctor'].includes(command)
+  !['list', 'next', 'start', 'close', 'resume', 'release', 'doctor', 'inbox'].includes(command)
 ) {
   die(
-    'Команды доски (ADR 0007):\n  pnpm backlog list\n  pnpm backlog next\n  pnpm backlog start <id>\n  pnpm backlog close <id>    — закрыть: перенос файла в done/ тем же PR\n  pnpm backlog resume <id>\n  pnpm backlog release <id>  — только человек\n  pnpm backlog doctor        — расхождения «смержена — доска не знает»\nФлаг оператора (ADR 0009):\n  pnpm backlog next --operator        — следующая задача оператора\n  pnpm backlog start <id> --operator  — захват задачи режима обслуживания или needs_human «оператор: …»',
+    'Команды доски (ADR 0007):\n  pnpm backlog list\n  pnpm backlog next\n  pnpm backlog start <id>\n  pnpm backlog close <id>    — закрыть: перенос файла в done/ тем же PR\n  pnpm backlog resume <id>\n  pnpm backlog release <id>  — только человек\n  pnpm backlog doctor        — расхождения «смержена — доска не знает»\n  pnpm backlog inbox         — что ждёт человека (e8); --json — машиночитаемо\nФлаг оператора (ADR 0009):\n  pnpm backlog next --operator        — следующая задача оператора\n  pnpm backlog start <id> --operator  — захват задачи режима обслуживания или needs_human «оператор: …»',
   );
 }
 
@@ -514,6 +742,9 @@ switch (command) {
   case 'doctor':
     // Логика doctor — в tools/backlog-doctor.ts (deny); CLI только делегирует (ADR 0014).
     runDoctor(source);
+    break;
+  case 'inbox':
+    commandInbox(source, json);
     break;
   case 'resume':
     if (!id) {
