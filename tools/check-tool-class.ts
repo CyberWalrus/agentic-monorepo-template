@@ -60,6 +60,7 @@ const KNOWN_GATES: readonly string[] = [
   'tools/check-bundle-gate.ts',
   'tools/check-bundle.ts',
   'tools/check-docs.ts',
+  'tools/check-hook-install.ts',
   'tools/check-ruleset-drift.ts',
   'tools/check-env-example.ts',
   'tools/check-env-usage.ts',
@@ -376,7 +377,13 @@ function walkFiles(root: string): string[] {
         continue;
       }
       if (entry.isFile()) {
-        files.push(relative);
+        // Dot-файлы вне замыкания: входные точки гейтов — закоммиченные
+        // исходники, а временные dot-фикстуры тестов (tools/hooks/
+        // .lint-probe.fixture.ts от lint-changed-file) переживают сбойный
+        // прогон и ложнокрасили замыкание в копии шаблона (d12-волна).
+        if (!entry.name.startsWith('.')) {
+          files.push(relative);
+        }
       }
     }
   }

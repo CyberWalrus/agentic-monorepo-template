@@ -29,7 +29,14 @@ interface StepResult {
 
 const json = process.argv.includes('--json');
 const full = process.argv.includes('--full');
-const TAIL_LINES = 60;
+// Окно хвоста шага в JSON-отчёте. 120: свод канарейских вердиктов (38+ строк)
+// + витестовые фейлы одного цикла вытесняли якорь канарейки из 60 строк —
+// «НЕ УПАЛ» при реально сработавшем гейте (d12, повтор b4.4-урока в новом
+// масштабе). Раннер канарейки поднимает окно до 400 (VERIFY_TAIL_LINES):
+// соседние инвариант-тесты шумят большими диффами (наблюдение e9), и якорь
+// должен доживать до матчинга. Больше — отчёт растёт ~20 Б на строку.
+const tailFromEnv = Number(process.env['VERIFY_TAIL_LINES']);
+const TAIL_LINES = Number.isInteger(tailFromEnv) && tailFromEnv >= 60 ? tailFromEnv : 120;
 
 const onlyFlag = process.argv.indexOf('--only');
 const only =
