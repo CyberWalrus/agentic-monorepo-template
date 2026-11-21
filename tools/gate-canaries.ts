@@ -833,6 +833,26 @@ export const CANARIES: GateCanary[] = [
       }
     },
   },
+  {
+    // Гейт дрейфа routeTree.gen.ts (b7.1, З10): committed-файл обязан
+    // совпадать со свежей генерацией без сборки. Плохое изменение — ручная
+    // правка производного файла (то, для чего гейт сделан): шаг routetree
+    // краснеет сообщением с `pnpm regen`. routeTree.gen.ts не защищён —
+    // правка канарейки легальна, файл возвращает checkout+clean (образец —
+    // канарейка реестров b7).
+    name: 'ручная правка routeTree.gen.ts',
+    steps: 'routetree',
+    failedStep: 'routetree',
+    expect: /отличается от свежей генерации/,
+    apply: (root) => {
+      const path = join(root, 'apps', 'web', 'src', 'routeTree.gen.ts');
+      const source = readFileSync(path, 'utf8');
+      if (!source.includes("declare module '@tanstack/react-start'")) {
+        throw new Error('canary anchor not found: routeTree.gen.ts has no Start footer');
+      }
+      writeFileSync(path, `${source}\n// evil routetree drift probe\n`);
+    },
+  },
 ];
 // Вывод портов (З9, A5 PR-3) канарейки шага не имеет: рантайм читает записанный
 // reports/ports.json (read-first — иначе зонд после старта серверов уезжал на

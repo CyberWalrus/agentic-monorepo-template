@@ -47,6 +47,10 @@ export const fast: Step[] = [
   // Версия Docker-образа Playwright == каталог @playwright/test (З4/A8).
   { name: 'visual-image', command: 'pnpm', args: ['visual-image:check'] },
   { name: 'openapi', command: 'pnpm', args: ['--filter', '@repo/contracts', 'openapi:check'] },
+  // Дрейф routeTree.gen.ts (b7.1): committed-файл == свежая генерация без
+  // сборки (@tanstack/router-cli в temp + футер Start). Ручная правка
+  // производного файла красит шаг; конфликт решает pnpm regen (З10).
+  { name: 'routetree', command: 'pnpm', args: ['routetree:check'] },
 ];
 
 /** Пост-волновые шаги: читают отчёты, поэтому идут только после зелёных тестов. */

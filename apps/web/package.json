@@ -12,6 +12,7 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
+    "routes:gen": "node scripts/routes-gen.ts",
     "start": "vite preview",
     "start:prod": "node server.ts",
     "typecheck": "tsc",
@@ -37,6 +38,7 @@
   "devDependencies": {
     "@stryker-mutator/core": "catalog:",
     "@stryker-mutator/vitest-runner": "catalog:",
+    "@tanstack/router-cli": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
