@@ -70,8 +70,14 @@ jobs:
           # Время последнего push — тот же прокси, что в gate-integrity: min
           # started_at check-run'ов на head-коммите (ставит GitHub). Пагинация:
           # check-run'ов может быть больше 100 (minor 8 security-ревью).
+          # e16: --paginate + склейка страниц в один объект (форма входа чекера
+          # tools/check-visual-approval.ts — одиночный JSON с check_runs — не
+          # меняется). Две команды, не пайп: bash шага — bash -e без pipefail,
+          # сбой gh на второй странице в пайпе дал бы зелёный шаг на усечённых
+          # данных.
           HEAD_SHA=$(jq -r .headRefOid pr.json)
-          gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" > pushed-check-runs.json
+          gh api --paginate "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" > check-runs-pages.json
+          jq -s '{total_count: length, check_runs: [.[].check_runs[]]}' check-runs-pages.json > pushed-check-runs.json
 
       - name: Validate approve-visual command
         id: approval

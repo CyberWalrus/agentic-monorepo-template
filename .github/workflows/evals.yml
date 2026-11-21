@@ -81,6 +81,43 @@ jobs:
           name: evals-${{ github.run_id }}
           path: reports/evals/
           retention-days: 90
+      # Бюджет токенов прогона (e16): дрейф стоимости красит job, алерт — через
+      # существующий report-job (issue). Порог — по правилам «Порогов» ADR 0009:
+      # факт раннера 2026-11-19 — два сопоставимых прогона полного сценария,
+      # 23 181 313 и 20 882 265 токенов (медиана 22 031 789; отчёты в
+      # backlog/done/c9.1.md — AC-прогонки FAIL, локальная машина, не CI);
+      # запас ×3 (прецедент абсолютных потолков ADR 0006), округление вверх
+      # до 10M → cap 70 000 000 на сценарий; предел прогона = cap ×
+      # totals.scenarios — добавление сценария в --all не ужимает бюджет молча.
+      # tokensMeasured != scenarios — fail-closed: null-токен не ноль (находка
+      # arch-ревью C9.1); отсутствие/неединственность отчёта — тоже fail-closed.
+      # if: success() (дефолт): на красном прогоне отчёта может не быть (агент
+      # умер до записи), факт бюджета осмыслен для завершённого прогона, а issue
+      # на красный и так заводит report-job.
+      - name: Token budget (e16)
+        run: |
+          shopt -s nullglob
+          REPORTS=(reports/evals/report-*.json)
+          if [ "${#REPORTS[@]}" -ne 1 ]; then
+            echo "ожидался один отчёт reports/evals/report-*.json, найдено ${#REPORTS[@]} — fail-closed" >&2
+            exit 1
+          fi
+          if MSG=$(jq -er --argjson cap 70000000 '
+            if .totals.tokensMeasured != .totals.scenarios then
+              error("tokensMeasured=\(.totals.tokensMeasured) != scenarios=\(.totals.scenarios) — метрика токенов неполна, бюджет неутверждаем (fail-closed)")
+            elif .totals.tokens > ($cap * .totals.scenarios) then
+              error("tokens \(.totals.tokens) > порога \(($cap * .totals.scenarios)) — дрейф стоимости прогона (cap \($cap) × \(.totals.scenarios) сценариев)")
+            else
+              "OK: tokens \(.totals.tokens) <= порога \(($cap * .totals.scenarios)) (cap \($cap)/сценарий × \(.totals.scenarios) сценариев)"
+            end
+          ' "${REPORTS[0]}" 2>&1); then
+            echo "evals tokens: $MSG" >> "$GITHUB_STEP_SUMMARY"
+            echo "$MSG"
+          else
+            echo "evals tokens: $MSG" >> "$GITHUB_STEP_SUMMARY"
+            echo "$MSG" >&2
+            exit 1
+          fi
 
   # Скип без секрета не должен быть невидимым (находка sanity-ревью C9.1):
   # по расписанию и ручному запуску — напоминание в tracking-issue; на push
