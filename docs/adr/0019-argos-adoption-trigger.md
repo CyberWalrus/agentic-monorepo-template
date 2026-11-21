@@ -2,7 +2,7 @@
 
 - Статус: принято
 - Дата: 2026-11-21
-- Контекст: [ADR 0001](0001-initial-stack.md) (Argos — «слой ревью диффов, когда их станет много», условие не записано), [ADR 0015](0015-visual-baselines-approval.md) (доверенный workflow одобрения базлайнов), [ADR 0009](0009-operator-delegation.md) (что остаётся человеку), [ADR 0002](0002-gate-integrity.md) (изменение гейтов), [architecture.md](../architecture.md) §3.6, [исследование стека](../research/2026-11-tech-stack.md) (цены и возможности Argos), задача b3.4
+- Контекст: [ADR 0001](0001-initial-stack.md) (Argos — «слой ревью диффов, когда их станет много», условие не записано), [ADR 0015](0015-visual-baselines-approval.md) (доверенный workflow одобрения базлайнов), [ADR 0009](0009-operator-delegation.md) (что остаётся человеку), [ADR 0002](0002-gate-integrity.md) (изменение гейтов), [architecture.md](../architecture.md) §3.6, исследование стека в `docs/research/2026-11-tech-stack.md` (в проект из шаблона не едет, поэтому без ссылки; цены и возможности Argos), задача b3.4
 
 ## Проблема
 
@@ -62,7 +62,7 @@ gh run list --repo CyberWalrus/agentic-monorepo-template --workflow visual-appro
 ## Что этот ADR не решает
 
 - Сам процесс подключения — его распишет задача при срабатывании триггера.
-- Выбор между Argos и Chromatic зафиксирован в [исследовании стека](../research/2026-11-tech-stack.md): Argos — MCP, CLI с `--json`, скилы и цена; revisit только при заметном изменении рынка.
+- Выбор между Argos и Chromatic зафиксирован в исследовании стека (`docs/research/2026-11-tech-stack.md`, в проект из шаблона не едет, поэтому без ссылки): Argos — MCP, CLI с `--json`, скилы и цена; revisit только при заметном изменении рынка.
 
 ## Отвергнутые варианты
 

@@ -9,6 +9,7 @@ import { relative } from 'node:path';
 
 import { repoWriteTargets, stripHeredocs } from '../analyze-command.ts';
 import { protectionOf } from '../protected-paths.ts';
+process.env['HOOK_GATE_NAME'] ??= 'guard-bash';
 import { deny, failClosedExit, projectDir, readHookInput } from './lib.ts';
 
 // Прямой вызов CLI наследует fail-closed: необработанный сбой — exit 2 (З4, C10.1).
@@ -23,6 +24,7 @@ const raw = typeof input.tool_input?.['command'] === 'string' ? input.tool_input
 const cwd = input.cwd ?? projectDir;
 if (raw.length > MAX_COMMAND_LENGTH) {
   deny(
+    'guard-bash',
     `Blocked command: it is ${raw.length} chars, over the ${MAX_COMMAND_LENGTH} this guard can analyze. Split it into smaller commands.`,
   );
 }
@@ -52,7 +54,7 @@ const rules: { pattern: RegExp; reason: string }[] = [
 
 for (const rule of rules) {
   if (rule.pattern.test(command)) {
-    deny(`Blocked command: ${rule.reason}`);
+    deny('guard-bash', `Blocked command: ${rule.reason}`);
   }
 }
 
@@ -60,6 +62,7 @@ for (const absolute of repoWriteTargets(command, cwd, projectDir)) {
   const path = relative(projectDir, absolute);
   if (protectionOf(path) === 'deny') {
     deny(
+      'guard-bash',
       `Blocked command: it writes to the protected path "${path}" (tools/protected-paths.json).`,
     );
   }
