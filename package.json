@@ -39,6 +39,7 @@
     "test:count:update": "node tools/check-test-count.ts --update",
     "sandbox:check": "node tools/check-sandbox-paths.ts",
     "registries:check": "node tools/check-registries.ts",
+    "required-tasks:check": "node tools/check-required-tasks.ts",
     "regen": "pnpm --filter @repo/contracts openapi && pnpm --filter @repo/web build",
     "env:check": "node tools/check-env-usage.ts && node tools/check-env-example.ts",
     "denial:report": "node tools/denial-trend.ts",

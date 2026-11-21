@@ -68,6 +68,7 @@ const KNOWN_GATES: readonly string[] = [
   'tools/check-flaky-rate.ts',
   'tools/check-gate-approval.ts',
   'tools/check-registries.ts',
+  'tools/check-required-tasks.ts',
   'tools/check-perf-trend.main.ts',
   'tools/check-perf-trend.ts',
   'tools/test-hooks-inputs.ts',
