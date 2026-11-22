@@ -10,8 +10,12 @@
  * (поле issue хранит ссылку, дедупом не считается).
  *
  * Режимы:
- *   --report <file> --quarantine <file> [--repeat N]
+ *   --report <file> --quarantine <file> [--repeat N] [--rate-out <file>]
  *   --validate-quarantine --quarantine <file>   (только валидация файла)
+ *
+ * --rate-out (c9.4): вычисленный rate пишется JSON-файлом — единственный
+ * источник семантики для тренд-отчёта телеметрии (tools/telemetry-report.*),
+ * чтобы тот не пересчитывал rate сам и не разошёлся с гейтом.
  *
  * Выход: 0 — блокирующих нарушений нет; 1 — красный (лист причин в stderr).
  */
@@ -179,6 +183,19 @@ function main(): void {
 
   const total = grouped.size;
   const rate = total > 0 ? (flaky / total) * 100 : 0;
+  const rateOut = flag('--rate-out');
+  if (rateOut !== '') {
+    writeFileSync(
+      rateOut,
+      `${JSON.stringify({
+        ratePct: Number(rate.toFixed(2)),
+        flaky,
+        total,
+        repeat,
+        quarantine: quarantine.length,
+      })}\n`,
+    );
+  }
   const summary = [
     `flaky rate: ${rate.toFixed(2)}% (${flaky} из ${total} тестов, порог < 1%, повторов ${repeat})`,
     ...flakyTitles.slice(0, 20).map((title) => `  flaky: ${title}`),
