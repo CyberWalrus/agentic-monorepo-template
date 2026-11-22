@@ -21,6 +21,7 @@ import { failClosedExit, projectDir, readHookInput } from './lib.ts';
 // Прямой вызов CLI наследует fail-closed: необработанный сбой — exit 2 (З4, C10.1).
 process.on('uncaughtException', failClosedExit);
 process.on('unhandledRejection', failClosedExit);
+import { formatFindings, type StepDiagnostics } from '../verify-diagnostics.ts';
 import { ensureStateRoot, stateDir } from '../snapshot.ts';
 
 const MAX_BLOCKS = 3;
@@ -35,6 +36,8 @@ interface VerifyStep {
   ok: boolean;
   command: string;
   output: string;
+  /** Компактная диагностика (b9), если verify её выдал; иначе хвост output. */
+  diagnostics?: StepDiagnostics;
 }
 
 interface VerifyReport {
@@ -100,8 +103,18 @@ if (blocks >= MAX_BLOCKS) {
 
 writeState(statePath, { green: null, blocks: blocks + 1 });
 const failed = report?.steps.filter((step) => !step.ok) ?? [];
+// Адресный канал (b9): если verify выдал диагностику — агент видит список
+// «файл, строка, сообщение», иначе прежний сырой хвост output.
 const details = failed.length
-  ? failed.map((step) => `### ${step.name} (${step.command})\n${step.output}`).join('\n\n')
+  ? failed
+      .map((step) => {
+        const body =
+          step.diagnostics !== undefined && step.diagnostics.findings.length > 0
+            ? formatFindings(step.diagnostics)
+            : step.output;
+        return `### ${step.name} (${step.command})\n${body}`;
+      })
+      .join('\n\n')
   : `verify did not produce a report:\n${result.stderr}`;
 console.log(
   JSON.stringify({
@@ -248,12 +261,48 @@ function parseReport(stdout: string): VerifyReport | null {
     ) {
       return null;
     }
+    // diagnostics — опциональное поле (b9): есть — обязано быть корректной
+    // формы, битое портит весь отчёт (fail-closed, как нечитаемый).
+    let diagnostics: StepDiagnostics | undefined;
+    if (step['diagnostics'] !== undefined) {
+      const parsedDiagnostics = parseDiagnostics(step['diagnostics']);
+      if (parsedDiagnostics === null) {
+        return null;
+      }
+      diagnostics = parsedDiagnostics;
+    }
     steps.push({
       name: step['name'],
       ok: step['ok'],
       command: step['command'],
       output: step['output'],
+      ...(diagnostics !== undefined ? { diagnostics } : {}),
     });
   }
   return { ok: parsed['ok'], steps };
+}
+
+function parseDiagnostics(raw: unknown): StepDiagnostics | null {
+  if (!isRecord(raw) || typeof raw['source'] !== 'string' || !Array.isArray(raw['findings'])) {
+    return null;
+  }
+  const findings: StepDiagnostics['findings'] = [];
+  for (const finding of raw['findings']) {
+    if (!isRecord(finding) || typeof finding['file'] !== 'string') {
+      return null;
+    }
+    const { line } = finding;
+    if (line !== undefined && typeof line !== 'number') {
+      return null;
+    }
+    if (typeof finding['message'] !== 'string') {
+      return null;
+    }
+    findings.push({
+      file: finding['file'],
+      ...(line !== undefined ? { line } : {}),
+      message: finding['message'],
+    });
+  }
+  return { source: raw['source'], findings };
 }

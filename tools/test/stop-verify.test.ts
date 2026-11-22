@@ -29,8 +29,10 @@ const COPIED_FILES = [
   '.claude/hooks/stop-verify.ts',
   'tools/hooks/lib.ts',
   'tools/hooks/stop-verify.ts',
+  'tools/report-shape.ts',
   'tools/snapshot.ts',
   'tools/protected-paths.ts',
+  'tools/verify-diagnostics.ts',
 ];
 
 const STUB_VERIFY = `import { appendFileSync } from 'node:fs';

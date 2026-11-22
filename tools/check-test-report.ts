@@ -41,25 +41,11 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
+import { clean, isPlaywrightReport } from './report-shape.ts';
+
 const BOOLEAN_FLAGS = new Set(['affected']);
 
 const problems: string[] = [];
-
-// Поля отчёта приходят из недоверенного входа: перевод строки подделает
-// строчки лога шага (log injection), управляющие символы — замусорят его.
-// Без regex: oxlint запрещает управляющие символы в регулярных выражениях.
-function clean(value: string): string {
-  let result = '';
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code < 0x20 || code === 0x7f) {
-      result += code === 10 ? '\\n' : code === 9 ? '\\t' : `\\x${code.toString(16)}`;
-    } else {
-      result += char;
-    }
-  }
-  return result;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -359,7 +345,7 @@ for (const { path, fromTask } of expected) {
     continue;
   }
   checked += 1;
-  if (Array.isArray(report['suites'])) {
+  if (isPlaywrightReport(report)) {
     checkPlaywrightReport(report, label, root, requiredProjects);
   } else {
     checkVitestReport(report, label, root);
