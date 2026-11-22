@@ -56,8 +56,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         # Полная история: bundle-delta в негатив-проверках и канарейке строит
         # базу от merge-base(HEAD, origin/main) (A6 PR-2, ADR 0013).
-        with: { fetch-depth: 0 }
-      - uses: ./.github/actions/setup
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: $/.github/actions/setup
         # Негатив-контроль гоняет turbo test: web/ui browser-тесты требуют браузеры.
         with: { playwright: 'true' }
       # Установка в корневом чекауте греет pnpm store — install в worktree

@@ -45,7 +45,7 @@ jobs:
       # playwright: true — pre-push базлайна гоняет turbo test из дерева PR:
       # @repo/ui#test — vitest browser mode, без Chromium пуш отклоняется
       # (Executable doesn't exist, b12; продолжение фикса окружения #122).
-      - uses: ./.github/actions/setup
+      - uses: $/.github/actions/setup
         with: { playwright: 'true' }
 
       - name: Fetch comment and PR facts from GitHub API
