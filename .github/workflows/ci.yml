@@ -276,7 +276,7 @@ jobs:
       TURBO_API: ${{ vars.TURBO_API }}
     # Тот же образ и архитектура, что у `pnpm visual` локально: базлайны совпадают.
     container:
-      image: mcr.microsoft.com/playwright:v1.64.1-noble
+      image: mcr.microsoft.com/playwright:v1.65.1-noble
       options: --ipc=host
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

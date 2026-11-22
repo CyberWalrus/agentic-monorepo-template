@@ -39,7 +39,7 @@ catalog:
   '@orpc/server': ^1.16.4
   '@orpc/tanstack-query': ^1.16.4
   '@orpc/zod': ^1.16.4
-  '@playwright/test': 1.64.1
+  '@playwright/test': 1.65.1
   # Сканер секретов (b6, решение 2026-11-15): npm-пакет из каталога, а не бинарь
   # вне цепочки поставок. Мажор движка и пресета десинхронизированы у апстрима.
   '@secretlint/secretlint-rule-preset-recommend': ^13.1.0
@@ -76,7 +76,7 @@ catalog:
   oxlint: ^1.94.0
   oxlint-tsgolint: ^7.0.2007
   pg: ^8.23.1
-  playwright: 1.64.1
+  playwright: 1.65.1
   react: ^19.3.1
   react-dom: ^19.3.1
   sherif: ^1.13.0
