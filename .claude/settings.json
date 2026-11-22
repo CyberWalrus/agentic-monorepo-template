@@ -6,6 +6,8 @@
       "Bash(pnpm verify)",
       "Bash(pnpm test *)",
       "Bash(pnpm test)",
+      "Bash(pnpm test:failed)",
+      "Bash(pnpm test:failed *)",
       "Bash(pnpm typecheck *)",
       "Bash(pnpm lint *)",
       "Bash(pnpm format *)",
