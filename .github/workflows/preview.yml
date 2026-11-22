@@ -41,6 +41,7 @@ jobs:
       REPO_SLUG: ${{ github.repository }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false }
       - name: 'ghcr path (lowercase обязателен: шаблон копируется владельцам с верхним регистром в логине)'
         run: echo "GHCR_PATH=${REPO_SLUG,,}" >> "$GITHUB_ENV"
       - name: 'buildx builder (docker-container: нужен для gha-кэша слоёв)'

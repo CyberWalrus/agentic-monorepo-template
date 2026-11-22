@@ -52,13 +52,13 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: env.HAS_KEY == 'true'
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 0, persist-credentials: false }
 
       # dispatch запускается с ref main: чекаутим head PR явно. На pull_request
       # checkout уже стоит на head — fetch той же SHA идемпотентен.
       - name: Checkout PR head
         if: env.HAS_KEY == 'true'
-        uses: anthropics/claude-code-action@c84e279f859e2591391e95bd309286eb111c345f # v1
+        uses: anthropics/claude-code-action@c84e279f859e2591391e95bd309286eb111c345f # v1.0.284
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -71,7 +71,7 @@ jobs:
 
       - name: Specialist reviewers (repo subagents)
         if: env.HAS_KEY == 'true'
-        uses: anthropics/claude-code-action@c84e279f859e2591391e95bd309286eb111c345f # v1
+        uses: anthropics/claude-code-action@c84e279f859e2591391e95bd309286eb111c345f # v1.0.284
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
