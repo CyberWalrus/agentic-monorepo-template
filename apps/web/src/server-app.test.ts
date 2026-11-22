@@ -1,10 +1,12 @@
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { gunzipSync } from 'node:zlib';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
+  acceptsGzip,
   createWebServerApp,
   forwardHeaders,
   isStartEntry,
@@ -27,6 +29,8 @@ beforeAll(async () => {
   // ищется именно он — тест проверяет whitelist, а не регистр самой ФС.
   await writeFile(path.join(staticRoot, 'assets', 'upper.JS'), '// upper');
   await writeFile(path.join(staticRoot, 'assets', 'style-abc123.css'), 'body {}');
+  // Уже сжатый формат: gzip не применяется, отдаётся как есть.
+  await writeFile(path.join(staticRoot, 'assets', 'logo-abc123.png'), 'fake-png-bytes');
   await writeFile(path.join(staticRoot, 'index.html'), '<html lang="en"></html>');
   await writeFile(path.join(staticRoot, 'notes.txt'), 'text');
   await writeFile(path.join(staticRoot, 'blob.xyz'), 'unknown');
@@ -380,6 +384,68 @@ describe('static files', () => {
 
     expect(await response.text()).toBe('ssr /assets/app-abc123.js');
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves a gzip body for compressible types when the client accepts gzip', async () => {
+    const { app } = makeApp();
+
+    const response = await app.request('http://web.local/assets/app-abc123.js', {
+      headers: { 'accept-encoding': 'gzip, deflate, br' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-encoding')).toBe('gzip');
+    expect(response.headers.get('vary')).toBe('accept-encoding');
+    expect(response.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
+    // Тело — валидный gzip исходного файла: браузер распакует его прозрачно.
+    const body = new Uint8Array(await response.arrayBuffer());
+    expect(gunzipSync(body).toString('utf8')).toBe('console.log("app")');
+  });
+
+  it('keeps the identity body when gzip is not accepted, but still marks vary', async () => {
+    const { app } = makeApp();
+
+    const response = await app.request('http://web.local/assets/app-abc123.js');
+
+    expect(response.headers.get('content-encoding')).toBeNull();
+    expect(response.headers.get('vary')).toBe('accept-encoding');
+    await expect(response.text()).resolves.toBe('console.log("app")');
+  });
+
+  it('respects q=0 as declining gzip', async () => {
+    const { app } = makeApp();
+
+    const response = await app.request('http://web.local/assets/app-abc123.js', {
+      headers: { 'accept-encoding': 'br;q=1, gzip;q=0' },
+    });
+
+    expect(response.headers.get('content-encoding')).toBeNull();
+    await expect(response.text()).resolves.toBe('console.log("app")');
+  });
+
+  it('does not compress formats that ship compressed', async () => {
+    const { app } = makeApp();
+
+    const response = await app.request('http://web.local/assets/logo-abc123.png', {
+      headers: { 'accept-encoding': 'gzip' },
+    });
+
+    expect(response.headers.get('content-encoding')).toBeNull();
+    expect(response.headers.get('vary')).toBeNull();
+    await expect(response.text()).resolves.toBe('fake-png-bytes');
+  });
+});
+
+describe('acceptsGzip', () => {
+  it('requires an explicitly listed gzip token with non-zero q', () => {
+    expect(acceptsGzip('gzip')).toBe(true);
+    expect(acceptsGzip('deflate, gzip, br')).toBe(true);
+    expect(acceptsGzip('GZIP')).toBe(true);
+    expect(acceptsGzip('gzip;q=0')).toBe(false);
+    expect(acceptsGzip('br;q=1, gzip;q=0.0')).toBe(false);
+    expect(acceptsGzip('deflate')).toBe(false);
+    expect(acceptsGzip('*')).toBe(false);
+    expect(acceptsGzip(null)).toBe(false);
   });
 });
 
