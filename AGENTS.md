@@ -75,7 +75,7 @@ Worktree: в новом окружении или worktree первый шаг �
 2. **Контракт** (если меняется API): `packages/contracts` → `openapi` → реализация в `apps/api` с тестами.
 3. **UI**: компоненты в `packages/ui` (поведенческий тест + визуальный), экран в `apps/web/src/features/<feature>/`.
 4. **E2E**: сценарии фичи в `e2e/features/<feature>/`. Критичные пользовательские пути помечай `@critical`.
-5. `pnpm verify --full` зелёный → ревьюеры `test-quality-reviewer`, `security-reviewer`, `product-logic-reviewer` → PR по шаблону с доказательствами.
+5. `pnpm verify --full` зелёный → ревьюеры `test-quality-reviewer`, `security-reviewer`, `product-logic-reviewer` → PR по шаблону с доказательствами. PR, созданный агентом, отмечает чекбокс «PR создан агентом» в шаблоне — по нему ночная телеметрия считает долю агентных PR (c9.4).
 
 ## Скилы (`.claude/skills/`)
 
