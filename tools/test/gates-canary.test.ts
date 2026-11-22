@@ -10,7 +10,7 @@ import { gzipSync } from 'node:zlib';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BLOAT, BLOAT_DELTA, CANARIES } from '../gate-canaries.ts';
-import { allStepNames, fast, post, slow } from '../verify-steps.ts';
+import { allStepNames, fast, post, serialFast, slow } from '../verify-steps.ts';
 
 const slowNames = new Set(slow.map((step) => step.name));
 
@@ -43,7 +43,7 @@ describe('таблица канареек гейтов', () => {
 
   it('каждый блокирующий шаг verify покрыт канарейкой (кроме вайтлиста З6)', () => {
     const canaried = new Set(CANARIES.flatMap((canary) => canary.steps.split(',')));
-    const blocking = [...fast, ...post, ...slow].map((step) => step.name);
+    const blocking = [...serialFast, ...fast, ...post, ...slow].map((step) => step.name);
     for (const step of blocking) {
       if (CANARY_EXEMPT_STEPS.has(step)) {
         continue;

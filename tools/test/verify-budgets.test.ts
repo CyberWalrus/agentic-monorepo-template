@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { budgetMsFor, parseBudgets } from '../verify-budgets-loader.ts';
-import { fast, post, slow } from '../verify-steps.ts';
+import { fast, post, serialFast, slow } from '../verify-steps.ts';
 import { stripCodeComments } from '../check-tool-class.ts';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -41,14 +41,14 @@ describe('verify-budgets.json', () => {
   it('каждый шаг verify имеет бюджет, и наоборот — без неизвестных шагов', () => {
     const fastDict = isRecord(b['fast']) ? b['fast'] : {};
     const slowDict = isRecord(b['slow']) ? b['slow'] : {};
-    for (const step of [...fast, ...post].map((item) => item.name)) {
+    for (const step of [...serialFast, ...fast, ...post].map((item) => item.name)) {
       expect(typeof fastDict[step] === 'number', `шаг ${step} (fast/post) без бюджета`).toBe(true);
     }
     for (const step of slow.map((item) => item.name)) {
       expect(typeof slowDict[step] === 'number', `шаг ${step} (slow) без бюджета`).toBe(true);
     }
     // И наоборот: в файле нет бюджетов для несуществующих шагов.
-    const stepNames = new Set([...fast, ...post, ...slow].map((item) => item.name));
+    const stepNames = new Set([...serialFast, ...fast, ...post, ...slow].map((item) => item.name));
     for (const [key, dict] of [
       ['fast', fastDict],
       ['slow', slowDict],

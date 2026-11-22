@@ -33,8 +33,6 @@ export const fast: Step[] = [
   // гейта удаление последнего пакета с mutation/e2e тихо выключает CI.
   { name: 'required-tasks', command: 'pnpm', args: ['required-tasks:check'] },
   { name: 'test-integrity', command: 'pnpm', args: ['test:integrity'] },
-  // Тесты обвязки под кэшем turbo (E1): inputs — tools/test-hooks-inputs.ts.
-  turbo('test:hooks'),
   { name: 'sandbox', command: 'pnpm', args: ['sandbox:check'] },
   // Классы защиты tools/ (ADR 0014): замыкание гейтов == deny protected-paths.json.
   { name: 'tool-class', command: 'pnpm', args: ['tool-class:check'] },
@@ -84,4 +82,21 @@ export const slow: Step[] = [
   turbo('perf'),
 ];
 
-export const allStepNames: string[] = [...fast, ...post, ...slow].map((step) => step.name);
+/**
+ * Serial-волна fast-фазы: шаги, которые во время прогона пишут фикстуры в
+ * общее дерево. test:hooks создаёт b6-canary-leak.fixture.ts в корне
+ * (secretlint ограничен корнем проекта — tmpdir нельзя, tools/test/secrets-gate.test.ts)
+ * и .lint-probe.fixture.ts в tools/hooks/ (tools/test/lint-changed-file.test.ts)
+ * и убирает их в afterAll. Пока шаг шёл ПАРАЛЛЕЛЬНО деревосканирующим шагам
+ * fast-волны (lint, knip, tool-class, sherif, boundaries), сканеры видели мусор
+ * как дефект: tsgolint паниковал на файле вне выводимой программы, knip —
+ * «Unused files», tool-class — «файл замыкания вне deny». Флак verify (ревью
+ * PR c11: 2 красных из 5). verify.ts идёт serial-волну ДО параллельной: окно
+ * мусора закрыто к началу сканеров; на CI ничего не меняется — job static и
+ * так гоняет шаги последовательно.
+ */
+export const serialFast: Step[] = [turbo('test:hooks')];
+
+export const allStepNames: string[] = [...serialFast, ...fast, ...post, ...slow].map(
+  (step) => step.name,
+);
