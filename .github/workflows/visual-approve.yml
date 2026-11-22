@@ -205,11 +205,12 @@ jobs:
           done < actuals/deleted.txt
           git commit -m "visual baselines from CI (approved by @${LOGIN} on ${HEAD_SHA})"
 
-      # Push — единственный шаг с GH_TOKEN в env: токен нужен в URL push, env
-      # уже есть у шага по условию доверенного контура (e24); подстановка прямо
-      # в argv git была бы видна в ps. LEFTHOOK=0 — pre-push (turbo/boundaries
-      # по коду PR) не запускается: доверенный workflow пушит базлайны без
-      # прогонов кода PR (e24).
+      # Push — единственный шаг с GH_TOKEN в env: env сужает экспозицию токена
+      # до единственного шага с записью в репозиторий (e24); сам токен при этом
+      # подставляется в URL push-команды — в argv git он виден (ps) и до, и
+      # после e24, env его оттуда не убирает. LEFTHOOK=0 — pre-push
+      # (turbo/boundaries по коду PR) не запускается: доверенный workflow пушит
+      # базлайны без прогонов кода PR (e24).
       - name: Push baselines to the PR branch
         if: success() && steps.approval.outputs.approved == 'true'
         env:
