@@ -2,12 +2,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { WORKSPACE_HEADER } from '@repo/contracts';
 
+import { api, registerSsrFetch } from './api-client.ts';
 import { runWithRequestWorkspace, ssrFetch } from './ssr-workspace.ts';
 
 const respond = (): Response => new Response('ok');
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  // Сброс регистрации: следующий тест без внедрения идёт через plain fetch.
+  registerSsrFetch(fetch);
 });
 
 describe('ssrFetch workspace header (ADR 0020)', () => {
@@ -60,5 +64,31 @@ describe('ssrFetch workspace header (ADR 0020)', () => {
     );
 
     expect(requests.at(0)?.headers.get(WORKSPACE_HEADER)).toBeNull();
+  });
+});
+
+describe('api-client SSR registration (ADR 0020)', () => {
+  it('routes oRPC calls through the registered SSR fetch carrying the workspace header', async () => {
+    vi.stubEnv('API_URL', 'http://api.test');
+    const requests: Request[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        requests.push(new Request(input, init));
+        // Тело ответа не важно: проверяется запрос, парсинг протокола вне теста.
+        return respond();
+      }),
+    );
+    // Как делает server entry (src/server.ts) в SSR-процессе.
+    registerSsrFetch(ssrFetch);
+
+    // Ошибка парсинга заглушечного ответа не важна: фиксируется уход запроса.
+    await runWithRequestWorkspace(
+      new Request('http://web.test/', { headers: { [WORKSPACE_HEADER]: 'ws-doc' } }),
+      async () => api.tasks.list(),
+    ).catch(() => undefined);
+
+    expect(requests.at(0)?.url).toContain('/rpc');
+    expect(requests.at(0)?.headers.get(WORKSPACE_HEADER)).toBe('ws-doc');
   });
 });

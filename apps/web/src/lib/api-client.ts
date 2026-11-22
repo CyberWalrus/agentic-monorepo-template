@@ -4,7 +4,7 @@ import type { ContractRouterClient } from '@orpc/contract';
 import { createTanstackQueryUtils } from '@orpc/tanstack-query';
 import type { Contract } from '@repo/contracts';
 
-import { apiBaseUrl, isSsr } from './env.ts';
+import { apiBaseUrl } from './env.ts';
 
 /**
  * Один origin (ADR 0005): браузер ходит в `/rpc` своего web-сервера (прокси на
@@ -19,22 +19,25 @@ import { apiBaseUrl, isSsr } from './env.ts';
 const rpcUrl = () => `${apiBaseUrl()}/rpc`;
 
 /**
- * SSR ходит в API напрямую (ADR 0005), мимо прокси: workspace документа-запроса
- * добавляется в этой точке (ADR 0020), иначе лоадер `/` префетчит «ничей»
- * (пустой) список. Браузерная ветка — обычный fetch: заголовок приносит сам
- * браузерный контекст (E2E — extraHTTPHeaders; продуктовые клиенты — свои
- * механизмы по мере появления арендаторов). Серверная ветка с модулем
- * ssr-workspace выбрасывается из клиентского бандла tree-shaking'ом
- * (SSR-флаг из env-модуля — гейт `bundle`).
+ * Точка внедрения SSR-fetch (ADR 0020): server entry (`src/server.ts`)
+ * регистрирует реализацию, добавляющую workspace документа-запроса к запросам
+ * к API — SSR ходит напрямую, мимо прокси (ADR 0005), и без заголовка
+ * префетчил бы «ничей» (пустой) список. В браузере регистрация не происходит:
+ * модуль ssr-workspace импортирует только серверная точка входа, клиентский
+ * бандл его не содержит вовсе (гейт `bundle`), а заголовок приносит сам
+ * браузерный контекст (E2E — extraHTTPHeaders).
  */
-const rpcFetch: typeof fetch = (input, init) => {
-  if (!isSsr()) {
-    return fetch(input, init);
-  }
-  return import('./ssr-workspace.ts').then(({ ssrFetch }) => ssrFetch(input, init));
-};
+let ssrFetchImpl: typeof fetch | null = null;
 
-const api: ContractRouterClient<Contract> = createORPCClient(
+export function registerSsrFetch(impl: typeof fetch): void {
+  ssrFetchImpl = impl;
+}
+
+const rpcFetch: typeof fetch = (input, init) =>
+  ssrFetchImpl === null ? fetch(input, init) : ssrFetchImpl(input, init);
+
+/** oRPC-клиент контракта: экспортирован для node-тестов SSR-регистрации. */
+export const api: ContractRouterClient<Contract> = createORPCClient(
   new RPCLink({ url: rpcUrl, fetch: rpcFetch }),
 );
 

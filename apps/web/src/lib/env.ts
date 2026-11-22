@@ -114,15 +114,5 @@ export function loadWebProcessEnv(
  * остаётся только браузерная ветвь.
  */
 export function apiBaseUrl(): string {
-  return isSsr() ? loadWebServerEnv().apiUrl : location.origin;
-}
-
-/**
- * Флаг SSR-окружения: серверная ветка кода (SSR-fetch RPCLink, c1.5/ADR 0020)
- * живёт только за этим флагом. В клиентской сборке Vite подставляет `false`
- * вместо чтения флага, и tree-shaking выбрасывает серверные ветки вместе с
- * их импортами (тот же механизм, что у zod выше — гейт `bundle`).
- */
-export function isSsr(): boolean {
-  return import.meta.env.SSR;
+  return import.meta.env.SSR ? loadWebServerEnv().apiUrl : location.origin;
 }
