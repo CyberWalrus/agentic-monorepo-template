@@ -39,6 +39,12 @@ function run(command: string[], cwd: string, timeoutMs = 600_000): SpawnResult {
   if (file === undefined) {
     return { status: -1, output: 'empty command', stdout: '' };
   }
+  // GITHUB_HEAD_REF/GITHUB_BASE_REF стираются (ревью d7): канареечный worktree
+  // — detached от HEAD, а гейты, читающие CI-контекст PR (check-docs,
+  // branch-scope), обязаны видеть ветку worktree, а не ветку PR раннера, —
+  // иначе негатив-контроль красен в job canaries (detached + протёкшая
+  // task/*-ветка без локального main = ложный fail-closed).
+  const { GITHUB_HEAD_REF: _head, GITHUB_BASE_REF: _base, ...inheritedEnv } = process.env;
   const result = spawnSync(file, args, {
     encoding: 'utf8',
     cwd,
@@ -51,7 +57,7 @@ function run(command: string[], cwd: string, timeoutMs = 600_000): SpawnResult {
     // VERIFY_TAIL_LINES=400: соседние инвариант-тесты шумят большими диффами
     // и вытесняли якорь канарейки из хвоста шага в JSON-отчёте (см. verify.ts).
     env: {
-      ...process.env,
+      ...inheritedEnv,
       CI: '1',
       FORCE_COLOR: '0',
       NO_COLOR: '1',

@@ -64,13 +64,22 @@ interface RunResult {
   stderr: string;
 }
 
-function run(args: string[], env: NodeJS.ProcessEnv = {}): RunResult {
+function runIn(cwd: string, args: string[], env: NodeJS.ProcessEnv = {}): RunResult {
+  // GITHUB_HEAD_REF/GITHUB_BASE_REF стираются (ревью d7): в CI они заданы для
+  // PR раннера и протекли бы в чекер во временном клоне — чекер читал бы ветку
+  // task/d7 вместо ветки клона (task/x, task/ghost…). Истина — ветка клона;
+  // явные env-кейсы («detached HEAD») задают переменные намеренно через env.
+  const { GITHUB_HEAD_REF: _head, GITHUB_BASE_REF: _base, ...inherited } = process.env;
   const result = spawnSync('node', [checker, ...args], {
-    cwd: repo,
+    cwd,
     encoding: 'utf8',
-    env: { ...process.env, ...env },
+    env: { ...inherited, ...env },
   });
   return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+}
+
+function run(args: string[], env: NodeJS.ProcessEnv = {}): RunResult {
+  return runIn(repo, args, env);
 }
 
 function git(args: string[]): RunResult {
@@ -177,7 +186,7 @@ describe('check-branch-scope: интеграция на временном кл�
     assertOk(git(['switch', '-c', 'task/ghost']), 'branch task/ghost');
     const result = run([]);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('файла задачи ghost нет в main');
+    expect(result.stderr).toContain('файла задачи ghost нет на базе');
     assertOk(git(['switch', 'task/x']), 'back to task/x');
     assertOk(git(['branch', '-D', 'task/ghost']), 'cleanup ghost');
   });
@@ -199,8 +208,46 @@ describe('check-branch-scope: интеграция на временном кл�
     expect(result.stdout).toContain('внутри touches — ok');
     const leak = run([], { GITHUB_HEAD_REF: 'task/ghost' });
     expect(leak.status).not.toBe(0);
-    expect(leak.stderr).toContain('файла задачи ghost нет в main');
+    expect(leak.stderr).toContain('файла задачи ghost нет на базе');
     assertOk(git(['switch', 'task/x']), 'back to task/x');
+  });
+
+  it('CI-сценарий: локальной main нет (checkout PR) — доска читается из origin/main', () => {
+    // Клон-симуляция job static (actions/checkout fetch-depth: 0): локальной
+    // refs/heads/main нет, только origin/* (ревью d7: литеральный
+    // `git show main:` ложнокраснил «файла задачи нет» при живом origin/main).
+    const ci = join(tmp, 'ci-clone');
+    // --branch main: HEAD источника — task/x, клон без явной ветки унёс бы её
+    // локальной; симуляция CI требует локальной main, которую затем удаляем.
+    const clone = spawnSync('git', ['clone', '--quiet', '--branch', 'main', repo, ci], {
+      encoding: 'utf8',
+    });
+    if (clone.status !== 0) {
+      throw new Error(`git clone failed:\n${clone.stderr}`);
+    }
+    const cgit = (args: string[]): RunResult => {
+      const result = spawnSync('git', args, { cwd: ci, encoding: 'utf8' });
+      return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+    };
+    assertOk(cgit(['config', 'user.email', 'test@example.com']), 'config email');
+    assertOk(cgit(['config', 'user.name', 'test']), 'config name');
+    assertOk(cgit(['switch', '--detach']), 'detach');
+    assertOk(cgit(['branch', '-D', 'main']), 'drop local main');
+    expect(cgit(['rev-parse', '--verify', 'main']).status).not.toBe(0);
+    // Чекер с веткой из GITHUB_HEAD_REF на detached merge-ref: файл задачи
+    // найден через origin/main, touches непусты, дифф чист — зелёный.
+    const green = runIn(ci, [], { GITHUB_HEAD_REF: 'task/x' });
+    expect(green.status).toBe(0);
+    expect(green.stdout).toContain('внутри touches — ok');
+    // Красный кейс там же: посторонний файл в диффе, touches видны.
+    mkdirSync(join(ci, 'other'), { recursive: true });
+    writeFileSync(join(ci, 'other', 'evil.ts'), 'export const evil = 1;\n');
+    const red = runIn(ci, [], { GITHUB_HEAD_REF: 'task/x' });
+    rmSync(join(ci, 'other'), { recursive: true, force: true });
+    expect(red.status).not.toBe(0);
+    expect(red.stderr).toContain('other/evil.ts');
+    expect(red.stderr).toContain('solo/**'); // touches прочитаны, не «пусто»
+    rmSync(ci, { recursive: true, force: true });
   });
 
   it('touches читаются из main, не из ветки: правка touches в ветке не расширяет права (З2)', () => {

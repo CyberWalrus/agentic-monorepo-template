@@ -13,13 +13,20 @@
  *
  * Ветке вне task/* гейт зелёный skip: работа вне доски по прямому поручению
  * легальна (ADR 0007, «Работа вне доски»), граница остаётся приёмке человека
- * (З3) — осознанное решение в журнале d7. Fail-closed (З4/З11): ссылка main не
- * резолвится — красный; файла задачи нет на main ни в backlog/, ни в
- * backlog/done/ — красный; ветка task/<id> указывает на закрытую в main
- * задачу — красный (брошенный/рукотворный клейм, класс leftover doctor).
- * Все проблемы выводятся разом: красный повод обязан называться конкретно
- * (З11), а канарейка «дифф вне touches» матчила бы именно посторонний файл,
- * не fail-closed поводы.
+ * (З3) — осознанное решение в журнале d7. Fail-closed (З4/З11): ссылка main
+ * (main ?? origin/main) не резолвится — красный; файла задачи нет на ней ни в
+ * backlog/, ни в backlog/done/ — красный; ветка task/<id> указывает на закрытую
+ * задачу — красный (брошенный/рукотворный клейм, класс leftover doctor). Все
+ * проблемы выводятся разом: красный повод обязан называться конкретно (З11),
+ * а канарейка «дифф вне touches» матчила бы именно посторонний файл, не
+ * fail-closed поводы.
+ *
+ * Резолвнутый ref используется для ВСЕХ чтений доски (ревью d7, 2026-11-22):
+ * checkout PR в CI — detached merge-ref, локальной ветки main нет
+ * (actions/checkout кладёт только refs/remotes/origin/*) — литеральный
+ * `git show main:` в job static ложнокраснил бы «файла задачи нет» при
+ * живом origin/main. Прецедент — loadBoard (tools/backlog-doctor.ts:117-124):
+ * ls-tree/show по резолвнутому ref.
  *
  * Ветка в CI: GITHUB_HEAD_REF (checkout PR — detached merge-ref, локальной
  * ветки нет), локально — git branch --show-current; base — merge-base с main
@@ -56,13 +63,13 @@ const boardRefResolved: string =
     `branch-scope: ссылка main не резолвится (git fetch?) — touches задачи нечитаемы, fail-closed (З4): проверка не выполнялась, а не пройдена.`,
   );
 
-const openRaw = tryGit('show', `main:backlog/${id}.md`);
-const doneRaw = tryGit('show', `main:backlog/done/${id}.md`);
+const openRaw = tryGit('show', `${boardRefResolved}:backlog/${id}.md`);
+const doneRaw = tryGit('show', `${boardRefResolved}:backlog/done/${id}.md`);
 const raw = openRaw ?? doneRaw;
 let touches: string[] = [];
 if (raw === null) {
   problems.push(
-    `файла задачи ${id} нет в main ни в backlog/${id}.md, ни в backlog/done/${id}.md — ветка task/${id} вне доски; задачу заводят PR-ом в main, вне-досковая работа идёт в ветке, не начинающейся с task/ (ADR 0007)`,
+    `файла задачи ${id} нет на базе (main ?? origin/main) ни в backlog/${id}.md, ни в backlog/done/${id}.md — ветка task/${id} вне доски; задачу заводят PR-ом в main, вне-досковая работа идёт в ветке, не начинающейся с task/ (ADR 0007)`,
   );
 } else {
   const task = parseTask(id, raw, doneRaw !== null);
