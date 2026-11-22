@@ -182,6 +182,25 @@ describe('check-branch-scope: интеграция на временном кл�
     assertOk(git(['switch', 'task/x']), 'back to task/x');
   });
 
+  it('проект без доски (копия шаблона) — зелёный skip даже для task/*', () => {
+    const plain = join(tmp, 'plain-project');
+    mkdirSync(plain, { recursive: true });
+    const plainGit = (args: string[]): RunResult => {
+      const result = spawnSync('git', args, { cwd: plain, encoding: 'utf8' });
+      return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+    };
+    assertOk(plainGit(['init', '-b', 'main']), 'git init plain');
+    plainGit(['config', 'user.email', 'test@example.com']);
+    plainGit(['config', 'user.name', 'test']);
+    writeFileSync(join(plain, 'app.ts'), 'export const app = 1;\n');
+    plainGit(['add', '-A']);
+    assertOk(plainGit(['commit', '-m', 'init: копия шаблона без backlog/']), 'commit plain');
+    assertOk(plainGit(['switch', '-c', 'task/x']), 'branch task/x в копии');
+    const result = runIn(plain, []);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('проект из шаблона без доски');
+  });
+
   it('fail-closed: файла задачи нет на main — красный', () => {
     assertOk(git(['switch', '-c', 'task/ghost']), 'branch task/ghost');
     const result = run([]);

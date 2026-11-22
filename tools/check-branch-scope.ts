@@ -67,6 +67,18 @@ const openRaw = tryGit('show', `${boardRefResolved}:backlog/${id}.md`);
 const doneRaw = tryGit('show', `${boardRefResolved}:backlog/done/${id}.md`);
 const raw = openRaw ?? doneRaw;
 let touches: string[] = [];
+// Проект из шаблона доски не имеет (backlog/ в _exclude copier.yml): гейт в
+// verify-steps едет в копию и на чистой копии файла задачи нет. База без
+// каталога backlog/ — это не монорепо-шаблон, шаг пропускается (наблюдение
+// 2026-11-22: копийная канарейка красила pnpm verify в копии).
+// «Файла нет, а доска есть» остаётся красным — fail-closed (З4) не сужается.
+const boardExistsOnBase = tryGit('cat-file', '-e', `${boardRefResolved}:backlog`) !== null;
+if (raw === null && !boardExistsOnBase) {
+  console.log(
+    'branch-scope: на базе нет каталога backlog/ — проект из шаблона без доски, шаг пропущен (гейт применим только к монорепо-шаблону).',
+  );
+  process.exit(0);
+}
 if (raw === null) {
   problems.push(
     `файла задачи ${id} нет на базе (main ?? origin/main) ни в backlog/${id}.md, ни в backlog/done/${id}.md — ветка task/${id} вне доски; задачу заводят PR-ом в main, вне-досковая работа идёт в ветке, не начинающейся с task/ (ADR 0007)`,
