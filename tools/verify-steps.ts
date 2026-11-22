@@ -36,6 +36,8 @@ export const fast: Step[] = [
   { name: 'sandbox', command: 'pnpm', args: ['sandbox:check'] },
   // Классы защиты tools/ (ADR 0014): замыкание гейтов == deny protected-paths.json.
   { name: 'tool-class', command: 'pnpm', args: ['tool-class:check'] },
+  // Дифф ветки внутри touches задачи (D7, З2): touches читаются из main.
+  { name: 'branch-scope', command: 'pnpm', args: ['branch-scope:check'] },
   { name: 'docs', command: 'pnpm', args: ['docs:check'] },
   // Порядок реестров (b7): одна строка на домен по алфавиту.
   { name: 'registries', command: 'pnpm', args: ['registries:check'] },

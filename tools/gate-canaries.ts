@@ -710,6 +710,58 @@ export const CANARIES: GateCanary[] = [
     },
   },
   {
+    // Дифф вне touches задачи (D7, З6): шаг verify → pnpm branch-scope:check.
+    // Плохое изменение — посторонний файл в рабочем дереве ветки task/*: гейт
+    // красит «файлы вне touches задачи». Раннер канареек создаёт worktree от
+    // HEAD (detached — гейт пропустил бы ветку), поэтому apply переключает
+    // пробную ветку task/evil-touches-probe, как канарейка замыкания выше.
+    // Fail-closed «файла задачи probe нет в main» выводится тем же прогоном,
+    // но expect матчит именно посторонний файл: ослабление проверки файлов
+    // (при живом fail-closed) делает канарейку громкой. Ветка probe переживает
+    // прогон (образец task/evil-probe), файлы откатывает checkout+clean.
+    name: 'дифф вне touches задачи',
+    steps: 'branch-scope',
+    failedStep: 'branch-scope',
+    expect: /docs\/evil-touches-probe\.md/,
+    apply: (root) => {
+      write(root, 'docs/evil-touches-probe.md', '# вне touches\n');
+      const result = spawnSync('git', ['switch', '-C', 'task/evil-touches-probe'], {
+        cwd: root,
+        encoding: 'utf8',
+      });
+      if (result.status !== 0) {
+        throw new Error(
+          `canary setup failed: cannot create task/evil-touches-probe: ${result.stderr}`,
+        );
+      }
+    },
+  },
+  {
+    // Проводка branch-scope (D7, З5): script → гейт. Плохое изменение —
+    // branch-scope:check удалён из package.json: шаг ломается, дифф ветки
+    // перестаёт сверяться с touches, wiring-тест в
+    // tools/test/check-branch-scope краснеет. Образец — канарейка tool-class:
+    // срывается именно скрипт, а не шаг verify-steps (шум соседних
+    // инвариант-тестов вытесняет якорь из хвоста отчёта).
+    name: 'branch-scope:check отвязан от package.json',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /проводка: шаг branch-scope в verify/,
+    apply: (root) => {
+      const path = join(root, 'package.json');
+      const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      if (!isRecord(parsed) || !isRecord(parsed['scripts'])) {
+        throw new Error('canary anchor not found: package.json scripts');
+      }
+      const scripts = parsed['scripts'];
+      if (scripts['branch-scope:check'] !== 'node tools/check-branch-scope.ts') {
+        throw new Error('canary anchor not found: no branch-scope:check script');
+      }
+      delete scripts['branch-scope:check'];
+      writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
+    },
+  },
+  {
     // C3.1: чтение окружения только в модулях окружения (server-config.ts,
     // web/src/lib/env.ts). Плохое изменение — прямое чтение process.env в
     // продуктовом коде приложения; красит шаг env (tools/check-env-usage.ts).

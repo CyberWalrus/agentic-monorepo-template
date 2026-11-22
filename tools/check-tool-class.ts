@@ -64,6 +64,7 @@ const KNOWN_GATES: readonly string[] = [
   'tools/check-mutation-ratchet.main.ts',
   'tools/check-mutation-ratchet.ts',
   'tools/check-ruleset-drift.ts',
+  'tools/check-branch-scope.ts',
   'tools/check-env-example.ts',
   'tools/check-env-usage.ts',
   'tools/flaky-quarantine.json',

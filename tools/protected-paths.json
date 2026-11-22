@@ -55,6 +55,7 @@
     "tools/check-test-integrity.ts",
     "tools/check-test-report.ts",
     "tools/check-tool-class.ts",
+    "tools/check-branch-scope.ts",
     "tools/check-visual-image.ts",
     "tools/copier-version.txt",
     "tools/e2e-select.ts",
