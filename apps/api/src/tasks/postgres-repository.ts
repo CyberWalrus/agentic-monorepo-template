@@ -126,9 +126,18 @@ export class PostgresTaskRepository implements TaskRepository {
         // это просто delete (проверяется контрактом: reset with an empty list).
         return;
       }
-      // id уникальны в масштабе хранилища (PRIMARY KEY): seed с id чужого
-      // рабочего пространства — громкий отказ до insert, а не PK-исключение
-      // только на Postgres (семантика InMemory-реализации, ADR 0020).
+      // id уникальны в масштабе хранилища (PRIMARY KEY): seed с дубликатом id
+      // внутри набора — громкий отказ до insert с тем же текстом, что в
+      // InMemory-реализации (ADR 0020, контрактный набор).
+      const seededIds = new Set<string>();
+      for (const task of tasks) {
+        if (seededIds.has(task.id)) {
+          throw new Error(`Duplicate task id within one seed: ${task.id} (ADR 0020)`);
+        }
+        seededIds.add(task.id);
+      }
+      // Seed с id чужого рабочего пространства — тоже громкий отказ до insert,
+      // а не PK-исключение (семантика InMemory-реализации, ADR 0020).
       // IS DISTINCT FROM, а не <>: ничейные строки (NULL) — тоже чужой scope.
       const foreign = await tx
         .select({ id: schema.tasks.id, workspaceId: schema.tasks.workspaceId })

@@ -272,4 +272,38 @@ export const taskRepositoryContractChecks: readonly TaskRepositoryContractCheck[
       expect(await repository.list('ws-b')).toEqual([]);
     },
   },
+  {
+    // Повторный seed своего workspace с теми же id — легальная замена строк
+    // (visual/perf сеют перед каждым сценарием); только чужой scope — отказ.
+    name: 'reset with the same ids in the same workspace replaces the rows',
+    check: async (repository) => {
+      const seeded = seededTask({ completed: false });
+      await repository.reset([seeded], 'ws-a');
+
+      const retoggled = seededTask({ id: seeded.id, completed: true });
+      await repository.reset([retoggled], 'ws-a');
+
+      expect(await repository.list('ws-a')).toEqual([retoggled]);
+    },
+  },
+  {
+    name: 'reset rejects duplicate ids within one seed',
+    check: async (repository) => {
+      const seeded = seededTask();
+
+      await expect(
+        repository.reset([seeded, seededTask({ id: seeded.id, title: 'twin' })], 'ws-a'),
+      ).rejects.toThrow(/Duplicate task id within one seed/);
+    },
+  },
+  {
+    name: 'create records the workspace and the list scopes by it',
+    check: async (repository) => {
+      const created = await repository.create('Workspace task', null, 'ws-a');
+
+      expect((await repository.list('ws-a')).map((task) => task.id)).toEqual([created.id]);
+      expect(await repository.list('ws-b')).toEqual([]);
+      expect(await repository.list()).toEqual([]);
+    },
+  },
 ];
