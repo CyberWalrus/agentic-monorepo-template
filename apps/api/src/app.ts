@@ -1,7 +1,13 @@
 import { OpenAPIHandler } from '@orpc/openapi/fetch';
 import { RPCHandler } from '@orpc/server/fetch';
 import type { AnyRouter } from '@orpc/server';
-import { TaskIdInputSchema, TaskSchema, ERROR_MESSAGES } from '@repo/contracts';
+import {
+  TaskIdInputSchema,
+  TaskSchema,
+  WORKSPACE_HEADER,
+  ERROR_MESSAGES,
+  parseWorkspaceId,
+} from '@repo/contracts';
 import { bodyLimit } from 'hono/body-limit';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
@@ -210,6 +216,9 @@ export function createApp({
     tasks,
     actor: resolveActor ? resolveActor(request) : null,
     ownerOf: ownerOfThroughRepository(tasks),
+    // Рабочее пространство запроса (ADR 0020): отсутствующий или невалидный
+    // заголовок — «ничей» scope, поведение продуктовых клиентов не меняется.
+    workspaceId: parseWorkspaceId(request.headers.get(WORKSPACE_HEADER)),
   });
   const rpcHandler = new RPCHandler(router);
   const openApiHandler = new OpenAPIHandler(router);
@@ -276,7 +285,12 @@ export function createApp({
       if (!parsed.success) {
         return c.json({ error: 'Invalid seed data', issues: parsed.error.issues }, 400);
       }
-      await tasks.reset(parsed.data.tasks);
+      // С workspace-заголовком seed заменяет содержимое одного рабочего
+      // пространства (изоляция параллельных E2E-сценариев, ADR 0020); без него
+      // — легаси-глобальный сброс для точечных сценариев. Осторожно: глобальный
+      // сброс при параллельном прогоне стирает данные соседних workspace.
+      const workspaceId = parseWorkspaceId(c.req.raw.headers.get(WORKSPACE_HEADER));
+      await tasks.reset(parsed.data.tasks, workspaceId ?? undefined);
       return c.body(null, 204);
     });
 

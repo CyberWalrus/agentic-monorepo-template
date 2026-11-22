@@ -18,3 +18,5 @@ export {
 export { AccessPolicySchema, ocAccess } from './access-policy.ts';
 
 export { ERROR_MESSAGES } from './errors.ts';
+
+export { WORKSPACE_HEADER, parseWorkspaceId } from './workspace.ts';

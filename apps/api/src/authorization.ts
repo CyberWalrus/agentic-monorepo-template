@@ -24,6 +24,12 @@ export interface AppContext {
    * Незнакомую форму input порт обязан отвечать null.
    */
   ownerOf: (input: unknown) => Promise<string | null>;
+  /**
+   * Рабочее пространство запроса (ADR 0020) или null — «ничей»: заголовок
+   * `x-workspace-id` отсутствует или не разобрался. Скоупит списки и мутации
+   * задач изоляцией E2E-сценариев; в контракте процедур его нет.
+   */
+  workspaceId: string | null;
 }
 
 /**

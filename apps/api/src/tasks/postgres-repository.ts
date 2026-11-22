@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
-import { desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { SQL } from 'drizzle-orm';
 
 import type { Task } from '@repo/contracts';
 
@@ -21,6 +22,18 @@ function toTask(row: typeof schema.tasks.$inferSelect): Task {
     completed: row.completed,
     createdAt: row.createdAt.toISOString(),
   };
+}
+
+/**
+ * Фильтр строк рабочего пространства (ADR 0020). NULL-колонка и «ничей» scope
+ * сопоставляются IS NULL: eq(column, 'w') не матчит NULL-строки — ничейные
+ * задачи невидимы из workspace-scope, как и в InMemory-реализации
+ * (row.workspaceId === scope).
+ */
+function workspaceWhere(workspaceId?: string): SQL | undefined {
+  return workspaceId === undefined
+    ? isNull(schema.tasks.workspaceId)
+    : eq(schema.tasks.workspaceId, workspaceId);
 }
 
 /**
@@ -45,12 +58,16 @@ export class PostgresTaskRepository implements TaskRepository {
     this.#generateId = generateId;
   }
 
-  async list(): Promise<Task[]> {
-    const rows = await this.#db.select().from(schema.tasks).orderBy(desc(schema.tasks.createdAt));
+  async list(workspaceId?: string): Promise<Task[]> {
+    const rows = await this.#db
+      .select()
+      .from(schema.tasks)
+      .where(workspaceWhere(workspaceId))
+      .orderBy(desc(schema.tasks.createdAt));
     return rows.map(toTask);
   }
 
-  async create(title: string, ownerId?: string | null): Promise<Task> {
+  async create(title: string, ownerId?: string | null, workspaceId?: string): Promise<Task> {
     const task: Task = {
       id: this.#generateId(),
       title,
@@ -63,23 +80,27 @@ export class PostgresTaskRepository implements TaskRepository {
       completed: task.completed,
       createdAt: new Date(task.createdAt),
       ownerId: ownerId ?? null,
+      workspaceId: workspaceId ?? null,
     });
     return task;
   }
 
-  async toggle(id: string): Promise<Task | undefined> {
+  async toggle(id: string, workspaceId?: string): Promise<Task | undefined> {
     // NOT completed в самом SQL: переключение атомарно, без чтения перед записью.
     const rows = await this.#db
       .update(schema.tasks)
       .set({ completed: sql`not ${schema.tasks.completed}` })
-      .where(eq(schema.tasks.id, id))
+      .where(and(eq(schema.tasks.id, id), workspaceWhere(workspaceId)))
       .returning();
     const row = rows.at(0);
     return row === undefined ? undefined : toTask(row);
   }
 
-  async remove(id: string): Promise<Task | undefined> {
-    const rows = await this.#db.delete(schema.tasks).where(eq(schema.tasks.id, id)).returning();
+  async remove(id: string, workspaceId?: string): Promise<Task | undefined> {
+    const rows = await this.#db
+      .delete(schema.tasks)
+      .where(and(eq(schema.tasks.id, id), workspaceWhere(workspaceId)))
+      .returning();
     const row = rows.at(0);
     return row === undefined ? undefined : toTask(row);
   }
@@ -92,13 +113,40 @@ export class PostgresTaskRepository implements TaskRepository {
     return rows.at(0)?.ownerId ?? null;
   }
 
-  async reset(tasks: readonly Task[]): Promise<void> {
+  async reset(tasks: readonly Task[], workspaceId?: string): Promise<void> {
     await this.#db.transaction(async (tx) => {
-      await tx.delete(schema.tasks);
+      if (workspaceId === undefined) {
+        // Легаси-семантика общего /__test__/reset: стираем всё хранилище.
+        await tx.delete(schema.tasks);
+      } else {
+        await tx.delete(schema.tasks).where(eq(schema.tasks.workspaceId, workspaceId));
+      }
       if (tasks.length === 0) {
         // insert с пустым набором значений drizzle не допускает — сброс до пустоты
         // это просто delete (проверяется контрактом: reset with an empty list).
         return;
+      }
+      // id уникальны в масштабе хранилища (PRIMARY KEY): seed с id чужого
+      // рабочего пространства — громкий отказ до insert, а не PK-исключение
+      // только на Postgres (семантика InMemory-реализации, ADR 0020).
+      // IS DISTINCT FROM, а не <>: ничейные строки (NULL) — тоже чужой scope.
+      const foreign = await tx
+        .select({ id: schema.tasks.id, workspaceId: schema.tasks.workspaceId })
+        .from(schema.tasks)
+        .where(
+          and(
+            inArray(
+              schema.tasks.id,
+              tasks.map((task) => task.id),
+            ),
+            sql`${schema.tasks.workspaceId} is distinct from ${workspaceId ?? null}`,
+          ),
+        );
+      const clash = foreign.at(0);
+      if (clash !== undefined) {
+        throw new Error(
+          `Task id ${clash.id} already exists in workspace "${clash.workspaceId ?? 'none'}" — seed data must use ids unique across workspaces (ADR 0020)`,
+        );
       }
       await tx.insert(schema.tasks).values(
         tasks.map((task) => ({
@@ -106,6 +154,7 @@ export class PostgresTaskRepository implements TaskRepository {
           title: task.title,
           completed: task.completed,
           createdAt: new Date(task.createdAt),
+          workspaceId: workspaceId ?? null,
         })),
       );
     });
