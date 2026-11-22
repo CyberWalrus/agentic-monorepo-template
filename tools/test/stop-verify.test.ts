@@ -29,6 +29,7 @@ const COPIED_FILES = [
   '.claude/hooks/stop-verify.ts',
   'tools/hooks/lib.ts',
   'tools/hooks/stop-verify.ts',
+  'tools/maintenance.ts',
   'tools/report-shape.ts',
   'tools/snapshot.ts',
   'tools/protected-paths.ts',

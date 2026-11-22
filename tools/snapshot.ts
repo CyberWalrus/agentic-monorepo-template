@@ -29,6 +29,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { isPathOpen, MAINTENANCE_FILE } from './maintenance.ts';
 import { protectionOf } from './protected-paths.ts';
 
 export interface SnapshotEntry {
@@ -294,6 +295,13 @@ export function reconcile(projectDir: string, sessionId: string): ReconcileOutco
 
   let changed = false;
   for (const [path, entry] of Object.entries(manifest.files)) {
+    // Режим обслуживания по областям (b9, ADR 0009): пути из
+    // .claude/maintenance.json исключены из сверки и отката — иначе правка
+    // открытого пути, разрешённая protect-paths, откатывалась бы здесь по
+    // содержимому. Битый файл режима — null: сверка идёт по всем deny-файлам.
+    if (isPathOpen(projectDir, path)) {
+      continue;
+    }
     const absolute = join(projectDir, path);
     if (!existsSync(absolute)) {
       if (tree.has(path)) {
@@ -338,7 +346,11 @@ export function reconcile(projectDir: string, sessionId: string): ReconcileOutco
     changed = true;
   }
   const known = new Set(Object.keys(manifest.files));
-  result.created = enumerateAll(projectDir).filter((path) => !known.has(path));
+  // Сам файл режима (untracked, gitignored) — известный опт-ин, а не сюрприз
+  // под защищённым путём: в отчёт «появились новые файлы» не попадает.
+  result.created = enumerateAll(projectDir).filter(
+    (path) => !known.has(path) && path !== MAINTENANCE_FILE,
+  );
   if (changed) {
     writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest), { mode: 0o600 });
   }

@@ -304,6 +304,8 @@ export interface MaintenanceFile {
   main: boolean;
   /** id задачи ветки worktree; null — основной checkout или ветка не task/*. */
   taskId: string | null;
+  /** Какой файл режима найден: полный (settings.local.json) или по областям (maintenance.json, b9). */
+  file: 'settings-local.json' | 'maintenance.json';
   /** У ветки task/<id> есть открытый PR (gh); значимо только при taskId !== null. */
   hasOpenPr: boolean;
   /** true — PR-состояние проверить не удалось (gh недоступен), hasOpenPr не отличает «нет PR». */
@@ -364,12 +366,17 @@ export function doctorFindings(facts: DoctorFacts): DoctorFinding[] {
   // Тихое окно ADR 0004: забытый файл режима обслуживания выключает хуки и
   // песочницу, и напомнить об этом нечем — doctor делает окно видимым (ADR 0009).
   for (const file of facts.maintenanceFiles) {
+    const fileName = `.claude/${file.file}`;
     if (file.taskId === null) {
+      const scope =
+        file.file === 'maintenance.json'
+          ? 'Edit/Write в открытые пути и сверка по результату там отключены; песочница и остальные хуки работают (b9)'
+          : 'хуки и песочница там выключены, протокол оператора это место не покрывает';
       findings.push({
         id: 'main',
         kind: 'maintenance-mode',
         blocking: true,
-        message: `файл режима обслуживания .claude/settings.local.json в ${file.main ? 'основном checkout' : 'worktree без ветки задачи'} (${file.where}) — хуки и песочница там выключены, протокол оператора это место не покрывает. Удали файл (ADR 0004, ADR 0009)`,
+        message: `файл режима обслуживания ${fileName} в ${file.main ? 'основном checkout' : 'worktree без ветки задачи'} (${file.where}) — ${scope}. Удали файл (ADR 0004, ADR 0009)`,
       });
       continue;
     }
@@ -380,14 +387,14 @@ export function doctorFindings(facts: DoctorFacts): DoctorFinding[] {
         id: file.taskId,
         kind: 'maintenance-mode',
         blocking: true,
-        message: `файл режима обслуживания в worktree задачи ${file.taskId} (${file.where}) при ${file.hasOpenPr ? 'открытом PR' : `последнем коммите ${Math.floor(file.idleHours ?? 0)} ч назад`}${prNote} — режим выключается до открытия PR. Удали .claude/settings.local.json из worktree и запиши время выключения в «Журнал» (ADR 0009)`,
+        message: `файл режима обслуживания ${fileName} в worktree задачи ${file.taskId} (${file.where}) при ${file.hasOpenPr ? 'открытом PR' : `последнем коммите ${Math.floor(file.idleHours ?? 0)} ч назад`}${prNote} — режим выключается до открытия PR. Удали ${fileName} из worktree и запиши время выключения в «Журнал» (ADR 0009)`,
       });
     } else {
       findings.push({
         id: file.taskId,
         kind: 'maintenance-mode',
         blocking: false,
-        message: `файл режима обслуживания в worktree задачи ${file.taskId} (${file.where}) — активное окно оператора${prNote}: время включения должно быть записано в «Журнале» задачи, файл удаляется до открытия PR (ADR 0009)`,
+        message: `файл режима обслуживания ${fileName} в worktree задачи ${file.taskId} (${file.where}) — активное окно оператора${prNote}: время включения должно быть записано в «Журнале» задачи, файл удаляется до открытия PR (ADR 0009)`,
       });
     }
   }

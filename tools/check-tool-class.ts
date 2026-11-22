@@ -95,6 +95,7 @@ const KNOWN_GATES: readonly string[] = [
   'tools/hooks/stop-verify.ts',
   'tools/instance.ts',
   'tools/measure-bundle.ts',
+  'tools/maintenance.ts',
   'tools/perf-budgets.ts',
   'tools/perf-canary-patch.ts',
   'tools/perf-lock.ts',

@@ -41,6 +41,7 @@ const COPIED_FILES = [
   'tools/hooks/lib.ts',
   'tools/hooks/session-start.ts',
   'tools/hooks/protect-result.ts',
+  'tools/maintenance.ts',
   'tools/protected-paths.ts',
   'tools/snapshot.ts',
 ];
@@ -271,6 +272,46 @@ it('новый файл под deny только сообщается и не у
   expect(result.stdout, 'new file is reported').toContain(join('gates', 'extra.json'));
   expect(existsSync(join(fixture, 'gates', 'extra.json')), 'new file is NOT deleted').toBe(true);
   rmSync(join(fixture, 'gates', 'extra.json'), { force: true });
+});
+
+it('локальный режим (b9): путь из .claude/maintenance.json не откатывается, остальные — да', () => {
+  const sessionId = uniqueSession();
+  mkdirSync(join(fixture, '.claude'), { recursive: true });
+  writeFileSync(
+    join(fixture, '.claude', 'maintenance.json'),
+    JSON.stringify({ task: 'b9', paths: ['gates/**'] }),
+  );
+  try {
+    startup(sessionId);
+    // Открытый путь изменён «мимо guard-bash», закрытый — тоже: reconcile
+    // обязан откатить только закрытый и не упомянуть сам файл режима.
+    const open = spawnSync(
+      'bash',
+      ['-c', `node -e "require('fs').writeFileSync('gates/keep.json', '{\\"hacked\\": 1}\\n')"`],
+      { cwd: fixture, encoding: 'utf8' },
+    );
+    expectOk(open, 'bash action on open path');
+    writeFileSync(join(fixture, 'pin.json'), '{"budget": 0}\n');
+    const result = postToolUse(sessionId);
+    expectOk(result, 'protect-result');
+    expect(
+      readFileSync(join(fixture, 'gates', 'keep.json'), 'utf8'),
+      'open path survives reconcile',
+    ).toBe('{"hacked": 1}\n');
+    expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'closed path is restored').toBe(PIN);
+    expect(result.stdout, 'the mode file itself is not a finding').not.toContain(
+      '.claude/maintenance.json',
+    );
+    const stopResult = stop(sessionId);
+    expectOk(stopResult, 'protect-result Stop');
+    expect(stopResult.stdout, 'Stop does not block over the open path').not.toMatch(
+      /"decision":"block"/,
+    );
+  } finally {
+    writeFileSync(join(fixture, 'gates', 'keep.json'), KEEP);
+    writeFileSync(join(fixture, 'pin.json'), PIN);
+    rmSync(join(fixture, '.claude', 'maintenance.json'), { force: true });
+  }
 });
 
 it('исполнительный бит восстанавливается вместе с содержимым', () => {
