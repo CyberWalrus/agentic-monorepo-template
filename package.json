@@ -9,6 +9,7 @@
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "test:failed": "turbo run test --force -- --last-failed --passWithNoTests --coverage.enabled=false",
     "e2e": "turbo run e2e",
     "perf": "turbo run perf",
     "mutation": "turbo run mutation",

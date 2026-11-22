@@ -381,6 +381,7 @@ describe('doctorFindings: файлы режима обслуживания (ADR 
           where: '/repo',
           main: true,
           taskId: null,
+          file: 'settings-local.json',
           hasOpenPr: false,
           prUnknown: false,
           idleHours: null,
@@ -400,6 +401,7 @@ describe('doctorFindings: файлы режима обслуживания (ADR 
           where: '/repo-task-a1',
           main: false,
           taskId: 'a1',
+          file: 'settings-local.json',
           hasOpenPr: true,
           prUnknown: false,
           idleHours: 1,
@@ -411,6 +413,27 @@ describe('doctorFindings: файлы режима обслуживания (ADR 
     expect(findings[0]?.message).toContain('открытом PR');
   });
 
+  it('maintenance.json (режим по областям, b9) — текст называет файл и объём режима', () => {
+    const findings = doctorFindings({
+      ...modeFacts,
+      maintenanceFiles: [
+        {
+          where: '/repo-task-a1',
+          main: false,
+          taskId: 'a1',
+          file: 'maintenance.json',
+          hasOpenPr: true,
+          prUnknown: false,
+          idleHours: 1,
+        },
+      ],
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ id: 'a1', kind: 'maintenance-mode', blocking: true });
+    expect(findings[0]?.message).toContain('.claude/maintenance.json');
+    expect(findings[0]?.message).not.toContain('settings.local.json');
+  });
+
   it('в worktree задачи с простоем дольше порога — блокирующее', () => {
     const findings = doctorFindings({
       ...modeFacts,
@@ -419,6 +442,7 @@ describe('doctorFindings: файлы режима обслуживания (ADR 
           where: '/repo-task-a1',
           main: false,
           taskId: 'a1',
+          file: 'settings-local.json',
           hasOpenPr: false,
           prUnknown: false,
           idleHours: DOCTOR_IDLE_HOURS,
@@ -438,6 +462,7 @@ describe('doctorFindings: файлы режима обслуживания (ADR 
           where: '/repo-task-a1',
           main: false,
           taskId: 'a1',
+          file: 'settings-local.json',
           hasOpenPr: false,
           prUnknown: false,
           idleHours: 2,
@@ -457,6 +482,7 @@ describe('doctorFindings: файлы режима обслуживания (ADR 
           where: '/repo-abandoned-x',
           main: false,
           taskId: null,
+          file: 'settings-local.json',
           hasOpenPr: false,
           prUnknown: false,
           idleHours: null,
@@ -476,6 +502,7 @@ describe('doctorFindings: файлы режима обслуживания (ADR 
           where: '/repo-task-a1',
           main: false,
           taskId: 'a1',
+          file: 'settings-local.json',
           hasOpenPr: false,
           prUnknown: true,
           idleHours: 2,

@@ -8,6 +8,7 @@
 import { existsSync } from 'node:fs';
 
 import { failClosedExit, projectDir, readHookInput } from './lib.ts';
+import { MAINTENANCE_FILE, readMaintenanceSession } from '../maintenance.ts';
 
 // Прямой вызов CLI наследует fail-closed: необработанный сбой — exit 2 (З4, C10.1).
 process.on('uncaughtException', failClosedExit);
@@ -73,7 +74,24 @@ try {
   snapshotLine = '';
 }
 
-const context = [...problems, snapshotLine].filter(Boolean).join('\n');
+let context = [...problems, snapshotLine].filter(Boolean).join('\n');
+
+// Режим обслуживания по областям (b9, ADR 0009): забытое окно тише некуда —
+// агент и человек должны видеть его в момент старта сессии (З11), не только
+// в ручном backlog doctor. Битый файл тоже громкий: он игнорируется (защита
+// полная), но присутствие мусора под именем режима — расхождение.
+if (existsSync(`${projectDir}/${MAINTENANCE_FILE}`)) {
+  const session = readMaintenanceSession(projectDir);
+  const line =
+    session === null
+      ? `${MAINTENANCE_FILE} is present but unreadable/invalid — it was IGNORED, protection is fully on. Fix or remove the file (ADR 0009).`
+      : `SCOPED maintenance mode is ACTIVE (task ${session.task}): ` +
+        `Edit/Write to these paths is allowed for this session — ${session.paths.join(', ')}. ` +
+        'Sandbox, shell writes and all other hooks remain fully protected; ' +
+        'remove the file before opening the PR (ADR 0009).';
+  context = context === '' ? line : `${context}\n${line}`;
+}
+
 if (context.length > 0) {
   console.log(
     JSON.stringify({

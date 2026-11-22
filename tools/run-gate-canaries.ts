@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { checkHookInstall } from './check-hook-install.ts';
 import { CANARIES } from './gate-canaries.ts';
+import type { StepDiagnostics } from './verify-diagnostics.ts';
 // Список slow-шагов — из того же источника, что у verify: негатив-контроль
 // не должен дрейфовать от определения шагов (см. verify-steps.ts).
 import { slow as slowSteps } from './verify-steps.ts';
@@ -84,7 +85,7 @@ function isResultJson(value: unknown): value is ResultJson {
 
 interface ResultJson {
   ok: boolean;
-  steps: Array<{ name: string; ok: boolean; output: string }>;
+  steps: Array<{ name: string; ok: boolean; output: string; diagnostics?: StepDiagnostics }>;
 }
 
 function verifyInWorktree(
@@ -191,12 +192,23 @@ try {
     const { json } = verifyInWorktreeWithSignalRetry(canary.steps, canary.full ?? false);
     const step = json?.steps.find((item) => item.name === canary.failedStep);
     // Отчёт verify парсится, целевой шаг красный и ругается ожидаемой причиной.
+    // Причина ищется и в diagnostics (b9): хвост output конечен, и флейк другого
+    // пакета в том же шаге вытесняет из него сообщение целевого теста
+    // (2026-11-22: флейк импорта TasksPage в клоне закрыл хвост — канарейка
+    // owner-процедуры дала ложное «НЕ УПАЛ» при живом страже).
+    const stepEvidence =
+      step === undefined
+        ? ''
+        : [
+            step.output,
+            ...(step.diagnostics?.findings ?? []).map((finding) => finding.message),
+          ].join('\n');
     const tripped =
       json !== null &&
       !json.ok &&
       step !== undefined &&
       !step.ok &&
-      canary.expect.test(step.output);
+      canary.expect.test(stepEvidence);
     if (tripped) {
       rows.push(`✓ ${canary.name.padEnd(30)} → ${canary.failedStep} красный`);
     } else {

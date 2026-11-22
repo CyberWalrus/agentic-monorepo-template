@@ -2,18 +2,14 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
     ".": {
-      "entry": [
-        "tools/*.ts",
-        "tools/evals/*.ts",
-        ".claude/hooks/*.ts",
-        "tools/test/*.test.ts",
-        "vitest.config.ts"
-      ],
+      "entry": ["tools/*.ts", "tools/evals/*.ts", ".claude/hooks/*.ts", "tools/test/*.test.ts"],
       // Пробник прямого теста CLI lint-changed-file (C10.1): существует только
       // во время теста, а шаги verify идут параллельно — без ignore knip ловит
-      // «Unused files» в момент жизни пробника.
+      // «Unused files» в момент жизни пробника (флак b9.7-ревью: knip красный
+      // под полной нагрузкой). Подсказка knip «Remove from ignore» — advisory:
+      // осознанный трейд-офф в пользу стабильного гейта.
       "ignore": ["tools/hooks/.lint-probe.fixture.ts"],
-      "ignoreDependencies": ["chrome-devtools-mcp", "@secretlint/secretlint-rule-preset-recommend"]
+      "ignoreDependencies": ["@secretlint/secretlint-rule-preset-recommend"]
     },
     "apps/web": {
       "entry": ["src/routes/**/*.tsx"]

@@ -180,6 +180,13 @@ function buildConsumer(): void {
     'protected-paths.json',
     'analyze-command.ts',
     'snapshot.ts',
+    // Импорт-замыкание хуков (b9): snapshot.ts и protect-paths.ts импортируют
+    // maintenance.ts (режим по областям), stop-verify.ts — verify-diagnostics.ts
+    // и report-shape.ts. Пропущенный модуль — exit 2 хука в потребителе, а
+    // проба читает это как «пропустил»: красная проверка ложью.
+    'maintenance.ts',
+    'verify-diagnostics.ts',
+    'report-shape.ts',
   ]) {
     cpSync(join(repoRoot, 'tools', file), join(consumerDir, 'tools', file));
   }
