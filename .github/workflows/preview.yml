@@ -1,0 +1,168 @@
+# Preview-окружение на PR (C3.3): образы production-entry (ADR 0012) собираются
+# на каждый push PR, публикуются в GHCR тегом pr-<номер>, в PR обновляется
+# один комментарий с командой запуска; после merge или закрытия PR версии
+# с тегом удаляются (GHCR не удаляет тег отдельно от версии — удаляется версия).
+# Отдельный workflow — сознательно НЕ ci.yml: preview — не гейт (вне needs у
+# gate, не required check, architecture.md §3.4), а события closed не должны
+# перезапускать гейт-прогоны L3. Граница доверия: job исполняет код PR и
+# получает packages: write — компромисс с известным риском зафиксирован
+# ADR 0021. Форк-гвард на каждом job (З2, доверенная база): AC «job не
+# запускается для форков» — skipped, не красный; жёсткая граница и так есть —
+# на pull_request из форка GITHUB_TOKEN принудительно read-only независимо
+# от permissions workflow (docs.github.com; admin-переключатель «Send write
+# tokens to workflows from fork pull requests» выключен).
+name: Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    name: preview
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPO_SLUG: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: 'ghcr path (lowercase обязателен: шаблон копируется владельцам с верхним регистром в логине)'
+        run: echo "GHCR_PATH=${REPO_SLUG,,}" >> "$GITHUB_ENV"
+      - name: 'buildx builder (docker-container: нужен для gha-кэша слоёв)'
+        run: |
+          docker buildx create --name preview --driver docker-container --use
+          docker buildx inspect --bootstrap
+      - name: ghcr login (только GITHUB_TOKEN, новый секрет не нужен)
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: build and push api
+        run: docker buildx build --file apps/api/Dockerfile --tag "ghcr.io/${GHCR_PATH}/api:pr-${PR_NUMBER}" --cache-from type=gha,scope=preview-api --cache-to type=gha,mode=max,scope=preview-api --push .
+      - name: build and push web
+        run: docker buildx build --file apps/web/Dockerfile --tag "ghcr.io/${GHCR_PATH}/web:pr-${PR_NUMBER}" --cache-from type=gha,scope=preview-web --cache-to type=gha,mode=max,scope=preview-web --push .
+      - name: upsert comment with run command
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat > "$RUNNER_TEMP/preview-comment.md" <<'EOF'
+          <!-- preview-env:{{PR_NUMBER}} -->
+          ## Preview-окружение на PR
+
+          Образы этой ветки в GHCR, тег `pr-{{PR_NUMBER}}` (пакеты public — см. github-setup.md п. 9):
+
+          - `ghcr.io/{{GHCR_PATH}}/api:pr-{{PR_NUMBER}}` — API, readiness `/health`
+          - `ghcr.io/{{GHCR_PATH}}/web:pr-{{PR_NUMBER}}` — Web, readiness `/healthz`
+
+          Запуск локально (нужен Docker; оба контейнера в одной сети):
+
+          ```bash
+          docker network create preview-pr-{{PR_NUMBER}}
+          docker run -d --name preview-api --network preview-pr-{{PR_NUMBER}} -e PORT=3000 -e HOST=0.0.0.0 -p 4880:3000 ghcr.io/{{GHCR_PATH}}/api:pr-{{PR_NUMBER}}
+          docker run -d --name preview-web --network preview-pr-{{PR_NUMBER}} -e PORT=3001 -e HOST=0.0.0.0 -e API_URL=http://preview-api:3000 -p 4881:3001 ghcr.io/{{GHCR_PATH}}/web:pr-{{PR_NUMBER}}
+          # UI: http://localhost:4881
+          # Останов: docker rm -f preview-web preview-api && docker network rm preview-pr-{{PR_NUMBER}}
+          ```
+
+          Визуальный дифф для одобрения — по отчёту job'а `visual` CI (артефакты
+          `visual-report`/`visual-actuals`), не по живому окружению (ADR 0009, «Решение» C3.3).
+          После merge или закрытия PR тег `pr-{{PR_NUMBER}}` удаляется.
+          Комментарий обновляется на каждый push в PR.
+          EOF
+          sed -e "s|{{PR_NUMBER}}|${PR_NUMBER}|g" -e "s|{{GHCR_PATH}}|${GHCR_PATH}|g" \
+            "$RUNNER_TEMP/preview-comment.md" > "$RUNNER_TEMP/preview-comment.final.md"
+          MARKER="<!-- preview-env:${PR_NUMBER}"
+          COMMENT_ID=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+            | jq -r --arg m "$MARKER" '.[] | select(.body | startswith($m)) | .id' | head -n1)
+          if [ -n "$COMMENT_ID" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
+              -f body="$(cat "$RUNNER_TEMP/preview-comment.final.md")" > /dev/null
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -f body="$(cat "$RUNNER_TEMP/preview-comment.final.md")" > /dev/null
+          fi
+
+  cleanup:
+    name: cleanup
+    # closed срабатывает и для форк-PR, и для PR, где образ ещё не собирался:
+    # форк-гвард пропускает job (skipped, не красный). Идемпотентна только
+    # HTTP 404 (пакета нет / уже удалён); любой другой сбой API — громкий
+    # красный job (З11): иначе невыполненный критерий «тег удаляется»
+    # невидим под зелёным job'ом (находка ревью PR #139).
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPO_SLUG: ${{ github.repository }}
+    steps:
+      - name: delete pr-<номер> versions (api и web)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Успех = команда отработала ИЛИ упала именно с HTTP 404 (без вывода).
+          # Прочий сбой — текст ошибки на stderr и exit 1: job красный.
+          gh404() {
+            local OUT STATUS
+            if OUT=$("$@" 2>&1); then
+              printf '%s' "$OUT"
+              return 0
+            fi
+            STATUS=$?
+            if printf '%s' "$OUT" | grep -q '(HTTP 404)'; then
+              return 0
+            fi
+            echo "gh api failed (exit ${STATUS}): ${OUT}" >&2
+            return 1
+          }
+          OWNER="${REPO_SLUG%%/*}"
+          REPO_NAME="${REPO_SLUG#*/}"
+          TAG="pr-${PR_NUMBER}"
+          # Путь API зависит от типа владельца: org — /orgs/<owner>/packages,
+          # user-владелец — /user/packages от имени GITHUB_TOKEN (пакет,
+          # опубликованный из этого репо, получает admin автоматически).
+          # Выбор — по коду ответа: 404 → не org → user-ветка; прочий сбой
+          # (сеть, 5xx, rate-limit) — громкий отказ, а не молчаливый user.
+          if ORG_RESP=$(gh api "orgs/${OWNER}" 2>&1); then
+            BASE="orgs/${OWNER}/packages"
+          elif printf '%s' "$ORG_RESP" | grep -q '(HTTP 404)'; then
+            BASE="user/packages"
+          else
+            echo "owner lookup failed: ${ORG_RESP}" >&2
+            exit 1
+          fi
+          # Не-тегированные версии — мусор от перезаписи тега на повторном push
+          # (новая версия забирает тег, старая остаётся без тегов); писатель у
+          # пакетов один — этот workflow, чужих не-тегированных версий нет.
+          # Имя пакета образа ghcr.io/<owner>/<repo>/api — «<repo>/api» (с
+          # под-путём): в URL слэш кодируется (%2F), иначе API ищет «api».
+          for PKG_BASE in api web; do
+            PKG_ENC=$(printf '%s' "${REPO_NAME}/${PKG_BASE}" | jq -sRr @uri)
+            VERSION_IDS=$(gh404 gh api "/${BASE}/container/${PKG_ENC}/versions" --paginate \
+              | jq -r --arg t "$TAG" \
+                '.[] | select((.metadata.container.tags | length == 0) or (.metadata.container.tags | index($t))) | .id')
+            for ID in $VERSION_IDS; do
+              echo "delete ${PKG_BASE} version ${ID}"
+              gh api -X DELETE "/${BASE}/container/${PKG_ENC}/versions/${ID}"
+            done
+          done
