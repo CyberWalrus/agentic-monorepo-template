@@ -1,18 +1,49 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { runEvals, type RunEvalsOptions } from '../evals/run.ts';
 
 // Отчётные каталоги живут до ассертов вызывающего теста; красные пути тестов
-// не добираются до своей уборки — префиксную чистку делает afterEach (З9).
+// не добираются до своей уборки — afterEach подчищает (З9).
+//
+// b9-ревью, механизм флака existsSync(reportPath)=false под полной нагрузкой:
+// tmpdir общий для всех процессов машины, и безличный префиксный afterEach
+// ЧУЖОГО параллельного verify (вторая сессия, другой worktree) стирал АКТИВНЫЙ
+// каталог этой сессии между writeReport и ассертом. Убираем только
+// зарегистрированные здесь каталоги и чужой мусор старше часа (хвосты умерших
+// процессов); свежие чужие не трогаем — их уберёт собственный afterEach.
+const REPORT_DIR_PREFIX = 'evals-report-dir-';
+const STALE_REPORT_MS = 60 * 60 * 1000;
+const ownReportDirs = new Set<string>();
 afterEach(() => {
   for (const name of readdirSync(tmpdir())) {
-    if (name.startsWith('evals-report-dir-')) {
-      rmSync(join(tmpdir(), name), { recursive: true, force: true });
+    if (!name.startsWith(REPORT_DIR_PREFIX)) {
+      continue;
+    }
+    const path = join(tmpdir(), name);
+    if (ownReportDirs.has(path)) {
+      rmSync(path, { recursive: true, force: true });
+      ownReportDirs.delete(path);
+      continue;
+    }
+    try {
+      if (Date.now() - statSync(path).mtimeMs > STALE_REPORT_MS) {
+        rmSync(path, { recursive: true, force: true });
+      }
+    } catch {
+      // каталог исчез под ногами — не мешает
     }
   }
 });
@@ -87,6 +118,7 @@ async function withFakeRepo(
 }> {
   const root = makeFakeRepo();
   const reportDir = mkdtempSync(join(tmpdir(), 'evals-report-dir-'));
+  ownReportDirs.add(reportDir);
   if (options.scenarioRaw !== undefined) {
     writeFileSync(join(root, 'tools/evals/scenarios/due-date.md'), options.scenarioRaw);
   }
@@ -129,6 +161,34 @@ function leftoverWorktrees(repoBase: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(`evals-${repoBase}`)).length;
 }
 
+/**
+ * Дамп при провале ассерта отчёта (b9-ревью: existsSync=false под нагрузкой
+ * при синхронном writeFileSync до возврата runEvals — механизм неясен).
+ * Печатает: существование пути и каталога, содержимое каталога, все
+ * evals-report-dir-* в tmpdir (чужая/собственная уборка), mtime записи.
+ */
+function reportLossReport(reportPath: string): string {
+  const lines = [`report path: ${reportPath}`, `existsSync(reportPath): ${existsSync(reportPath)}`];
+  const dir = resolve(reportPath, '..');
+  try {
+    lines.push(`readdir(dir): ${readdirSync(dir).join(', ')}`);
+    if (existsSync(reportPath)) {
+      const stat = statSync(reportPath);
+      lines.push(`report size: ${stat.size} bytes, mtime: ${stat.mtime.toISOString()}`);
+    }
+  } catch (error) {
+    lines.push(`dir unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  lines.push(
+    `evals-report-dir-* in tmpdir: ${
+      readdirSync(tmpdir())
+        .filter((name) => name.startsWith('evals-report-dir-'))
+        .join(', ') || '(none)'
+    }`,
+  );
+  return lines.join('\n');
+}
+
 describe('runEvals', () => {
   it('green scenario: all four metrics recorded, report written, worktree cleaned', async () => {
     const { commitSha, reportDir, result, repoBase } = await withFakeRepo();
@@ -157,7 +217,10 @@ describe('runEvals', () => {
       timeMeasured: 1,
       tokensMeasured: 1,
     });
-    expect(existsSync(result.reportPath)).toBe(true);
+    expect(
+      existsSync(result.reportPath),
+      `report lost after runEvals:\n${reportLossReport(result.reportPath)}`,
+    ).toBe(true);
     // Уборка worktree асинхронна относительно resolve() раннера: под нагрузкой
     // rm/git worktree remove доезжает до конца после ассерта (флак b9-ревью).
     // Окно на позднюю уборку, финальный ассерт строгий — уборка обязательна.
