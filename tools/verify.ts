@@ -79,7 +79,16 @@ function run(step: Step): Promise<StepResult> {
   const startedMs = Date.now();
   return new Promise((resolve) => {
     const child = spawn(step.command, step.args, {
-      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+      env: {
+        ...process.env,
+        FORCE_COLOR: '0',
+        NO_COLOR: '1',
+        // Телеметрия turbo стучится на telemetry.vercel.com — в песочнице это
+        // отказ сети в выводе шага (аудит b9). CI задаёт её сам; локальному
+        // прогону verify глушим здесь. Прямой `pnpm turbo run *` мимо verify
+        // не покрывается — осознанный объём задачи.
+        TURBO_TELEMETRY_DISABLED: '1',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stepOutput = '';
