@@ -6,9 +6,11 @@
 # gate, не required check, architecture.md §3.4), а события closed не должны
 # перезапускать гейт-прогоны L3. Граница доверия: job исполняет код PR и
 # получает packages: write — компромисс с известным риском зафиксирован
-# ADR 0021. Форк-гвард на каждом job обязателен (З2, доверенная база):
-# определение pull_request-workflow берётся из merge-ref, без гварда форк-PR
-# получил бы право записи в реестр.
+# ADR 0021. Форк-гвард на каждом job (З2, доверенная база): AC «job не
+# запускается для форков» — skipped, не красный; жёсткая граница и так есть —
+# на pull_request из форка GITHUB_TOKEN принудительно read-only независимо
+# от permissions workflow (docs.github.com; admin-переключатель «Send write
+# tokens to workflows from fork pull requests» выключен).
 name: Preview
 
 on:
@@ -117,6 +119,7 @@ jobs:
         run: |
           set -euo pipefail
           OWNER="${REPO_SLUG%%/*}"
+          REPO_NAME="${REPO_SLUG#*/}"
           TAG="pr-${PR_NUMBER}"
           # Путь API зависит от типа владельца: org — /orgs/<owner>/packages,
           # user-владелец — /user/packages от имени GITHUB_TOKEN (пакет,
@@ -129,13 +132,16 @@ jobs:
           # Не-тегированные версии — мусор от перезаписи тега на повторном push
           # (новая версия забирает тег, старая остаётся без тегов); писатель у
           # пакетов один — этот workflow, чужих не-тегированных версий нет.
-          for PKG in api web; do
-            VERSION_IDS=$(gh api "/${BASE}/container/${PKG}/versions" --paginate 2> /dev/null \
+          # Имя пакета образа ghcr.io/<owner>/<repo>/api — «<repo>/api» (с
+          # под-путём): в URL слэш кодируется (%2F), иначе API ищет «api».
+          for PKG_BASE in api web; do
+            PKG_ENC=$(printf '%s' "${REPO_NAME}/${PKG_BASE}" | jq -sRr @uri)
+            VERSION_IDS=$(gh api "/${BASE}/container/${PKG_ENC}/versions" --paginate 2> /dev/null \
               | jq -r --arg t "$TAG" \
                 '.[] | select((.metadata.container.tags | length == 0) or (.metadata.container.tags | index($t))) | .id') \
               || true
             for ID in $VERSION_IDS; do
-              echo "delete ${PKG} version ${ID}"
-              gh api -X DELETE "/${BASE}/container/${PKG}/versions/${ID}"
+              echo "delete ${PKG_BASE} version ${ID}"
+              gh api -X DELETE "/${BASE}/container/${PKG_ENC}/versions/${ID}"
             done
           done
