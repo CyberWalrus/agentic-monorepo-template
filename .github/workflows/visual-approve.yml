@@ -1,11 +1,20 @@
-# Доверенный workflow одобрения визуальных базлайнов (b3.1, ADR 0015).
+# Доверенный workflow одобрения визуальных базлайнов (b3.1, ADR 0015; e24).
 # Определение берётся из основной ветки (issue_comment всегда исполняет
-# дефолтную ветку), код PR не исполняется ни на одном шаге: checkout head —
-# только git-операции над деревом (копирование файлов артефакта и коммит),
-# никаких скриптов из дерева PR (З2, по образцу gate-integrity ADR 0002).
+# дефолтную ветку). Код PR не исполняется ни на одном шаге: до checkout head
+# исполняется только дерево дефолтной ветки (setup ставит зависимости по его
+# lockfile; post-save кэша setup-node для этого workflow отключён, чтобы не
+# писать store под ключом дефолтной ветки); после checkout head — только
+# git-операции и системные утилиты: зависимостей в PR-дереве не ставится
+# (node_modules оставлен доверенной установкой setup — untracked, переживает
+# checkout), git commit и push выполняются с LEFTHOOK=0 (доверенный CI-контур:
+# pre-commit/pre-push из дерева PR не запускаются); GH_TOKEN в env держится
+# только у шагов вызова gh CLI (токен нужен ему в окружении процесса) и у
+# шага push — fetch и push подставляют токен только в URL своей git-команды
+# (З2, ADR 0002).
 #
 # ЗАПРЕЩЕНО менять без режима обслуживания и ревью мейнтейнера. Запрещено:
-# - исполнять что-либо из PR (npm/pnpm/node-скрипты дерева PR);
+# - исполнять что-либо из PR (npm/pnpm/node-скрипты дерева PR, установка
+#   зависимостей после checkout head, прогон git hooks);
 # - коммитить пути вне канонических базлайнов: e2e/**/__screenshots__/*.webp,
 #   packages/ui/**/__screenshots__/*.png из артефакта;
 # - коммитить в ветку, отличную от head-ветки PR, или не на одобренный SHA.
@@ -22,6 +31,12 @@ concurrency:
   group: visual-approve-${{ github.event.issue.number }}
   cancel-in-progress: false
 
+# Права — необходимый минимум (e24): contents: write — push базлайнов в
+# head-ветку PR; actions: write — только диспатч ci.yml на новый head SHA
+# (перезапуски чужих прогонов workflow не делает); pull-requests: write —
+# ответы в ленте PR (отказ и итог). Step-level permissions GitHub не
+# поддерживает — сужение внутри job достигается отсутствием токена там, где он
+# не нужен (шаги checkout/commit без GH_TOKEN).
 permissions:
   contents: write
   actions: write
@@ -42,11 +57,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      # playwright: true — pre-push базлайна гоняет turbo test из дерева PR:
-      # @repo/ui#test — vitest browser mode, без Chromium пуш отклоняется
-      # (Executable doesn't exist, b12; продолжение фикса окружения #122).
+      # cache: false — post-save кэша setup-node не пишет pnpm store под ключом
+      # дефолтной ветки: workspace после доверенной установки получает checkout
+      # дерева PR, и собранное из PR-локфайла попало бы в кэш main (e24).
+      # Playwright не ставится: прогонов кода PR в джобе нет — pre-push turbo
+      # test, ради которого Chromium ставился (b12), отключён LEFTHOOK=0.
       - uses: $/.github/actions/setup
-        with: { playwright: 'true' }
+        with: { cache: 'false' }
 
       - name: Fetch comment and PR facts from GitHub API
         id: facts
@@ -100,13 +117,15 @@ jobs:
 
       # Дальше — только для валидного одобрения. checkout head SHA: git-операции
       # над деревом PR (копирование файлов артефакта и коммит), исполнения кода
-      # PR нет (З2).
+      # PR нет (З2): токен подставлен точечно в URL fetch, в env шага его нет
+      # (e24).
       - name: Checkout PR head without executing it
         if: success() && steps.approval.outputs.approved == 'true'
         run: |
           HEAD_SHA=$(jq -r .headRefOid pr.json)
-          # persist-credentials: false на первом checkout — токен явный.
-          git fetch --depth=1 "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$HEAD_SHA"
+          # persist-credentials: false на первом checkout — токен явный; он не в
+          # env шага, а подставлен только в URL этой команды (e24).
+          git fetch --depth=1 "https://x-access-token:${{ github.token }}@github.com/${REPO}.git" "$HEAD_SHA"
           git checkout "$HEAD_SHA"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -163,21 +182,18 @@ jobs:
           done < actuals/deleted.txt
           echo "Артефакт проверен: $(wc -l < actuals/files.txt) новых/изменённых, $(wc -l < actuals/deleted.txt) удалённых; headSha совпадает."
 
+      # Шаг коммита без токена: авторизации ему не нужны, а исполняемого из
+      # PR-дерева здесь нет — установка зависимостей запрещена (pnpm install
+      # после checkout head исполнял бы prepare-скрипт package.json PR —
+      # lefthook install, e24), LEFTHOOK=0 не даёт pre-commit запустить turbo
+      # по коду PR (e24).
       - name: Commit baselines to the PR branch
         if: success() && steps.approval.outputs.approved == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          LEFTHOOK: '0'
         run: |
           HEAD_SHA=$(jq -r .headRefOid pr.json)
-          BRANCH=$(jq -r .headRefName pr.json)
           LOGIN=$(jq -r .user.login comment.json)
-          case "$BRANCH" in
-            *[!A-Za-z0-9._/-]*|*..*) echo "Небезопасное имя ветки: ${BRANCH}" >&2; exit 1 ;;
-          esac
-          # lefthook pre-push гоняет boundaries (dependency-cruiser) — без
-          # node_modules все импорты «не резолвятся» (22× not-to-unresolvable,
-          # b12): push базлайна отклонялся. Устанавливаем зависимости до пуша.
-          pnpm install --frozen-lockfile
           while IFS= read -r file; do
             mkdir -p "$(dirname "$file")"
             cp "actuals/${file}" "$file"
@@ -188,6 +204,23 @@ jobs:
             git rm -q --ignore-unmatch "$file"
           done < actuals/deleted.txt
           git commit -m "visual baselines from CI (approved by @${LOGIN} on ${HEAD_SHA})"
+
+      # Push — единственный шаг с GH_TOKEN в env: токен нужен в URL push, env
+      # уже есть у шага по условию доверенного контура (e24); подстановка прямо
+      # в argv git была бы видна в ps. LEFTHOOK=0 — pre-push (turbo/boundaries
+      # по коду PR) не запускается: доверенный workflow пушит базлайны без
+      # прогонов кода PR (e24).
+      - name: Push baselines to the PR branch
+        if: success() && steps.approval.outputs.approved == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LEFTHOOK: '0'
+        run: |
+          HEAD_SHA=$(jq -r .headRefOid pr.json)
+          BRANCH=$(jq -r .headRefName pr.json)
+          case "$BRANCH" in
+            *[!A-Za-z0-9._/-]*|*..*) echo "Небезопасное имя ветки: ${BRANCH}" >&2; exit 1 ;;
+          esac
           # Push ровно в head-ветку PR. GITHUB_TOKEN push события не рождает —
           # CI на новый head SHA диспатчит следующий шаг. Полные гейты (в т.ч.
           # gate-integrity на новый SHA) человек запускает одним synchronize
