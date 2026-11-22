@@ -5,8 +5,11 @@
  * ошибку; правила типов ловит шаг typecheck, не oxlint).
  * CLAUDE_PROJECT_DIR — реальный репозиторий (oxlint/oxfmt из node_modules/.bin
  * и type-aware контекст). Пробник — dotfile в tools/hooks/: oxlint линтует его
- * по явному пути, а knip (шаг verify идёт ПАРАЛЛЕЛЬНО test:hooks) dotfiles не
- * видит — иначе «Unused files» гонка между шагами. Удаление в afterAll (пишет
+ * по явному пути, а knip dotfiles не видит — иначе «Unused files» гонка между
+ * шагами. Страховка от гонки на уровне оркестрации: test:hooks вынесен в
+ * serial-волну verify ДО деревосканирующих шагов (serialFast в
+ * verify-steps.ts), так что окно жизни пробника не пересекается со сканерами.
+ * Удаление в afterAll (пишет
  * сам тестовый процесс — агентские хуки на него не действуют, в CI хуков нет).
  */
 import { spawnSync } from 'node:child_process';

@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { diagnoseStep, failedStepBody, type StepDiagnostics } from './verify-diagnostics.ts';
 import { budgetMsFor, parseBudgets, type VerifyBudgets } from './verify-budgets-loader.ts';
-import { allStepNames, fast, post, slow, type Step } from './verify-steps.ts';
+import { allStepNames, fast, post, serialFast, slow, type Step } from './verify-steps.ts';
 
 interface StepResult {
   name: string;
@@ -59,6 +59,7 @@ if (only !== undefined) {
     process.exit(1);
   }
   const selected = (steps: Step[]): Step[] => steps.filter((step) => only.includes(step.name));
+  serialFast.splice(0, serialFast.length, ...selected(serialFast));
   fast.splice(0, fast.length, ...selected(fast));
   post.splice(0, post.length, ...selected(post));
   slow.splice(0, slow.length, ...selected(slow));
@@ -117,7 +118,15 @@ function run(step: Step): Promise<StepResult> {
 }
 
 const started = performance.now();
-const results = await Promise.all(fast.map(run));
+// Serial-волна ДО параллельной (см. serialFast в verify-steps.ts): test:hooks
+// пишет фикстуры в общее дерево и убирает их в afterAll — пока он шёл
+// параллельно со сканерами дерева (lint, knip, tool-class, sherif), те видели
+// мусор как дефект (флак verify). Последовательность закрывает окно.
+const results: StepResult[] = [];
+for (const step of serialFast) {
+  results.push(await run(step));
+}
+results.push(...(await Promise.all(fast.map(run))));
 if (results.every((result) => result.ok)) {
   for (const step of post) {
     results.push(await run(step));
