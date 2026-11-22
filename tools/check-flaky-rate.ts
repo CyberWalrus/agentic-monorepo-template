@@ -18,6 +18,10 @@
  * чтобы тот не пересчитывал rate сам и не разошёлся с гейтом.
  *
  * Выход: 0 — блокирующих нарушений нет; 1 — красный (лист причин в stderr).
+ *
+ * Отсутствующий или нечитаемый --report — exit 1 с названной причиной, без
+ * стека (З11): отсутствие данных не успех (З4) — e31, ночь 21.11 красила
+ * каскадом «ENOENT ... flake.json» без объяснения.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 
@@ -113,6 +117,32 @@ function parseQuarantine(raw: string, problems: string[]): QuarantineEntry[] {
   return entries;
 }
 
+/**
+ * Причина непрочитанного отчёта — одной строкой, без стека (З11). Различает
+ * «файла нет» (playwright-шаг не записал отчёт) и «файл не JSON» (прогон
+ * оборвался при записи или файл испорчен); системное сообщение сохраняется.
+ */
+function reportProblem(reportPath: string, error: unknown): string {
+  if (reportPath === '') {
+    return 'флаг --report не передан — путь к отчёту обязателен: --report e2e/reports/flake.json';
+  }
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error ? String(error['code']) : '';
+  const system = error instanceof Error ? error.message : String(error);
+  if (code === 'ENOENT') {
+    return (
+      `отчёт ${reportPath} отсутствует — playwright-шаг не записал flake.json ` +
+      '(прогон не запустился или упал до записи отчёта). flaky rate не вычислен: ' +
+      'отсутствие данных — не успех (З4), см. лог playwright-шага выше'
+    );
+  }
+  return (
+    `отчёт ${reportPath} не разбирается как JSON: ${system} — прогон оборвался во время ` +
+    'записи отчёта или файл испорчен. flaky rate не вычислен: отсутствие данных — ' +
+    'не успех (З4), см. лог playwright-шага выше'
+  );
+}
+
 function main(): void {
   const args = process.argv.slice(2);
   const flag = (name: string): string => {
@@ -137,7 +167,16 @@ function main(): void {
   const flakyOut = flag('--flaky-out');
   const reportPath = flag('--report');
   const repeat = Number(flag('--repeat')) || 5;
-  const report: unknown = JSON.parse(readFileSync(reportPath, 'utf8'));
+  // З11: отсутствие/битость отчёта — не стек, а названная причина; З4: exit 1 —
+  // отсутствие данных не успех (ночь 21.11: ENOENT каскадом после падения
+  // playwright-шага). До этой правки readFileSync/JSON.parse падали стеком.
+  let report: unknown;
+  try {
+    report = JSON.parse(readFileSync(reportPath, 'utf8'));
+  } catch (error: unknown) {
+    console.error(`flaky:\n- ${reportProblem(reportPath, error)}`);
+    process.exit(1);
+  }
   const tests: PlaywrightTestCase[] = [];
   // JSON-репорт Playwright: корень держит МАССИВ suites (не объект).
   const suites: unknown = isRecord(report) ? report['suites'] : undefined;
