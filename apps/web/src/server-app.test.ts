@@ -61,7 +61,9 @@ function makeProxyFetch() {
   });
 }
 
-function makeApp(overrides: { staticRoot?: string } = {}) {
+function makeApp(
+  overrides: { staticRoot?: string; compressedBodies?: Map<string, Uint8Array<ArrayBuffer>> } = {},
+) {
   const handler = makeHandler();
   const proxyFetch = makeProxyFetch();
   const app = createWebServerApp({
@@ -69,6 +71,11 @@ function makeApp(overrides: { staticRoot?: string } = {}) {
     staticRoot: overrides.staticRoot ?? staticRoot,
     handler,
     proxyFetch,
+    // exactOptionalPropertyTypes: ключ не передаётся вовсе, когда кэш не
+    // введён — иначе в опцию попадает undefined.
+    ...(overrides.compressedBodies === undefined
+      ? {}
+      : { compressedBodies: overrides.compressedBodies }),
   });
   return { app, handler, proxyFetch };
 }
@@ -434,6 +441,29 @@ describe('static files', () => {
     expect(response.headers.get('vary')).toBeNull();
     await expect(response.text()).resolves.toBe('fake-png-bytes');
   });
+
+  it('stores one compressed cache entry for two percent-encodings of one path', async () => {
+    // Ключ кэша — канонический путь файла, а не сырое pathname клиента:
+    // варианты кодирования одного URL (`%61` = `a`, подмножества и т.п.)
+    // декодируются в один файл, и ключ по сырому pathname давал бы запись
+    // (и синхронный gzipSync ~150KB) на каждый вариант без предела —
+    // memory/CPU-DoS (находка ревью PR #140).
+    const cache = new Map<string, Uint8Array<ArrayBuffer>>();
+    const { app } = makeApp({ compressedBodies: cache });
+    const gz = { headers: { 'accept-encoding': 'gzip' } };
+
+    const plain = await app.request('http://web.local/assets/app-abc123.js', gz);
+    const encoded = await app.request('http://web.local/assets/%61pp-abc123.js', gz);
+
+    expect(plain.headers.get('content-encoding')).toBe('gzip');
+    expect(encoded.headers.get('content-encoding')).toBe('gzip');
+    // Один файл — одна запись кэша и одно сжатие на оба варианта.
+    expect(cache.size).toBe(1);
+    const plainBody = new Uint8Array(await plain.arrayBuffer());
+    const encodedBody = new Uint8Array(await encoded.arrayBuffer());
+    expect(encodedBody).toEqual(plainBody);
+    expect(gunzipSync(plainBody).toString('utf8')).toBe('console.log("app")');
+  });
 });
 
 describe('acceptsGzip', () => {
@@ -471,6 +501,13 @@ describe('fallback to the TanStack Start handler', () => {
 describe('resolveStaticFile', () => {
   it('returns null for the root itself', async () => {
     expect(await resolveStaticFile(staticRoot, '/')).toBeNull();
+  });
+
+  it('canonicalizes percent-encodings to the same resolved path (cache key)', async () => {
+    const plain = await resolveStaticFile(staticRoot, '/assets/app-abc123.js');
+    const encoded = await resolveStaticFile(staticRoot, '/assets/%61pp-%61bc123.js');
+    expect(plain?.resolvedPath).toBe(encoded?.resolvedPath);
+    expect(plain?.resolvedPath).toContain('app-abc123.js');
   });
 
   it('returns null for a path outside the root before touching the filesystem', async () => {
