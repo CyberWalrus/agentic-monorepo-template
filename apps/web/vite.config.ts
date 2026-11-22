@@ -4,14 +4,16 @@ import { defineConfig, type Plugin } from 'vite';
 
 /**
  * Прокси `/rpc` на API (ADR 0005): браузер ходит в свой origin, сборка не
- * зависит от адреса API. Адрес и порт приходят при старте процесса dev/preview
- * (env `API_URL` и флаг `--port` от `pnpm dev`/e2e-конфига), не при сборке: у
+ * зависит от адреса API. Адрес и порт приходят при старте dev/preview-процесса
+ * (env `API_URL` и флаг `--port` от `pnpm dev`), не при сборке: у
  * команды `build` прокси пуст, поэтому два прогона сборки с разными `API_URL`
  * дают одинаковый `dist` (скан запечённых адресов — в шаге `bundle`). Проверено
  * эмпирически (2026-11-13): и preview, и dev прокси перехватывает `/rpc`
  * раньше SSR-обработчика TanStack Start. Проксируется только `/rpc`:
  * `/health` и `/__test__/*` через web недоступны (e2e-тест закрепляет),
- * фикстуры и k6 ходят в API напрямую.
+ * фикстуры и k6 ходят в API напрямую. E2E и перф гейтами идут через
+ * production-entry (C3.4), у которого свой прокси — в `src/server-app.ts`;
+ * этот vite-прокси — механика `pnpm dev`/`vite preview`.
  */
 export default defineConfig(({ command }) => {
   // Проверка в хуках сервера, а не в конфиге: конфиг загружают и knip, и сборка —
@@ -20,7 +22,7 @@ export default defineConfig(({ command }) => {
     command === 'build'
       ? {}
       : { '/rpc': { target: process.env['API_URL'] ?? '', changeOrigin: false } };
-  // Порт — от --port (pnpm dev / e2e-конфиг): фиксированных портов нет (З9).
+  // Порт — от --port (pnpm dev): фиксированных портов нет (З9).
   // host фиксирован: URL гейтов — 127.0.0.1, localhost двусмысленен (vite может
   // слушаться только на ::1, а poll пойдёт на IPv4).
   return {

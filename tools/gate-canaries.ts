@@ -418,42 +418,58 @@ export const CANARIES: GateCanary[] = [
     // Без прокси браузерный fetch `/rpc` попадает в SSR-обработчик Start и
     // функции API недоступны: падают ВСЕ клиентские тесты, в хвосте вывода
     // Playwright остаётся «N failed» с N ≥ 2 — массовое падение отличает
-    // канарейку от одиночного флака (ADR 0005).
+    // канарейку от одиночного флака (ADR 0005). Прокси, который под тестом,
+    // — production (C3.4: e2e webServer стартует `node server.ts`), поэтому
+    // якорь — регистрация роутов в server-app.ts; vite-прокси dev/preview
+    // e2e больше не красит (роут /rpc перекрыт до '*' -обработчиков).
     name: 'прокси /rpc удалён',
     steps: 'e2e',
     full: true,
     failedStep: 'e2e',
     expect: /([2-9]|\d{2,})\s+failed/,
     apply: (root) => {
-      const path = join(root, 'apps/web/vite.config.ts');
+      const path = join(root, 'apps/web/src/server-app.ts');
       const source = readFileSync(path, 'utf8');
-      const stripped = source.replaceAll('proxy: rpcProxy', 'proxy: undefined');
-      if (stripped === source) {
-        throw new Error('canary anchor not found: apps/web/vite.config.ts has no rpcProxy');
+      const routeRpc = `app.all('/rpc', proxyRpc);`;
+      const routeRpcSub = `app.all('/rpc/*', proxyRpc);`;
+      if (!source.includes(routeRpc) || !source.includes(routeRpcSub)) {
+        throw new Error(
+          'canary anchor not found: apps/web/src/server-app.ts has no /rpc route registration',
+        );
       }
+      // Роуты переименовываются, а не удаляются: proxyRpc остаётся занятым,
+      // файл остаётся линт-чистым, а /rpc уходит в '*' -обработчики (SSR) —
+      // тот же режим массового падения, что у удаления vite-прокси.
+      const stripped = source
+        .replaceAll(routeRpc, `app.all('/__canary_no_rpc__', proxyRpc);`)
+        .replaceAll(routeRpcSub, `app.all('/__canary_no_rpc__/*', proxyRpc);`);
       writeFileSync(path, stripped);
     },
   },
   {
     // Правило «через web-origin доступен только /rpc» (ADR 0005) закреплено
     // e2e-тестом api-origin; канарейка гарантирует, что тест не перестанет
-    // ловить: добавленный в прокси /__test__ красит e2e его тестом. Якорь —
-    // заголовок теста: он остаётся в хвосте вывода Playwright, текст ассерта
-    // вылетает из 60 строк (наблюдалось в первом прогоне этой канарейки).
+    // ловить: добавленный в прокси production-сервера (server-app.ts, C3.4 —
+    // e2e webServer стартует `node server.ts`) /__test__ красит e2e его
+    // тестом: путь уходит на API, тест видит его ответ вместо 404 web.
+    // Якорь — заголовок теста: он остаётся в хвосте вывода Playwright, текст
+    // ассерта вылетает из 60 строк (наблюдалось в первом прогоне канарейки).
     name: '/__test__ добавлен в прокси',
     steps: 'e2e',
     full: true,
     failedStep: 'e2e',
     expect: /test API is not reachable through the web origin/,
     apply: (root) => {
-      const path = join(root, 'apps/web/vite.config.ts');
+      const path = join(root, 'apps/web/src/server-app.ts');
       const source = readFileSync(path, 'utf8');
       const leaked = source.replaceAll(
-        "'/rpc': { target: process.env['API_URL'] ?? '', changeOrigin: false }",
-        "'/rpc': { target: process.env['API_URL'] ?? '', changeOrigin: false },\n    '/__test__': { target: process.env['API_URL'] ?? '', changeOrigin: false },",
+        `app.all('/rpc', proxyRpc);`,
+        `app.all('/rpc', proxyRpc);\n  app.all('/__test__', proxyRpc);\n  app.all('/__test__/*', proxyRpc);`,
       );
       if (leaked === source) {
-        throw new Error('canary anchor not found: apps/web/vite.config.ts has no /rpc proxy entry');
+        throw new Error(
+          'canary anchor not found: apps/web/src/server-app.ts has no /rpc route registration',
+        );
       }
       writeFileSync(path, leaked);
     },
