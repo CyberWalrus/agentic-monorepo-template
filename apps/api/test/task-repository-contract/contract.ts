@@ -202,4 +202,108 @@ export const taskRepositoryContractChecks: readonly TaskRepositoryContractCheck[
       expect(await repository.list()).toEqual([]);
     },
   },
+  {
+    // Рабочие пространства (ADR 0020): изоляция E2E-сценариев на уровне домена.
+    name: 'list without a workspace shows only workspaceless tasks',
+    check: async (repository) => {
+      const ownerless = seededTask();
+      const scoped = seededTask();
+      await repository.reset([ownerless]);
+      await repository.reset([scoped], 'ws-a');
+
+      expect(await repository.list()).toEqual([ownerless]);
+    },
+  },
+  {
+    name: 'list scopes tasks to their workspace',
+    check: async (repository) => {
+      const first = seededTask();
+      const second = seededTask();
+      await repository.reset([first], 'ws-a');
+      await repository.reset([second], 'ws-b');
+
+      expect(await repository.list('ws-a')).toEqual([first]);
+      expect(await repository.list('ws-b')).toEqual([second]);
+      expect(await repository.list()).toEqual([]);
+    },
+  },
+  {
+    name: 'reset with a workspace replaces only that workspace',
+    check: async (repository) => {
+      const replaced = seededTask();
+      await repository.reset([replaced], 'ws-a');
+      const neighbour = seededTask();
+      await repository.reset([neighbour], 'ws-b');
+
+      const fresh = seededTask({ createdAt: '2026-01-01T00:00:00.000Z' });
+      await repository.reset([fresh], 'ws-a');
+
+      expect(await repository.list('ws-a')).toEqual([fresh]);
+      expect(await repository.list('ws-b')).toEqual([neighbour]);
+    },
+  },
+  {
+    name: 'toggle and remove outside the workspace scope resolve undefined and leave the store',
+    check: async (repository) => {
+      const seeded = seededTask();
+      await repository.reset([seeded], 'ws-a');
+
+      await expect(repository.toggle(seeded.id)).resolves.toBeUndefined();
+      await expect(repository.toggle(seeded.id, 'ws-b')).resolves.toBeUndefined();
+      await expect(repository.remove(seeded.id, 'ws-b')).resolves.toBeUndefined();
+
+      expect(await repository.list('ws-a')).toEqual([seeded]);
+    },
+  },
+  {
+    // Класс коллизии seed-данных (план-ревью c1.5): идентичные id в параллельных
+    // workspace должны отказывать громко в обеих реализациях, а не затирать
+    // соседа (InMemory Map) или падать PK-исключением только на Postgres.
+    name: 'reset rejects seed ids already used by another workspace',
+    check: async (repository) => {
+      const clash = seededTask();
+      await repository.reset([clash], 'ws-a');
+
+      await expect(
+        repository.reset([seededTask({ id: clash.id, title: 'imposter' })], 'ws-b'),
+      ).rejects.toThrow(/unique across workspaces/);
+
+      expect(await repository.list('ws-a')).toEqual([clash]);
+      expect(await repository.list('ws-b')).toEqual([]);
+    },
+  },
+  {
+    // Повторный seed своего workspace с теми же id — легальная замена строк
+    // (visual/perf сеют перед каждым сценарием); только чужой scope — отказ.
+    name: 'reset with the same ids in the same workspace replaces the rows',
+    check: async (repository) => {
+      const seeded = seededTask({ completed: false });
+      await repository.reset([seeded], 'ws-a');
+
+      const retoggled = seededTask({ id: seeded.id, completed: true });
+      await repository.reset([retoggled], 'ws-a');
+
+      expect(await repository.list('ws-a')).toEqual([retoggled]);
+    },
+  },
+  {
+    name: 'reset rejects duplicate ids within one seed',
+    check: async (repository) => {
+      const seeded = seededTask();
+
+      await expect(
+        repository.reset([seeded, seededTask({ id: seeded.id, title: 'twin' })], 'ws-a'),
+      ).rejects.toThrow(/Duplicate task id within one seed/);
+    },
+  },
+  {
+    name: 'create records the workspace and the list scopes by it',
+    check: async (repository) => {
+      const created = await repository.create('Workspace task', null, 'ws-a');
+
+      expect((await repository.list('ws-a')).map((task) => task.id)).toEqual([created.id]);
+      expect(await repository.list('ws-b')).toEqual([]);
+      expect(await repository.list()).toEqual([]);
+    },
+  },
 ];

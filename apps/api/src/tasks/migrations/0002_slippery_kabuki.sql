@@ -1,0 +1,1 @@
+ALTER TABLE "tasks" ADD COLUMN "workspace_id" text;

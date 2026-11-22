@@ -55,7 +55,12 @@ function setup(context: Pick<AppContext, 'actor' | 'ownerOf'>) {
     noPolicyEcho: os.noPolicyEcho.handler(domain),
   });
 
-  const fullContext: AppContext = { tasks: new InMemoryTaskRepository(), ...context };
+  const fullContext: AppContext = {
+    tasks: new InMemoryTaskRepository(),
+    // Скоупинг рабочего пространства — вне этого теста (app.test.ts, ADR 0020).
+    workspaceId: null,
+    ...context,
+  };
   const clientOf = (proc: keyof typeof router) =>
     createProcedureClient(router[proc], { context: fullContext });
 

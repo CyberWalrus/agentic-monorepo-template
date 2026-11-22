@@ -1,3 +1,5 @@
+import { readdirSync } from 'node:fs';
+
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -20,7 +22,10 @@ import {
 const CONTAINER_TIMEOUT_MS = 120_000;
 // Столько файлов миграций в taskMigrationsFolder: журнал после полного
 // применения обязан содержать ровно столько записей (ровно один раз).
-const MIGRATION_COUNT = 2;
+// Число считается от каталога: новая миграция не требует правки теста.
+const MIGRATION_COUNT = readdirSync(taskMigrationsFolder).filter((name) =>
+  name.endsWith('.sql'),
+).length;
 // Грэйс негативного утверждения «миграция ещё не началась»: покуда держатель
 // не отпустил advisory-лок, мигратор не может пойти дальше — это свойство
 // Postgres, а не тайминг. 500 мс достаточно соединению установиться.

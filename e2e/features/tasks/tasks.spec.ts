@@ -1,4 +1,4 @@
-import { API_URL, expect, test } from '../../fixtures.ts';
+import { API_URL, expect, test, WORKSPACE_HEADER } from '../../fixtures.ts';
 
 test.describe('tasks', () => {
   test('creates a task and shows it in the list [AC-1] @critical', async ({
@@ -59,9 +59,15 @@ test.describe('tasks', () => {
       page,
       request,
       uniqueTitle,
+      workspace,
     }) => {
       const title = uniqueTitle('Rendered on the server');
-      const response = await request.post(`${API_URL}/api/tasks`, { data: { title } });
+      // Данные сценария — в его рабочем пространстве (ADR 0020): страница
+      // скопирована тем же заголовком и видит их в SSR.
+      const response = await request.post(`${API_URL}/api/tasks`, {
+        data: { title },
+        headers: { [WORKSPACE_HEADER]: workspace },
+      });
       expect(response.ok()).toBe(true);
 
       await page.goto('/');
@@ -73,9 +79,13 @@ test.describe('tasks', () => {
       page,
       request,
       uniqueTitle,
+      workspace,
     }) => {
       const title = uniqueTitle('Pre-hydration probe');
-      const response = await request.post(`${API_URL}/api/tasks`, { data: { title } });
+      const response = await request.post(`${API_URL}/api/tasks`, {
+        data: { title },
+        headers: { [WORKSPACE_HEADER]: workspace },
+      });
       expect(response.ok()).toBe(true);
 
       await page.goto('/');

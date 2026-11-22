@@ -22,7 +22,7 @@ import {
   type PerfReport,
   type ScenarioMetrics,
 } from '../../tools/perf-metrics.ts';
-import { expect, makeTasks, SHARED_DATA_LOCK, test } from '../fixtures.ts';
+import { expect, makeTasks, test, WORKSPACE_HEADER } from '../fixtures.ts';
 
 const budgets = loadPerfBudgets();
 
@@ -118,8 +118,18 @@ interface LoadingFinishedEvent {
  * Холодная загрузка `/` в свежем контексте (пустой кэш): счётчики запросов и
  * wire-байты через CDP. С троттлингом — плюс LCP (вес страницы влияет на время).
  */
-async function coldLoad(browser: Browser, baseURL: string, throttle: boolean): Promise<ColdLoad> {
-  const context = await browser.newContext({ baseURL });
+async function coldLoad(
+  browser: Browser,
+  baseURL: string,
+  throttle: boolean,
+  workspace: string,
+): Promise<ColdLoad> {
+  // Тот же workspace, что у сценария (ADR 0020): иначе холодная загрузка
+  // видела бы «ничей» (пустой) список и LCP под Fast 3G мерял бы пустую страницу.
+  const context = await browser.newContext({
+    baseURL,
+    extraHTTPHeaders: { [WORKSPACE_HEADER]: workspace },
+  });
   const page = await context.newPage();
   const cdp: CDPSession = await page.context().newCDPSession(page);
   await cdp.send('Network.enable');
@@ -195,8 +205,8 @@ async function readLongTasks(page: Page): Promise<number> {
 test.describe.configure({ mode: 'serial' });
 
 // Каждый тест сеет свои данные: повторы (--repeat-each) и retries не зависят от порядка.
-test.beforeEach(async ({ page, seedTasks }) => {
-  await seedTasks(makeTasks(20));
+test.beforeEach(async ({ page, seedTasks, workspace }) => {
+  await seedTasks(makeTasks(20, workspace));
   // Эмуляция среднего устройства: регрессии в JS заметнее, чем на быстрой машине разработчика.
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: CPU_THROTTLING_RATE });
@@ -251,8 +261,15 @@ test.afterAll(async () => {
   await writeFile('reports/perf.json', `${JSON.stringify(report, null, 2)}\n`);
 });
 
-test.describe('perf budgets', { lock: SHARED_DATA_LOCK }, () => {
-  test('page "/" stays within web vitals budget', async ({ page, browser, baseURL }, testInfo) => {
+// Изоляция по рабочему пространству (ADR 0020): общий lock SHARED_DATA_LOCK
+// снят. Внутрифайловая сериализация остаётся — чистота замеров, не изоляция.
+test.describe('perf budgets', () => {
+  test('page "/" stays within web vitals budget', async ({
+    page,
+    browser,
+    baseURL,
+    workspace,
+  }, testInfo) => {
     const budget = budgetFor(budgets.web.pages, '/');
     await page.goto('/'); // прогрев
     const samples: { ttfb: number; lcp: number; cls: number }[] = [];
@@ -264,8 +281,8 @@ test.describe('perf budgets', { lock: SHARED_DATA_LOCK }, () => {
     const cold: ColdLoad[] = [];
     const net: ColdLoad[] = [];
     for (let i = 0; i < COLD_SAMPLES; i++) {
-      net.push(await coldLoad(browser, baseURL ?? '/', false));
-      cold.push(await coldLoad(browser, baseURL ?? '/', true));
+      net.push(await coldLoad(browser, baseURL ?? '/', false, workspace));
+      cold.push(await coldLoad(browser, baseURL ?? '/', true, workspace));
     }
 
     const measured = {

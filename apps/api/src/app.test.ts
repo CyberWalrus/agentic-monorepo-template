@@ -25,12 +25,15 @@ function setup({
   log,
   bodyLimitBytes,
   requestTimeoutMs,
+  workspace,
 }: {
   enableTestApi?: boolean;
   instanceId?: string;
   log?: LogSink;
   bodyLimitBytes?: number;
   requestTimeoutMs?: number;
+  /** Заголовок `x-workspace-id` клиента (ADR 0020); undefined — запрос без заголовка. */
+  workspace?: string;
 } = {}) {
   const app = createApp({
     tasks: new InMemoryTaskRepository(),
@@ -42,7 +45,11 @@ function setup({
     ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }),
   });
   const client: ContractRouterClient<Contract> = createORPCClient(
-    new RPCLink({ url: 'http://api.test/rpc', fetch: async (request) => app.fetch(request) }),
+    new RPCLink({
+      url: 'http://api.test/rpc',
+      fetch: async (request) => app.fetch(request),
+      ...(workspace === undefined ? {} : { headers: { 'x-workspace-id': workspace } }),
+    }),
   );
   return { app, client };
 }
@@ -75,6 +82,129 @@ describe('RPC transport', () => {
 
     expect(error).toBeInstanceOf(ORPCError);
     expect(error).toMatchObject({ code: 'NOT_FOUND', message: 'Resource not found' });
+  });
+});
+
+describe('workspace scoping (ADR 0020)', () => {
+  it('scopes RPC procedures to the workspace of the request header', async () => {
+    const scoped = setup({ workspace: 'ws-a' });
+    const ownerless = setup();
+
+    const created = await scoped.client.tasks.create({ title: 'In workspace' });
+
+    expect(await scoped.client.tasks.list()).toEqual([created]);
+    // Запрос без заголовка — «ничей» scope: рабочие пространства невидимы.
+    expect(await ownerless.client.tasks.list()).toEqual([]);
+  });
+
+  it('treats a malformed workspace header as the ownerless scope', async () => {
+    const app = createApp({ tasks: new InMemoryTaskRepository(), enableTestApi: true });
+    const clientWith = (workspace?: string): ContractRouterClient<Contract> =>
+      createORPCClient(
+        new RPCLink({
+          url: 'http://api.test/rpc',
+          fetch: async (request) => app.fetch(request),
+          ...(workspace === undefined ? {} : { headers: { 'x-workspace-id': workspace } }),
+        }),
+      );
+    const seeded = {
+      id: '00000000-0000-4000-8000-000000000001',
+      title: 'Ownerless',
+      completed: false,
+      createdAt: '2026-11-01T10:00:00.000Z',
+    };
+    await app.request('/__test__/reset', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tasks: [seeded] }),
+    });
+
+    // Мусорный заголовок не становится ключом данных: тот же «ничей» scope,
+    // что и у запроса без заголовка (ADR 0020).
+    expect(await clientWith('bad value with spaces').tasks.list()).toEqual([seeded]);
+    expect(await clientWith().tasks.list()).toEqual([seeded]);
+    expect(await clientWith('ws-a').tasks.list()).toEqual([]);
+  });
+
+  it('seeds into the workspace of the reset header and leaves other scopes intact', async () => {
+    const tasks = new InMemoryTaskRepository();
+    const app = createApp({ tasks, enableTestApi: true });
+    const clientFor = (workspace?: string): ContractRouterClient<Contract> =>
+      createORPCClient(
+        new RPCLink({
+          url: 'http://api.test/rpc',
+          fetch: async (request) => app.fetch(request),
+          ...(workspace === undefined ? {} : { headers: { 'x-workspace-id': workspace } }),
+        }),
+      );
+    const seeded = {
+      id: '00000000-0000-4000-8000-000000000001',
+      title: 'Seeded',
+      completed: false,
+      createdAt: '2026-11-01T10:00:00.000Z',
+    };
+
+    const response = await app.request('/__test__/reset', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-workspace-id': 'ws-a' },
+      body: JSON.stringify({ tasks: [seeded] }),
+    });
+
+    expect(response.status).toBe(204);
+    expect(await clientFor('ws-a').tasks.list()).toEqual([seeded]);
+    // Соседнее рабочее пространство и «ничей» scope ничего не видят.
+    expect(await clientFor('ws-b').tasks.list()).toEqual([]);
+    expect(await clientFor().tasks.list()).toEqual([]);
+  });
+
+  it('keeps the headerless reset a global wipe for point scenarios', async () => {
+    const scoped = setup({ enableTestApi: true, workspace: 'ws-a' });
+    await scoped.app.request('/__test__/reset', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-workspace-id': 'ws-a' },
+      body: JSON.stringify({
+        tasks: [
+          {
+            id: '00000000-0000-4000-8000-000000000001',
+            title: 'Seeded',
+            completed: false,
+            createdAt: '2026-11-01T10:00:00.000Z',
+          },
+        ],
+      }),
+    });
+
+    const response = await scoped.app.request('/__test__/reset', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tasks: [] }),
+    });
+
+    expect(response.status).toBe(204);
+    expect(await scoped.client.tasks.list()).toEqual([]);
+  });
+
+  it('answers NOT_FOUND for a task of another workspace', async () => {
+    const tasks = new InMemoryTaskRepository();
+    const app = createApp({ tasks });
+    const clientFor = (workspace?: string): ContractRouterClient<Contract> =>
+      createORPCClient(
+        new RPCLink({
+          url: 'http://api.test/rpc',
+          fetch: async (request) => app.fetch(request),
+          ...(workspace === undefined ? {} : { headers: { 'x-workspace-id': workspace } }),
+        }),
+      );
+    const created = await clientFor('ws-a').tasks.create({ title: 'Foreign' });
+
+    const error = await clientFor('ws-b')
+      .tasks.toggle({ id: created.id })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ORPCError);
+    expect(error).toMatchObject({ code: 'NOT_FOUND' });
+    // Своя задача не потерялась: чужой toggle её не задел.
+    expect(await clientFor('ws-a').tasks.list()).toEqual([created]);
   });
 });
 

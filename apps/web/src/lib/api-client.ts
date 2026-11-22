@@ -18,7 +18,28 @@ import { apiBaseUrl } from './env.ts';
  */
 const rpcUrl = () => `${apiBaseUrl()}/rpc`;
 
-const api: ContractRouterClient<Contract> = createORPCClient(new RPCLink({ url: rpcUrl }));
+/**
+ * Точка внедрения SSR-fetch (ADR 0020): server entry (`src/server.ts`)
+ * регистрирует реализацию, добавляющую workspace документа-запроса к запросам
+ * к API — SSR ходит напрямую, мимо прокси (ADR 0005), и без заголовка
+ * префетчил бы «ничей» (пустой) список. В браузере регистрация не происходит:
+ * модуль ssr-workspace импортирует только серверная точка входа, клиентский
+ * бандл его не содержит вовсе (гейт `bundle`), а заголовок приносит сам
+ * браузерный контекст (E2E — extraHTTPHeaders).
+ */
+let ssrFetchImpl: typeof fetch | null = null;
+
+export function registerSsrFetch(impl: typeof fetch): void {
+  ssrFetchImpl = impl;
+}
+
+const rpcFetch: typeof fetch = (input, init) =>
+  ssrFetchImpl === null ? fetch(input, init) : ssrFetchImpl(input, init);
+
+/** oRPC-клиент контракта: экспортирован для node-тестов SSR-регистрации. */
+export const api: ContractRouterClient<Contract> = createORPCClient(
+  new RPCLink({ url: rpcUrl, fetch: rpcFetch }),
+);
 
 /** Ключи и опции TanStack Query, выведенные из контракта. */
 export const orpc = createTanstackQueryUtils(api);
