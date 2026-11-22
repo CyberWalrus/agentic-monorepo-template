@@ -4,7 +4,7 @@ import type { ContractRouterClient } from '@orpc/contract';
 import { createTanstackQueryUtils } from '@orpc/tanstack-query';
 import type { Contract } from '@repo/contracts';
 
-import { apiBaseUrl } from './env.ts';
+import { apiBaseUrl, isSsr } from './env.ts';
 
 /**
  * Один origin (ADR 0005): браузер ходит в `/rpc` своего web-сервера (прокси на
@@ -18,7 +18,25 @@ import { apiBaseUrl } from './env.ts';
  */
 const rpcUrl = () => `${apiBaseUrl()}/rpc`;
 
-const api: ContractRouterClient<Contract> = createORPCClient(new RPCLink({ url: rpcUrl }));
+/**
+ * SSR ходит в API напрямую (ADR 0005), мимо прокси: workspace документа-запроса
+ * добавляется в этой точке (ADR 0020), иначе лоадер `/` префетчит «ничей»
+ * (пустой) список. Браузерная ветка — обычный fetch: заголовок приносит сам
+ * браузерный контекст (E2E — extraHTTPHeaders; продуктовые клиенты — свои
+ * механизмы по мере появления арендаторов). Серверная ветка с модулем
+ * ssr-workspace выбрасывается из клиентского бандла tree-shaking'ом
+ * (SSR-флаг из env-модуля — гейт `bundle`).
+ */
+const rpcFetch: typeof fetch = (input, init) => {
+  if (!isSsr()) {
+    return fetch(input, init);
+  }
+  return import('./ssr-workspace.ts').then(({ ssrFetch }) => ssrFetch(input, init));
+};
+
+const api: ContractRouterClient<Contract> = createORPCClient(
+  new RPCLink({ url: rpcUrl, fetch: rpcFetch }),
+);
 
 /** Ключи и опции TanStack Query, выведенные из контракта. */
 export const orpc = createTanstackQueryUtils(api);
