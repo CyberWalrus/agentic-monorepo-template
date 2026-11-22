@@ -64,7 +64,7 @@ docker run -p 3000:3000 -e API_URL=http://host.docker.internal:3877 template-web
 docker run --add-host=host.docker.internal:host-gateway -p 3000:3000 -e API_URL=http://host.docker.internal:3877 template-web
 ```
 
-E2E и перф пока гоняют `vite preview` (защищённый `e2e/playwright.config.ts`); перевод их на production-entry — задача C3.4, CI-сборка образов — C3.3.
+E2E, перф и визуальные тесты поднимают приложения тем же production-entry, что деплоится (e2e webServer — `pnpm --filter @repo/web start:prod`, C3.4); `vite preview` и dev-серверы — только интерактивная разработка. CI-сборка образов — C3.3.
 
 ## Стек
 

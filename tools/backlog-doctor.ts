@@ -218,15 +218,24 @@ function maintenanceFiles(branchAgeHours: Map<string, number>): MaintenanceFile[
     }
     return { hasOpenPr: prHeads?.has(`task/${taskId}`) ?? false, prUnknown: prHeads === null };
   };
-  if (existsSync(path.join(mainRoot, '.claude', 'settings.local.json'))) {
-    files.push({
-      where: mainRoot,
-      main: true,
-      taskId: null,
-      hasOpenPr: false,
-      prUnknown: false,
-      idleHours: null,
-    });
+  // Оба вида файлов режима (ADR 0009): полный settings.local.json и по областям
+  // .claude/maintenance.json (b9) — забытые окни той же природы.
+  const MODE_FILES = [
+    { name: 'settings.local.json', kind: 'settings-local.json' },
+    { name: 'maintenance.json', kind: 'maintenance.json' },
+  ] as const;
+  for (const mode of MODE_FILES) {
+    if (existsSync(path.join(mainRoot, '.claude', mode.name))) {
+      files.push({
+        where: mainRoot,
+        main: true,
+        taskId: null,
+        file: mode.kind,
+        hasOpenPr: false,
+        prUnknown: false,
+        idleHours: null,
+      });
+    }
   }
   const porcelain = tryGit('worktree', 'list', '--porcelain');
   if (porcelain === null) {
@@ -238,11 +247,12 @@ function maintenanceFiles(branchAgeHours: Map<string, number>): MaintenanceFile[
   let currentPath: string | null = null;
   let currentTask: string | null = null;
   const flush = (): void => {
-    if (
-      currentPath === null ||
-      currentPath === mainRoot ||
-      !existsSync(path.join(currentPath, '.claude', 'settings.local.json'))
-    ) {
+    if (currentPath === null || currentPath === mainRoot) {
+      return;
+    }
+    const worktree = currentPath;
+    const found = MODE_FILES.find((mode) => existsSync(path.join(worktree, '.claude', mode.name)));
+    if (found === undefined) {
       return;
     }
     if (currentTask === null) {
@@ -252,6 +262,7 @@ function maintenanceFiles(branchAgeHours: Map<string, number>): MaintenanceFile[
         where: currentPath,
         main: false,
         taskId: null,
+        file: found.kind,
         hasOpenPr: false,
         prUnknown: false,
         idleHours: null,
@@ -263,6 +274,7 @@ function maintenanceFiles(branchAgeHours: Map<string, number>): MaintenanceFile[
       where: currentPath,
       main: false,
       taskId: currentTask,
+      file: found.kind,
       hasOpenPr: pr.hasOpenPr,
       prUnknown: pr.prUnknown,
       idleHours: branchAgeHours.get(currentTask) ?? null,

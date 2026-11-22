@@ -14,6 +14,7 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
+import { diagnoseStep, failedStepBody, type StepDiagnostics } from './verify-diagnostics.ts';
 import { budgetMsFor, parseBudgets, type VerifyBudgets } from './verify-budgets-loader.ts';
 import { allStepNames, fast, post, slow, type Step } from './verify-steps.ts';
 
@@ -23,6 +24,13 @@ interface StepResult {
   durationMs: number;
   command: string;
   output: string;
+  /**
+   * Компактная диагностика «файл, строка, сообщение» (b9) — только у упавших
+   * шагов с машиночитаемым источником. Контракт: output остаётся сырым хвостом
+   * во всех режимах (канарейки и потребители матчат его); diagnostics —
+   * отдельное поле. Отсутствует, если источника нет или он устарел.
+   */
+  diagnostics?: StepDiagnostics;
   budgetMs?: number;
   overBudget?: boolean;
 }
@@ -66,22 +74,44 @@ if (only !== undefined) {
 
 function run(step: Step): Promise<StepResult> {
   const started = performance.now();
+  // Стена запуска шага для проверки свежести отчётов (verify-diagnostics):
+  // отчёт, записанный раньше, — остаток прошлого прогона.
+  const startedMs = Date.now();
   return new Promise((resolve) => {
     const child = spawn(step.command, step.args, {
-      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+      env: {
+        ...process.env,
+        FORCE_COLOR: '0',
+        NO_COLOR: '1',
+        // Телеметрия turbo стучится на telemetry.vercel.com — в песочнице это
+        // отказ сети в выводе шага (аудит b9). CI задаёт её сам; локальному
+        // прогону verify глушим здесь. Прямой `pnpm turbo run *` мимо verify
+        // не покрывается — осознанный объём задачи.
+        TURBO_TELEMETRY_DISABLED: '1',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    let output = '';
-    child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
-    child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString()));
+    let stepOutput = '';
+    child.stdout.on('data', (chunk: Buffer) => (stepOutput += chunk.toString()));
+    child.stderr.on('data', (chunk: Buffer) => (stepOutput += chunk.toString()));
     child.on('close', (code) => {
-      resolve({
+      const result: StepResult = {
         name: step.name,
         ok: code === 0,
         durationMs: Math.round(performance.now() - started),
         command: [step.command, ...step.args].join(' '),
-        output: output.split('\n').slice(-TAIL_LINES).join('\n').trim(),
-      });
+        // output — прежний хвост TAIL_LINES: контракт --json не меняется (b9).
+        output: stepOutput.split('\n').slice(-TAIL_LINES).join('\n').trim(),
+      };
+      if (!result.ok) {
+        // Диагностика считается по ПОЛНОМУ выводу (хвост мог отрезать ранние
+        // строки), а хранится отдельно — поле output не растёт.
+        const diagnostics = diagnoseStep(step, stepOutput, startedMs, process.cwd());
+        if (diagnostics !== null) {
+          result['diagnostics'] = diagnostics;
+        }
+      }
+      resolve(result);
     });
   });
 }
@@ -184,7 +214,9 @@ if (json) {
   );
 } else {
   for (const result of results.filter((r) => !r.ok)) {
-    console.log(`\n── ${result.name} failed: ${result.command}\n${result.output}`);
+    // Список «файл, строка, сообщение» вместо хвоста — только в текстовом
+    // выводе и только когда диагностика есть; иначе прежний хвост (b9).
+    console.log(`\n── ${result.name} failed: ${result.command}\n${failedStepBody(result)}`);
   }
   // Warning-only шаги (test-count) зелёные, но их предупреждения агент должен
   // увидеть в сводке, а не только в --json.

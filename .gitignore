@@ -37,4 +37,7 @@ reports/
 
 # Локальные настройки агентов
 .claude/settings.local.json
+# Файл режима обслуживания по областям (b9, ADR 0009): создаёт и удаляет
+# человек/оператор в worktree задачи, в git его нет.
+.claude/maintenance.json
 .zcode/

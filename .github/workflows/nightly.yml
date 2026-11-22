@@ -280,8 +280,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
         with: { playwright: 'true' }
-      # build/bundle ДО perf: perf-конфиг поднимает webServer = vite preview,
-      # которому нужен dist (turbo-задача perf зависит от ^build — как в PR).
+      # build/bundle ДО perf: perf-конфиг поднимает webServer = production-entry
+      # (start:prod = node server.ts, C3.4), которому нужен dist (turbo-задача
+      # perf зависит от ^build — как в PR).
       - name: build
         run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
       - name: bundle

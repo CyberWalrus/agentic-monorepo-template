@@ -1,6 +1,7 @@
 import { Hono, type Context } from 'hono';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 
 /**
  * Production-сервер web (C3.2): тонкий Node-entry поверх сборки TanStack Start.
@@ -50,6 +51,13 @@ export interface WebServerAppOptions {
    * соединений. По умолчанию — глобальный fetch.
    */
   proxyFetch?: typeof fetch;
+  /**
+   * Кэш сжатых копий статики вводится параметром — по образцу proxyFetch:
+   * тесты передают свою Map, чтобы наблюдать число записей («два кодирования
+   * одного пути — одна запись»). По умолчанию — локальная Map на жизнь
+   * приложения.
+   */
+  compressedBodies?: Map<string, Uint8Array<ArrayBuffer>>;
 }
 
 /** Заголовки уровня соединения: между прокси и API не переносятся (в обе стороны). */
@@ -89,12 +97,58 @@ const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.woff2': 'font/woff2',
 };
 
+/** Расширения, которые сжимаются gzip'ом: текстовые форматы сборки и документов. */
+const COMPRESSIBLE_EXTENSIONS: ReadonlySet<string> = new Set([
+  '.css',
+  '.html',
+  '.js',
+  '.json',
+  '.map',
+  '.mjs',
+  '.svg',
+  '.txt',
+]);
+
+/**
+ * Решает по Accept-Encoding, примет ли клиент gzip: имя должно быть перечислено
+ * явно, с q-параметром не равным нулю. Заголовок без gzip или с `gzip;q=0` —
+ * отдаём тело как есть. Hono возвращает undefined для отсутствующего заголовка.
+ */
+export function acceptsGzip(acceptEncoding: string | null | undefined): boolean {
+  if (acceptEncoding === null || acceptEncoding === undefined) {
+    return false;
+  }
+  for (const part of acceptEncoding.split(',')) {
+    const [name, ...params] = part.trim().split(';');
+    if (name?.trim().toLowerCase() !== 'gzip') {
+      continue;
+    }
+    for (const param of params) {
+      const [key, value] = param.split('=');
+      if (key?.trim().toLowerCase() === 'q' && Number(value) === 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
 export interface StaticFile {
   /** Копия файла в свежем ArrayBuffer: BodyInit требует ArrayBufferView<ArrayBuffer>. */
   body: Uint8Array<ArrayBuffer>;
   contentType: string;
   /** `/assets/*` — хешированные имена клиентской сборки: кэш навсегда. */
   cacheable: boolean;
+  /** Расширение файла в нижнем регистре — вход в решение о gzip-сжатии. */
+  ext: string;
+  /**
+   * Абсолютный канонический путь файла на диске. Ключ кэша сжатых копий —
+   * именно он, а не сырое pathname клиента: percent-encoded варианты одного
+   * URL декодируются в один файл, и ключ по сырому pathname давал бы
+   * неограниченный рост кэша (memory-DoS, находка ревью PR #140).
+   */
+  resolvedPath: string;
 }
 
 /**
@@ -138,6 +192,8 @@ export async function resolveStaticFile(
     body: new Uint8Array(await fs.readFile(resolved)),
     contentType,
     cacheable: decoded.startsWith('/assets/'),
+    ext: path.extname(resolved).toLowerCase(),
+    resolvedPath: resolved,
   };
 }
 
@@ -173,6 +229,16 @@ export function createWebServerApp(options: WebServerAppOptions): Hono {
   const { apiUrl, staticRoot, handler } = options;
   const proxyFetch = options.proxyFetch ?? fetch;
   const app = new Hono();
+
+  // Сжатые копии статики на жизнь приложения: dist/client пишет только
+  // `vite build`, файлы оттуда неизменяемы — сжимаем каждый файл один раз
+  // при первом запросе с Accept-Encoding: gzip. Кэш живёт в замыкании
+  // фабрики (пергород по экземплярам приложения — unit-тесты делают много
+  // фабрик на процесс). Рост ограничен структурно: ключ — канонический
+  // путь файла (resolvedPath), а не сырое pathname клиента, поэтому запись
+  // ровно одна на существующий файл; потолка на число записей не нужно —
+  // файлов в dist/client конечное число, пишет корень только сборка.
+  const compressedBodies = options.compressedBodies ?? new Map<string, Uint8Array<ArrayBuffer>>();
 
   // Readiness-зонд контейнера: процесс поднялся и слушает. Имя — /healthz:
   // /health занят API, и его доступность через web-origin запрещена
@@ -238,7 +304,23 @@ export function createWebServerApp(options: WebServerAppOptions): Hono {
     if (file.cacheable) {
       headers.set('cache-control', 'public, max-age=31536000, immutable');
     }
-    return new Response(c.req.method === 'HEAD' ? null : file.body, { headers });
+    let body: Uint8Array<ArrayBuffer> = file.body;
+    if (COMPRESSIBLE_EXTENSIONS.has(file.ext)) {
+      // Ответ зависит от Accept-Encoding — предупредить кэши в обеих ветках.
+      headers.set('vary', 'accept-encoding');
+      if (acceptsGzip(c.req.header('accept-encoding'))) {
+        let compressed = compressedBodies.get(file.resolvedPath);
+        if (compressed === undefined) {
+          // new Uint8Array: gzipSync возвращает Buffer с ArrayBufferLike, а
+          // BodyInit требует ArrayBufferView<ArrayBuffer> (как у file.body).
+          compressed = new Uint8Array(gzipSync(file.body));
+          compressedBodies.set(file.resolvedPath, compressed);
+        }
+        headers.set('content-encoding', 'gzip');
+        body = compressed;
+      }
+    }
+    return new Response(c.req.method === 'HEAD' ? null : body, { headers });
   });
 
   // Не-GET/HEAD (server functions TanStack Start, POST-маршруты) мимо статики.
