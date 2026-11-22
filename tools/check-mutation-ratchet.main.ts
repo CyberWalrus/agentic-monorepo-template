@@ -162,6 +162,26 @@ function readBreakFromConfig(path: string, domain: string): number {
   return parsed.data.thresholds.break;
 }
 
+/**
+ * Заменяет в сыром тексте конфига ровно одно значение thresholds.break —
+ * остальной текст (oxfmt-форматирование) не трогается. Парсить и писать
+ * JSON.stringify нельзя: oxfmt сворачивает короткие массивы в строку,
+ * stringify пишет развёрнуто — format:check красил бы автоматический PR
+ * храповика с первого срабатывания, а force-repush ветки каждую ночь стирал
+ * бы ручное переформатирование (находка ревью PR #142). Требует ровно одно
+ * вхождение `from` — иначе пишем отказом, конфиг не тот.
+ */
+function replaceBreakInConfigText(text: string, from: number, to: number, path: string): string {
+  const source = `("break"\\s*:\\s*)${String(from).replaceAll('.', '\\.')}(?=\\s*[,}])`;
+  const matches = [...text.matchAll(new RegExp(source, 'g'))];
+  if (matches.length !== 1) {
+    throw new Error(
+      `${path}: ожидалось ровно одно значение break=${from}, найдено ${matches.length} — конфиг не тронут`,
+    );
+  }
+  return text.replace(new RegExp(source), (_match, prefix: string) => `${prefix}${to}`);
+}
+
 function parseBreakOverrides(specs: string[]): Partial<Breaks> {
   const overrides: Partial<Breaks> = {};
   for (const spec of specs) {
@@ -492,15 +512,10 @@ if (command === 'apply') {
     validateProposals(proposal.proposals, configPaths, currentBreaks);
     for (const entry of proposal.proposals) {
       const path = configPaths[entry.domain];
-      const parsedConfig: unknown = JSON.parse(readFileSync(path, 'utf8'));
-      if (!isRecord(parsedConfig)) {
-        throw new Error(`${path}: конфиг не объект`);
-      }
-      const rawThresholds = parsedConfig['thresholds'];
-      const thresholds = isRecord(rawThresholds) ? rawThresholds : {};
-      thresholds['break'] = entry.to;
-      parsedConfig['thresholds'] = thresholds;
-      writeFileSync(path, `${JSON.stringify(parsedConfig, null, 2)}\n`);
+      writeFileSync(
+        path,
+        replaceBreakInConfigText(readFileSync(path, 'utf8'), entry.from, entry.to, path),
+      );
       console.log(`apply: ${entry.domain} ${entry.configPath}: break ${entry.from} → ${entry.to}`);
     }
     if (proposal.proposals.length === 0) {

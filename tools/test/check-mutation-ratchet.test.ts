@@ -527,7 +527,8 @@ it('apply: поднимает порог в конфиге; вниз и по у�
     configContracts,
   ]);
   expect(up.status).toBe(0);
-  expect(readFileSync(configWeb, 'utf8')).toContain('"break": 69');
+  // точная замена: остальной байт-в-байт текст конфига не тронут
+  expect(readFileSync(configWeb, 'utf8')).toBe('{"thresholds":{"break":69}}');
 
   const down = runCli([
     'apply',
@@ -539,7 +540,7 @@ it('apply: поднимает порог в конфиге; вниз и по у�
     configContracts,
   ]);
   expect(down.status).toBe(1);
-  expect(readFileSync(configWeb, 'utf8')).toContain('"break": 69');
+  expect(readFileSync(configWeb, 'utf8')).toBe('{"thresholds":{"break":69}}');
 
   const stale = runCli([
     'apply',
@@ -552,7 +553,83 @@ it('apply: поднимает порог в конфиге; вниз и по у�
   ]);
   expect(stale.status).toBe(1);
   expect(stale.stderr).toContain('не совпадает с текущим порогом');
-  expect(readFileSync(configWeb, 'utf8')).toContain('"break": 69');
+  expect(readFileSync(configWeb, 'utf8')).toBe('{"thresholds":{"break":69}}');
+});
+
+it('apply: формат конфига сохраняется — меняется только число, oxfmt --check проходит', () => {
+  const dir = fixtureDir('apply-format');
+  // Копия РЕАЛЬНОГО конфига репо: короткие массивы oxfmt держит в одну строку,
+  // JSON.stringify их разворачивал бы и красил format:check PR храповика
+  // (находка ревью PR #142).
+  const original = readFileSync(join(repoDir, 'apps', 'web', 'stryker.conf.json'), 'utf8');
+  const configWeb = writeReport(dir, 'web.conf.json', original);
+  const configContracts = writeReport(
+    dir,
+    'contracts.conf.json',
+    JSON.stringify({ thresholds: { break: 80 } }),
+  );
+  const proposalPath = writeReport(
+    dir,
+    'proposal.json',
+    JSON.stringify({
+      schema: 'mutation-ratchet-proposal/1',
+      sha: SHA_B,
+      runId: 222,
+      proposals: [{ domain: 'web', configPath: 'apps/web/stryker.conf.json', from: 67, to: 69 }],
+    }),
+  );
+  const result = runCli([
+    'apply',
+    '--proposal',
+    proposalPath,
+    '--config-web',
+    configWeb,
+    '--config-contracts',
+    configContracts,
+  ]);
+  expect(result.status).toBe(0);
+  const applied = readFileSync(configWeb, 'utf8');
+  expect(applied).toBe(original.replace('"break": 67', '"break": 69'));
+  const oxfmt = spawnSync('pnpm', ['exec', 'oxfmt', '--check', configWeb], { encoding: 'utf8' });
+  expect(oxfmt.status).toBe(0);
+});
+
+it('apply: не единственное вхождение break — отказ без записи', () => {
+  const dir = fixtureDir('apply-ambiguous');
+  const configWeb = writeReport(
+    dir,
+    'web.conf.json',
+    '{"thresholds": {"break": 67}, "note": {"break": 67}}',
+  );
+  const configContracts = writeReport(
+    dir,
+    'contracts.conf.json',
+    JSON.stringify({ thresholds: { break: 80 } }),
+  );
+  const proposalPath = writeReport(
+    dir,
+    'proposal.json',
+    JSON.stringify({
+      schema: 'mutation-ratchet-proposal/1',
+      sha: SHA_B,
+      runId: 222,
+      proposals: [{ domain: 'web', configPath: 'apps/web/stryker.conf.json', from: 67, to: 69 }],
+    }),
+  );
+  const result = runCli([
+    'apply',
+    '--proposal',
+    proposalPath,
+    '--config-web',
+    configWeb,
+    '--config-contracts',
+    configContracts,
+  ]);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain('ожидалось ровно одно значение break=67');
+  expect(readFileSync(configWeb, 'utf8')).toBe(
+    '{"thresholds": {"break": 67}, "note": {"break": 67}}',
+  );
 });
 
 // ─── CLI: fetch-state — только разбор аргументов (gh API в юнит-тестах не зовётся) ───
