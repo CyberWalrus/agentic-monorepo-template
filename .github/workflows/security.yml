@@ -29,7 +29,8 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/setup
+        with: { persist-credentials: false }
+      - uses: $/.github/actions/setup
       # TypeScript/JavaScript: единственный язык продукта (ADR 0001).
       - uses: github/codeql-action/init@d2aacf54c2fbc910db8d7ec338fdb54ea48c692d # v3
         with:
@@ -46,6 +47,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false }
       # Отчёт о новой зависимости в сводке PR: лицензии, уязвимости, стоимость
       # риска; OpenSSF Scorecard подключается следующим шагом после b6 (журнал).
       - uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
@@ -63,7 +65,7 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 0, persist-credentials: false }
       # Линтер workflow-файлов: аудит прав на токен, инъекций в run:, pinning.
       - uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
         with:

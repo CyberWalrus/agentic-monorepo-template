@@ -53,8 +53,8 @@ jobs:
       TURBO_API: ${{ vars.TURBO_API }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with: { fetch-depth: 0 }
-      - uses: ./.github/actions/setup
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: $/.github/actions/setup
       # A7: локальный кэш PR — свой, изолированный от main и других PR по номеру
       # PR; компенсирует отсутствие remote-записи из PR (architecture.md §3.3).
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -123,8 +123,8 @@ jobs:
       TURBO_API: ${{ vars.TURBO_API }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with: { fetch-depth: 0 }
-      - uses: ./.github/actions/setup
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: $/.github/actions/setup
         with: { playwright: 'true' }
       # A7: локальный кэш PR — см. комментарий в job static.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -178,8 +178,8 @@ jobs:
       TURBO_API: ${{ vars.TURBO_API }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with: { fetch-depth: 0 }
-      - uses: ./.github/actions/setup
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: $/.github/actions/setup
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           # b2.4: incremental-файлы web и контрактов — как у api (отложенное
@@ -226,8 +226,8 @@ jobs:
       TURBO_API: ${{ vars.TURBO_API }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with: { fetch-depth: 0 }
-      - uses: ./.github/actions/setup
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: $/.github/actions/setup
         with: { playwright: 'true' }
       # A7: локальный кэш PR — см. комментарий в job static.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -282,9 +282,10 @@ jobs:
       options: --ipc=host
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false }
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-      - uses: ./.github/actions/setup
+      - uses: $/.github/actions/setup
       # A7: локальный кэш PR — см. комментарий в job static.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         if: github.event_name == 'pull_request'
@@ -337,8 +338,8 @@ jobs:
       TURBO_API: ${{ vars.TURBO_API }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with: { fetch-depth: 0 }
-      - uses: ./.github/actions/setup
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: $/.github/actions/setup
         with: { playwright: 'true' }
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
@@ -389,8 +390,8 @@ jobs:
       TURBO_API: ${{ vars.TURBO_API }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with: { fetch-depth: 0 }
-      - uses: ./.github/actions/setup
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: $/.github/actions/setup
       - name: start clock
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - run: pnpm turbo run build --filter=@repo/web $TURBO_CACHE_ARGS --output-logs=errors-only
