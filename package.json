@@ -47,6 +47,7 @@
     "denial:report": "node tools/denial-trend.ts",
     "telemetry:report": "node tools/telemetry-report.main.ts",
     "tool-class:check": "node tools/check-tool-class.ts",
+    "branch-scope:check": "node tools/check-branch-scope.ts",
     "docs:check": "node tools/check-docs.ts",
     "flaky:quarantine": "node tools/check-flaky-rate.ts --validate-quarantine --quarantine tools/flaky-quarantine.json",
     "visual-image:check": "node tools/check-visual-image.ts",

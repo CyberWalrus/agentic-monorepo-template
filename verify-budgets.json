@@ -14,6 +14,7 @@
     "test:hooks": 50,
     "sandbox": 5,
     "tool-class": 10,
+    "branch-scope": 10,
     "docs": 10,
     "registries": 5,
     "quarantine": 5,

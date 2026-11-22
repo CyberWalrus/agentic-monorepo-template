@@ -1,13 +1,27 @@
 /**
  * Канарейки protect-paths (roadmap A2, пункт 6): хук блокирует запись в защищённые
  * пути инструментами Edit/Write и закрывается при сбое (exit 2, не 1).
+ *
+ * Изолированный CLAUDE_PROJECT_DIR (d7, 2026-11-22): bypass-механику читает хук
+ * из {CLAUDE_PROJECT_DIR}/.claude/maintenance.json (b9), а deny-конфиг — из
+ * модуля tools/protected-paths.json. Активное окно оператора (maintenance.json
+ * в worktree задачи, ADR 0009) легитимно открывает часть deny-путей, и без
+ * изоляции MUST_DENY ложнокраснел в worktree оператора — тест зависел от
+ * окружения, а не от хука. Bypass-механику канареечат фикстуры
+ * maintenance.test.ts; здесь проверяется защита в чистом проекте.
  */
 import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { expect, it } from 'vitest';
 
 const projectDir = resolve(import.meta.dirname, '..', '..');
 const hook = `${projectDir}/.claude/hooks/protect-paths.ts`;
+// realpathSync: targetFile резолвит пути от getcwd() (симлинки раскрыты,
+// /var/folders → /private/var), projectDir должен быть тем же путём.
+const isolatedDir = realpathSync(mkdtempSync(join(tmpdir(), 'protect-paths-probe-')));
+mkdirSync(join(isolatedDir, '.claude'), { recursive: true });
 
 function runHook(file: string): { status: number | null; stdout: string; stderr: string } {
   const input = JSON.stringify({
@@ -15,14 +29,14 @@ function runHook(file: string): { status: number | null; stdout: string; stderr:
     hook_event_name: 'PreToolUse',
     tool_name: 'Write',
     tool_input: { file_path: file, content: 'x' },
-    cwd: projectDir,
+    cwd: isolatedDir,
   });
   const result = spawnSync(process.execPath, [hook], {
-    cwd: projectDir,
+    cwd: isolatedDir,
     input,
     encoding: 'utf8',
     timeout: 30_000,
-    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: isolatedDir },
   });
   if (result.error) {
     throw result.error;
@@ -36,7 +50,9 @@ const MUST_DENY: string[] = [
   '.claude/settings.json',
   'perf-budgets.json',
   'e2e/playwright.config.ts',
-  `${projectDir}/.oxlintrc.json`,
+  // Абсолютный путь внутрь изолированного проекта: вне его targetFile — null
+  // (чужой проект), deny не проверяется вовсе.
+  `${isolatedDir}/.oxlintrc.json`,
 ];
 
 for (const file of MUST_DENY) {
