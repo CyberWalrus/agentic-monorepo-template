@@ -99,8 +99,10 @@ jobs:
   cleanup:
     name: cleanup
     # closed срабатывает и для форк-PR, и для PR, где образ ещё не собирался:
-    # форк-гвард пропускает job (skipped, не красный), отсутствие пакета/тега —
-    # 404 обрабатывается как успех (идемпотентность).
+    # форк-гвард пропускает job (skipped, не красный). Идемпотентна только
+    # HTTP 404 (пакета нет / уже удалён); любой другой сбой API — громкий
+    # красный job (З11): иначе невыполненный критерий «тег удаляется»
+    # невидим под зелёным job'ом (находка ревью PR #139).
     if: >-
       github.event.action == 'closed' &&
       github.event.pull_request.head.repo.full_name == github.repository
@@ -118,16 +120,36 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # Успех = команда отработала ИЛИ упала именно с HTTP 404 (без вывода).
+          # Прочий сбой — текст ошибки на stderr и exit 1: job красный.
+          gh404() {
+            local OUT STATUS
+            if OUT=$("$@" 2>&1); then
+              printf '%s' "$OUT"
+              return 0
+            fi
+            STATUS=$?
+            if printf '%s' "$OUT" | grep -q '(HTTP 404)'; then
+              return 0
+            fi
+            echo "gh api failed (exit ${STATUS}): ${OUT}" >&2
+            return 1
+          }
           OWNER="${REPO_SLUG%%/*}"
           REPO_NAME="${REPO_SLUG#*/}"
           TAG="pr-${PR_NUMBER}"
           # Путь API зависит от типа владельца: org — /orgs/<owner>/packages,
           # user-владелец — /user/packages от имени GITHUB_TOKEN (пакет,
           # опубликованный из этого репо, получает admin автоматически).
-          if gh api "orgs/${OWNER}" > /dev/null 2>&1; then
+          # Выбор — по коду ответа: 404 → не org → user-ветка; прочий сбой
+          # (сеть, 5xx, rate-limit) — громкий отказ, а не молчаливый user.
+          if ORG_RESP=$(gh api "orgs/${OWNER}" 2>&1); then
             BASE="orgs/${OWNER}/packages"
-          else
+          elif printf '%s' "$ORG_RESP" | grep -q '(HTTP 404)'; then
             BASE="user/packages"
+          else
+            echo "owner lookup failed: ${ORG_RESP}" >&2
+            exit 1
           fi
           # Не-тегированные версии — мусор от перезаписи тега на повторном push
           # (новая версия забирает тег, старая остаётся без тегов); писатель у
@@ -136,10 +158,9 @@ jobs:
           # под-путём): в URL слэш кодируется (%2F), иначе API ищет «api».
           for PKG_BASE in api web; do
             PKG_ENC=$(printf '%s' "${REPO_NAME}/${PKG_BASE}" | jq -sRr @uri)
-            VERSION_IDS=$(gh api "/${BASE}/container/${PKG_ENC}/versions" --paginate 2> /dev/null \
+            VERSION_IDS=$(gh404 gh api "/${BASE}/container/${PKG_ENC}/versions" --paginate \
               | jq -r --arg t "$TAG" \
-                '.[] | select((.metadata.container.tags | length == 0) or (.metadata.container.tags | index($t))) | .id') \
-              || true
+                '.[] | select((.metadata.container.tags | length == 0) or (.metadata.container.tags | index($t))) | .id')
             for ID in $VERSION_IDS; do
               echo "delete ${PKG_BASE} version ${ID}"
               gh api -X DELETE "/${BASE}/container/${PKG_ENC}/versions/${ID}"
