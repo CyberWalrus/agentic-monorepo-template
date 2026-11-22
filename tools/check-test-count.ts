@@ -9,9 +9,19 @@
  * Базлайн — map «путь отчёта → число тестов», он же перечисляет, что храповик
  * смотрит: vitest-отчёты гейт-пакетов и корневых хуков. Playwright-отчёты
  * (e2e/perf) не считаются — удаление e2e-теста сейчас не видит ни один гейт.
- * Отчёт, которого нет (turbo --affected не гонял пакет), молча пропускается:
- * сравнивается только реально гонявшееся. База для сравнения базлайна:
- * --merge-base <ref>, иначе env TURBO_SCM_BASE, иначе origin/main → main → HEAD.
+ * База для сравнения базлайна: --merge-base <ref>, иначе env TURBO_SCM_BASE,
+ * иначе origin/main → main → HEAD.
+ *
+ * --affected: отчёт, которого нет (turbo --affected не гонял пакет), молча
+ * пропускается — сравнивается только реально гонявшееся. Без него (полный
+ * прогон: локальный verify, merge queue, push) отсутствующий отчёт из
+ * базлайна — WARNING: храповик не имеет права молча ослепнуть к удалению
+ * пакета (e21). Семантика не как у check-test-report.ts: там --affected
+ * форвардится в вызов turbo, здесь turbo не запускается вовсе — флаг только
+ * объявляет вызов частичным («в этом прогоне отчёты могут легально
+ * отсутствовать»). Callers: job unit передаёт $AFFECTED из CI (пуст на
+ * merge_group/push), static — литеральный --affected (гоняет только
+ * test:hooks, отчёты пакетов там отсутствуют всегда).
  *
  * `pnpm test:count:update` (--update) поднимает числа и добавляет новые
  * отчёты; понижать и удалять не умеет — ослабить храповик им нельзя (З7).
@@ -31,7 +41,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { glob } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-const BOOLEAN_FLAGS = new Set(['update']);
+const BOOLEAN_FLAGS = new Set(['affected', 'update']);
 const REPORT_PATTERNS = [
   'apps/*/reports/vitest.json',
   'packages/*/reports/vitest.json',
@@ -234,7 +244,10 @@ if (baseline !== null && baseRef !== null) {
   }
 }
 
-// Сравнение с отчётами: отсутствующий отчёт (--affected не гонял пакет) — пропуск.
+// Сравнение с отчётами. Полный прогон (без --affected): отсутствующий отчёт
+// из базлайна — WARNING (e21: иначе храповик молча слепнет к удалению
+// пакета). С --affected пропуск молча: пакет мог не попасть в прогон.
+const affected = argv['affected'] !== undefined;
 let compared = 0;
 if (baseline !== null) {
   for (const [key, expected] of Object.entries(baseline).toSorted(([a], [b]) =>
@@ -242,6 +255,11 @@ if (baseline !== null) {
   )) {
     const reportPath = resolve(root, key);
     if (!existsSync(reportPath)) {
+      if (!affected) {
+        warnings.push(
+          `baseline entry "${clean(key)}": report is missing (package deleted or report no longer produced)`,
+        );
+      }
       continue;
     }
     const total = readReportTotal(reportPath);
