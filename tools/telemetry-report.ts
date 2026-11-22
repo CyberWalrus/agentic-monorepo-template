@@ -89,8 +89,36 @@ export const EvalsPointSchema = z.object({
   passed: z.number().int().nonnegative().nullable(),
   timeMs: z.number().nonnegative().nullable(),
   tokens: z.number().nonnegative().nullable(),
+  /**
+   * true — нейтральная точка «не собирается» (прогон без артефакта, в т.ч.
+   * скип по секрету; ревью 2: у такого прогона conclusion='success', потому
+   * что job gate зелёный, а job 'agent evals' скипнут по has_key).
+   */
+  neutral: z.boolean(),
 });
 export type EvalsPoint = z.infer<typeof EvalsPointSchema>;
+
+/**
+ * Политика прогона evals без артефакта (ревью 2, B1): отсутствие артефакта у
+ * success-прогона — это скипнутый по секрету job 'agent evals'
+ * (evals.yml: `if: needs.gate.outputs.has_key == 'true'`), нейтральное «не
+ * собирается», НЕ «источник сломан». Problem — только когда прогон упал
+ * (failure/timed_out/startup_failure): там upload `if: always()`, и отчёт
+ * обязан был быть. Возвращает нейтральность точки (всегда true — точка
+ * «нет данных»), problem дописывает в problems при сломанном источнике.
+ */
+export function evalsMissingArtifactPolicy(
+  conclusion: string,
+  runId: number,
+  problems: string[],
+): boolean {
+  const broken =
+    conclusion === 'failure' || conclusion === 'timed_out' || conclusion === 'startup_failure';
+  if (broken) {
+    problems.push(`evals: прогон ${runId} (${conclusion}) без артефакта отчёта — источник сломан`);
+  }
+  return true;
+}
 
 export const NightlyArtifactRunSchema = z.object({
   runId: z.number().int().positive(),
@@ -701,7 +729,9 @@ export function buildTrendsReport(inputs: TelemetryInputs): TrendsReport {
     const tokens = measured.reduce((sum, point) => sum + (point.tokens ?? 0), 0);
     return {
       runsTotal: points.length,
-      runsSkippedNoSecret: points.filter((point) => point.conclusion === 'skipped').length,
+      // Нейтральные точки «не собирается»: скипнутый conclusion ИЛИ success без
+      // артефакта — job 'agent evals' скипнут по секрету (ревью 2, B1).
+      runsSkippedNoSecret: points.filter((point) => point['neutral']).length,
       runsMeasured: measured.length,
       scenarios,
       passed,
@@ -719,11 +749,11 @@ export function buildTrendsReport(inputs: TelemetryInputs): TrendsReport {
   const evalsNoData = evalsCurStat.runsMeasured === 0;
   const evalsNote =
     evalsNoData && evalsCurStat.runsSkippedNoSecret > 0
-      ? 'нет секрета ANTHROPIC_API_KEY — все прогоны окна скипнуты (evals.yml), метрика не собирается: это не ноль и не сломанный источник'
+      ? 'нет секрета ANTHROPIC_API_KEY — все прогоны окна без данных (job «agent evals» скипнут по has_key; ревью 2, B1), метрика не собирается: это не ноль и не сломанный источник'
       : null;
   const evals: EvalsMetric = {
     coverage:
-      'эталонные агентные прогоны (ADR 0016): артефакты evals-<run_id>, totals отчёта tools/evals/report.ts; null-метрики не схлопываются в ноль (c9.1); job скипается без секрета — период без прогонов честно помечен, а не занулён',
+      'эталонные агентные прогоны (ADR 0016): артефакты evals-<run_id>, totals отчёта tools/evals/report.ts; null-метрики не схлопываются в ноль (c9.1); прогон без артефакта нейтрален — при отсутствии секрета job gate зелёный, а job «agent evals» скипнут по has_key (conclusion прогона будет success), problem только у упавшего прогона (ревью 2, B1)',
     status: evalsNoData ? 'no-data' : 'ok',
     note: evalsNote,
     current: evalsCurStat,

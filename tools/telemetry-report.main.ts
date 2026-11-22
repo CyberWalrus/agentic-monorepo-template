@@ -57,6 +57,7 @@ import { loadPerfBudgets } from './perf-budgets.ts';
 import { parseBudgets } from './verify-budgets-loader.ts';
 import {
   buildTrendsReport,
+  evalsMissingArtifactPolicy,
   mutationScoreFromMutants,
   DenialRecordSchema,
   MergedPrSchema,
@@ -129,12 +130,19 @@ function gh(args: string[]): string {
   return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 }
 
-/** Страницы runs с per_page=100 (урок e16: страница 30 роняла гейты). */
+/**
+ * Страницы runs с per_page=100 (урок e16: страница 30 роняла гейты).
+ * branch: фильтр ветки для workflow, живущих на main (nightly, evals) —
+ * без него workflow_dispatch на ветке задачи подсовывал бы веточные прогоны
+ * в «свежайшие» и точки тренда (тот же отказ, что A6.1 чинил в
+ * check-perf-trend: `--branch main`, находка sanity-ревью).
+ */
 function listRuns(
   repo: string,
   workflow: string,
   createdSince: string,
   problems: string[],
+  branch?: string,
 ): GhRun[] {
   const runs: GhRun[] = [];
   for (let page = 1; page <= 20; page += 1) {
@@ -149,6 +157,7 @@ function listRuns(
         `page=${page}`,
         '-f',
         `created=>=${createdSince}`,
+        ...(branch !== undefined ? ['-f', `branch=${branch}`] : []),
         '--jq',
         '{count: (.workflow_runs|length), runs: [.workflow_runs[] | {id: .id, event: .event, conclusion: .conclusion, runStartedAt: .run_started_at, updatedAt: .updated_at}]}',
       ]);
@@ -520,7 +529,12 @@ function collectDenials(
   problems: string[],
 ): DenialRecord[] {
   const denials: DenialRecord[] = [];
-  for (const run of runs) {
+  // Артефакт gate-denials пишется только if: failure() (gate-integrity.yml) —
+  // перебираем только красные прогоны (блокер 4 ревью 2: gate-integrity
+  // триггерится на 7 PR-событий, полный перебор уложит job в рейт-лимит);
+  // зелёный/отменённый прогон = 0 отказов, absent-vs-zero не меняется.
+  const failureRuns = runs.filter((run) => run.conclusion === 'failure');
+  for (const run of failureRuns) {
     const artifact = findArtifact(
       listArtifacts(repo, run.id, problems),
       (name) => name === 'gate-denials',
@@ -560,10 +574,17 @@ function collectEvals(
   repo: string,
   runs: GhRun[],
   workDir: string,
+  maxPerWindow: number,
+  sinceMs: number,
+  prevSinceMs: number,
+  nowMs: number,
   problems: string[],
 ): EvalsPoint[] {
   const points: EvalsPoint[] = [];
-  for (const run of runs) {
+  // Кап свежайших прогонов каждого окна — как у nightly (блокер 4 ревью 2:
+  // без капа перебор уложит job в timeout/рейт-лимит на большом окне).
+  const selected = selectNewestPerWindow(runs, maxPerWindow, sinceMs, prevSinceMs, nowMs);
+  for (const run of selected) {
     if (run.conclusion === 'skipped') {
       // Скип без секрета — «не собирается», не ноль и не проблема (ревью c9.4).
       points.push({
@@ -574,6 +595,7 @@ function collectEvals(
         passed: null,
         timeMs: null,
         tokens: null,
+        neutral: true,
       });
       continue;
     }
@@ -581,9 +603,10 @@ function collectEvals(
       name.startsWith('evals-'),
     );
     if (artifact === null) {
-      problems.push(
-        `evals: прогон ${run.id} (${run.conclusion}) без артефакта отчёта — источник сломан`,
-      );
+      // Ревью 2 (B1): при отсутствии секрета job gate зелёный, job «agent
+      // evals» скипнут по has_key — conclusion прогона SUCCESS без артефакта;
+      // нейтрально «не собирается». Problem — только у упавшего прогона.
+      const neutral = evalsMissingArtifactPolicy(run.conclusion, run.id, problems);
       points.push({
         runId: run.id,
         date: run.updatedAt,
@@ -592,6 +615,7 @@ function collectEvals(
         passed: null,
         timeMs: null,
         tokens: null,
+        neutral,
       });
       continue;
     }
@@ -618,6 +642,7 @@ function collectEvals(
           passed: file.totals.passed,
           timeMs: file.totals.timeMs,
           tokens: file.totals.tokens,
+          neutral: false,
         });
       }
     }
@@ -659,7 +684,13 @@ function readTargets(problems: string[]): TelemetryInputs['targets'] {
   }
 }
 
-function mergedPrsFromGh(problems: string[]): MergedPr[] {
+/**
+ * Смёрженные PR окна сбора (блокер 3 ревью 2: без `--search merged:>=` лимит
+ * 300 заполнялся бы всей историей через ~месяц и ставил problem каждую ночь —
+ * детерминированный ложный красный против З11). mergedSinceIso — дата начала
+ * предыдущего окна (YYYY-MM-DD).
+ */
+function mergedPrsFromGh(mergedSinceIso: string, problems: string[]): MergedPr[] {
   let raw: string;
   try {
     raw = gh([
@@ -667,6 +698,8 @@ function mergedPrsFromGh(problems: string[]): MergedPr[] {
       'list',
       '--state',
       'merged',
+      '--search',
+      `merged:>=${mergedSinceIso}`,
       '--limit',
       '300',
       '--json',
@@ -688,7 +721,9 @@ function mergedPrsFromGh(problems: string[]): MergedPr[] {
     return valid.success ? valid.data : { number: pr.number, body: '', mergedAt: pr.mergedAt };
   });
   if (prs.length >= 300) {
-    problems.push('список смёрженных PR упёрся в лимит 300 — доля агентных PR может быть усечена');
+    problems.push(
+      'список смёрженных PR упёрся в лимит 300 внутри окна сбора — доля агентных PR может быть усечена',
+    );
   }
   return prs;
 }
@@ -767,7 +802,9 @@ function main(): void {
     }));
     const nightly = collectNightly(
       repo,
-      listRuns(repo, 'nightly.yml', createdSince, problems),
+      // branch main (B2 ревью 2): workflow_dispatch на ветке задачи не должен
+      // подсовывать веточные прогоны в «свежайшие» и точки тренда (A6.1).
+      listRuns(repo, 'nightly.yml', createdSince, problems, 'main'),
       workDir,
       maxPerWindow,
       sinceMs,
@@ -784,14 +821,18 @@ function main(): void {
     denials = collectDenials(repo, giRuns, workDir, problems);
     denialsSource = 'CI gate-integrity (артефакты gate-denials)';
     denialsCoverage =
-      'только CI-слой: артефакты gate-denials красных прогонов gate-integrity; отсутствие артефакта у зелёного прогона = 0 отказов того прогона (ревью c9.4: absent-vs-zero); локальные журналы машин не агрегируются (граница C9.3, ждёт хранилище вне машины — A7); ноль не читается как «попыток нет вообще» — это только CI';
+      'только CI-слой: артефакты gate-denials красных прогонов gate-integrity (перебор ограничен failure-прогонами — артефакт пишется только if: failure, ревью 2); отсутствие артефакта у зелёного прогона = 0 отказов того прогона (ревью c9.4: absent-vs-zero); локальные журналы машин не агрегируются (граница C9.3, ждёт хранилище вне машины — A7); ноль не читается как «попыток нет вообще» — это только CI';
     evalsPoints = collectEvals(
       repo,
-      listRuns(repo, 'evals.yml', createdSince, problems),
+      listRuns(repo, 'evals.yml', createdSince, problems, 'main'),
       workDir,
+      maxPerWindow,
+      sinceMs,
+      prevSinceMs,
+      nowMs,
       problems,
     );
-    mergedPrs = mergedPrsFromGh(problems);
+    mergedPrs = mergedPrsFromGh(new Date(prevSinceMs).toISOString().slice(0, 10), problems);
   }
 
   const inputs: TelemetryInputs = {

@@ -18,6 +18,7 @@ import * as z from 'zod';
 import {
   buildTrendsReport,
   countEscapedDefects,
+  evalsMissingArtifactPolicy,
   isAgentPr,
   mutationScoreFromMutants,
   percentile,
@@ -362,6 +363,7 @@ it('evals: только скипнутые прогоны — «не собир�
           passed: null,
           timeMs: null,
           tokens: null,
+          neutral: true,
         },
       ],
     }),
@@ -370,6 +372,41 @@ it('evals: только скипнутые прогоны — «не собир�
   expect(evals.status).toBe('no-data');
   expect(evals.note).toContain('секрета');
   expect(evals.current.scenarios).toBe(0);
+});
+
+it('evals: success-прогон без артефакта (скип job по секрету, ревью 2) — нейтральный, problem только у failure', () => {
+  // Политика: у success без артефакта problem НЕТ — job «agent evals» скипнут
+  // по needs.gate.outputs.has_key, conclusion прогона будет success.
+  const problems: string[] = [];
+  expect(evalsMissingArtifactPolicy('success', 7, problems)).toBe(true);
+  expect(problems).toHaveLength(0);
+  expect(evalsMissingArtifactPolicy('skipped', 8, problems)).toBe(true);
+  expect(evalsMissingArtifactPolicy('cancelled', 9, problems)).toBe(true);
+  expect(evalsMissingArtifactPolicy('failure', 10, problems)).toBe(true);
+  expect(problems).toHaveLength(1);
+  expect(problems[0]).toContain('сломан');
+  // Агрегация: нейтральный success-прогон считается «не собирается», не ноль.
+  const report = buildTrendsReport(
+    baseInputs({
+      evalsPoints: [
+        {
+          runId: 1,
+          date: CUR,
+          conclusion: 'success',
+          scenarios: null,
+          passed: null,
+          timeMs: null,
+          tokens: null,
+          neutral: true,
+        },
+      ],
+    }),
+  );
+  const evals = report.metrics.evals;
+  expect(evals.status).toBe('no-data');
+  expect(evals.note).toContain('секрета');
+  expect(evals.current.runsSkippedNoSecret).toBe(1);
+  expect(report.problems).toHaveLength(0);
 });
 
 it('evals: смешанное окно — pass rate по измеренным прогонам, дельта по окнам', () => {
@@ -384,6 +421,7 @@ it('evals: смешанное окно — pass rate по измеренным �
           passed: 1,
           timeMs: 300,
           tokens: 1000,
+          neutral: false,
         },
         {
           runId: 2,
@@ -393,6 +431,7 @@ it('evals: смешанное окно — pass rate по измеренным �
           passed: null,
           timeMs: null,
           tokens: null,
+          neutral: true,
         },
         {
           runId: 3,
@@ -402,6 +441,7 @@ it('evals: смешанное окно — pass rate по измеренным �
           passed: 2,
           timeMs: 200,
           tokens: 800,
+          neutral: false,
         },
       ],
     }),
