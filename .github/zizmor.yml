@@ -14,13 +14,16 @@ rules:
       # Шапка файла прямо запрещает расширение доверия; подавление кодифицирует
       # уже принятый компромисс ADR 0002, не ослабляет его.
       - gate-integrity.yml:11
-      # visual-approve.yml:18 — доверенный workflow одобрения визуальных
+      # visual-approve.yml:27 — доверенный workflow одобрения визуальных
       # базлайнов (ADR 0015): issue_comment обязателен (команда /approve-visual).
       # Существующие защиты: комментарий перечитывается из API (шаг «Fetch
       # comment and PR facts»), одобрение валидирует tools/check-visual-approval.ts,
-      # форк-PR отклоняются, исполняется только дефолтная ветка, дерево PR
-      # используется только для git-операций с явным токеном в URL.
-      - visual-approve.yml:18
+      # форк-PR отклоняются, код PR не исполняется ни на одном шаге — до
+      # checkout head исполняется только дефолтная ветка, после — только
+      # git-операции и системные утилиты: зависимостей в PR-дереве нет,
+      # commit/push с LEFTHOOK=0 (e24), токен события — только в URL fetch/push
+      # и env шагов gh CLI.
+      - visual-approve.yml:27
   adhoc-packages:
     ignore:
       # evals.yml:74 — осознанная глобальная установка Claude Code CLI с точным
