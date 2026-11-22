@@ -130,13 +130,19 @@ export default defineConfig({
       env: { PORT: String(ports.api), ENABLE_TEST_API: '1', INSTANCE_ID },
     },
     {
-      // Production-сборка (`turbo run e2e` собирает web заранее). API_URL —
-      // цель прокси /rpc (ADR 0005), читается при старте preview, не при сборке;
-      // порт передаётся флагом — фиксированных портов больше нет.
-      command: `pnpm --filter @repo/web start --port ${ports.web}`,
-      url: WEB_URL,
+      // Production-способ запуска — тот же entry, что деплоится (C3.2, C3.4):
+      // `start:prod` = `node server.ts` (статика dist/client + прокси /rpc +
+      // SSR, ADR 0012). Сборку web делают заранее turbo-задачи e2e/perf
+      // (dependsOn ^build) и tools/visual-inner.sh — entry fail-closed на
+      // отсутствие dist. API_URL — цель прокси /rpc (ADR 0005), читается при
+      // старте, не при сборке; PORT — env, обязателен без дефолта (флага
+      // --port у entry нет); HOST — дефолт 127.0.0.1 (URL гейтов, ADR 0005);
+      // Playwright мержит env веб-сервера поверх process.env. Готовность —
+      // дешёвый /healthz, без SSR-зависимости от API.
+      command: 'pnpm --filter @repo/web start:prod',
+      url: `${WEB_URL}/healthz`,
       reuseExistingServer: reuseManualServer,
-      env: { API_URL },
+      env: { API_URL, PORT: String(ports.web) },
     },
   ],
 });
