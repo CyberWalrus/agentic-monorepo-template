@@ -9,5 +9,6 @@
   "reporters": ["clear-text", "progress", "html", "json"],
   "htmlReporter": { "fileName": "reports/mutation/index.html" },
   "jsonReporter": { "fileName": "reports/mutation/mutation.json" },
+  "thresholds": { "break": 80 },
   "tempDirName": ".stryker-tmp"
 }
