@@ -44,7 +44,7 @@
 - `pnpm verify`: `knip` (catalog-записи), `docs` (`README.md`, `docs/test-database-isolation.md`).
 - e2e/perf: таймаут webServer (старт api из `e2e/playwright.config.ts`).
 - **Мутационное тестирование не выключается.** Носители задачи `mutation` — `apps/api`, `apps/web`, `packages/contracts`. После удаления api остаются два носителя: покрытие сжимается с трёх пакетов до двух, но задача продолжает гоняться. Тихое выключение (`turbo run mutation` → «No tasks were executed», зелёный job) возможно только при удалении всех трёх stryker-носителей — и тогда шаг `required-tasks` гейта verify краснеет громко: «mutation: ни одного пакета» (`tools/check-required-tasks.ts`). До гейта e20 удаление api действительно выключало mutation молча — это закрыто.
-- Храповик `test:count` пропустит исчезнувший отчёт api молча (warning-only): запись api в `test-count-baseline.json` удалите вручную, иначе храповик слепнет к этой части.
+- Храповик `test:count` больше не ослепнет (e21): `pnpm test:count` без `--affected` — полный прогон, как локальный verify, merge queue и push — печатает WARNING «report is missing» про исчезнувший отчёт api. Запись api в `test-count-baseline.json` по-прежнему удаляется вручную, и само удаление записи даст ещё один WARNING — уже «entry removed vs merge-base … justify in the PR description» (ослабление храповика видно в PR; warning-only, прогон не красит).
 
 **Что переделать в CI**
 
