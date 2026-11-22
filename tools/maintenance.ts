@@ -1,3 +1,10 @@
+/** Паттерн покрывает сам файл режима — такую сессию readMaintenanceSession отвергает. */
+function coversMaintenanceFile(pattern: string): boolean {
+  return (
+    matchesGlob(MAINTENANCE_FILE, pattern) || matchesGlob(`${MAINTENANCE_FILE}/__child__`, pattern)
+  );
+}
+
 /**
  * Режим обслуживания по областям (ADR 0009, задача b9).
  *
@@ -57,7 +64,15 @@ export function readMaintenanceSession(root: string): MaintenanceSession | null 
   if (!Array.isArray(paths) || !paths.every((path) => typeof path === 'string' && path !== '')) {
     return null;
   }
-  return { task, paths: paths.filter((path): path is string => typeof path === 'string') };
+  const cleanPaths = paths.filter((path): path is string => typeof path === 'string');
+  // Саморасширение прав (b9-ревью): паттерн, покрывающий сам файл режима,
+  // отвергает всю сессию (fail-closed, защита полная). Иначе агент внутри окна
+  // переписал бы paths на `**` — файл gitignored, снапшот и doctor этого не
+  // заметят, а session-start анонсирует пути один раз при старте.
+  if (cleanPaths.some(coversMaintenanceFile)) {
+    return null;
+  }
+  return { task, paths: cleanPaths };
 }
 
 /**

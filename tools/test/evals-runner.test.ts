@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -79,7 +79,12 @@ function makeFakeRepo(): string {
 async function withFakeRepo(
   overrides: Partial<RunEvalsOptions> = {},
   options: { scenarioRaw?: string; agentStub?: string; extraFiles?: Record<string, string> } = {},
-): Promise<{ commitSha: string; reportDir: string; result: Awaited<ReturnType<typeof runEvals>> }> {
+): Promise<{
+  commitSha: string;
+  reportDir: string;
+  result: Awaited<ReturnType<typeof runEvals>>;
+  repoBase: string;
+}> {
   const root = makeFakeRepo();
   const reportDir = mkdtempSync(join(tmpdir(), 'evals-report-dir-'));
   if (options.scenarioRaw !== undefined) {
@@ -107,20 +112,26 @@ async function withFakeRepo(
       ...overrides,
     });
     const commitSha = git(root, ['rev-parse', 'HEAD']);
-    return { commitSha, reportDir, result };
+    return { commitSha, reportDir, result, repoBase: basename(root) };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 }
 
-function leftoverWorktrees(): number {
-  // Префикс worktree: «evals-» + имя мини-репозитория (evals-fake-repo-XXXXXX).
-  return readdirSync(tmpdir()).filter((name) => name.startsWith('evals-evals-fake-repo-')).length;
+/**
+ * Worktrees ЭТОГО мини-репозитория (b9-ревью, фикс гонки leftoverWorktrees):
+ * префикс runEvals — «evals-» + имя репозитория, а tmpdir общий для всех
+ * процессов машины — параллельный прогон (другая сессия, другой worktree
+ * репозитория) создаёт каталоги с тем же префиксом, и старый безличный фильтр
+ * ловил чужое. Считаем только каталоги своего фейк-репозитория.
+ */
+function leftoverWorktrees(repoBase: string): number {
+  return readdirSync(tmpdir()).filter((name) => name.startsWith(`evals-${repoBase}`)).length;
 }
 
 describe('runEvals', () => {
   it('green scenario: all four metrics recorded, report written, worktree cleaned', async () => {
-    const { commitSha, reportDir, result } = await withFakeRepo();
+    const { commitSha, reportDir, result, repoBase } = await withFakeRepo();
 
     expect(result.exitCode).toBe(0);
     expect(result.report.commit).toBe(commitSha);
@@ -147,7 +158,13 @@ describe('runEvals', () => {
       tokensMeasured: 1,
     });
     expect(existsSync(result.reportPath)).toBe(true);
-    expect(leftoverWorktrees()).toBe(0);
+    // Уборка worktree асинхронна относительно resolve() раннера: под нагрузкой
+    // rm/git worktree remove доезжает до конца после ассерта (флак b9-ревью).
+    // Окно на позднюю уборку, финальный ассерт строгий — уборка обязательна.
+    await vi.waitFor(() => expect(leftoverWorktrees(repoBase)).toBe(0), {
+      timeout: 10_000,
+      interval: 100,
+    });
     rmSync(reportDir, { recursive: true, force: true });
   });
 

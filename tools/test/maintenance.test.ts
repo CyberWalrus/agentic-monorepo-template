@@ -91,6 +91,32 @@ describe('isPathOpen: семантика путей', () => {
     expect(isPathOpen(root, 'gates/keep.json')).toBe(true);
   });
 
+  it('самоссылка: паттерн, покрывающий сам файл режима, отвергает сессию (b9-ревью)', () => {
+    for (const pattern of ['.claude/maintenance.json', '.claude/**']) {
+      seed(JSON.stringify({ task: 'b9', paths: [pattern] }));
+      expect(readMaintenanceSession(root), `паттерн ${pattern} — сессия отвергнута`).toBeNull();
+      expect(
+        isPathOpen(root, 'tools/verify.ts'),
+        `паттерн ${pattern} — защита полная, ничего не открыто`,
+      ).toBe(false);
+    }
+    // matchesGlob движка Node: '**' матчит обычные пути, но не dot-пути —
+    // сам файл режима он не покрывает, поэтому сессия валидна; это осознанный
+    // выбор оператора («открыть всё обычное»), а агент файл режима всё равно
+    // не перепишет: dot-путь не матчится и protect-paths не открывает его
+    // никогда (guard file !== MAINTENANCE_FILE).
+    seed(JSON.stringify({ task: 'b9', paths: ['**'] }));
+    expect(readMaintenanceSession(root)).toEqual({ task: 'b9', paths: ['**'] });
+    expect(isPathOpen(root, '.claude/maintenance.json')).toBe(false);
+  });
+
+  it('без самоссылки сессия валидна: соседние пути в .claude/ открываются', () => {
+    seed(JSON.stringify({ task: 'b9', paths: ['.claude/notes.md'] }));
+    expect(readMaintenanceSession(root)).not.toBeNull();
+    expect(isPathOpen(root, '.claude/notes.md')).toBe(true);
+    expect(isPathOpen(root, '.claude/maintenance.json')).toBe(false);
+  });
+
   it('./ и завершающий / нормализуются', () => {
     seed(JSON.stringify({ task: 'b9', paths: ['tools/verify.ts'] }));
     expect(isPathOpen(root, './tools/verify.ts')).toBe(true);
@@ -133,7 +159,7 @@ function makeFixture(): string {
   }
   writeFileSync(
     join(fixture, 'tools', 'protected-paths.json'),
-    JSON.stringify({ deny: ['pin.json'], review: [] }),
+    JSON.stringify({ deny: ['pin.json', '.claude/maintenance.json'], review: [] }),
   );
   writeFileSync(join(fixture, 'pin.json'), '{"keep": true}\n');
   return fixture;
@@ -151,6 +177,38 @@ describe('protect-paths CLI + режим по областям: проводка
       const result = runProtectCli(fixture, 'pin.json');
       expect(result.stdout).not.toContain('"permissionDecision":"deny"');
       expect(result.stderr).toBe('');
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it('сам файл режима не открывается режимом (b9-ревью): молчаливое расширение прав закрыто', () => {
+    const fixture = makeFixture();
+    try {
+      mkdirSync(join(fixture, '.claude'), { recursive: true });
+      writeFileSync(
+        join(fixture, '.claude', 'maintenance.json'),
+        JSON.stringify({ task: 'b9', paths: ['.claude/maintenance.json'] }),
+      );
+      // Слой 1: readMaintenanceSession отвергает самопокрывающий паттерн.
+      const result = runProtectCli(fixture, '.claude/maintenance.json');
+      expect(result.stdout).toContain('"permissionDecision":"deny"');
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it('файл режима не открыт даже паттерном соседней сессии: guard `file !== MAINTENANCE_FILE`', () => {
+    const fixture = makeFixture();
+    try {
+      mkdirSync(join(fixture, '.claude'), { recursive: true });
+      writeFileSync(
+        join(fixture, '.claude', 'maintenance.json'),
+        JSON.stringify({ task: 'b9', paths: ['pin.json'] }),
+      );
+      // Сессия валидна (pin.json), но Edit самого файла режима — deny.
+      const result = runProtectCli(fixture, '.claude/maintenance.json');
+      expect(result.stdout).toContain('"permissionDecision":"deny"');
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }

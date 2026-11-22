@@ -1,5 +1,5 @@
 /** PreToolUse(Edit|Write|MultiEdit|NotebookEdit): запрет записи в защищённые пути. */
-import { isPathOpen } from '../maintenance.ts';
+import { isPathOpen, MAINTENANCE_FILE } from '../maintenance.ts';
 import { protectionOf } from '../protected-paths.ts';
 import { deny, failClosedExit, projectDir, readHookInput, targetFile } from './lib.ts';
 process.env['HOOK_GATE_NAME'] ??= 'protect-paths';
@@ -15,7 +15,11 @@ const file = targetFile(input);
 // .claude/maintenance.json (создаёт человек/оператор) открыты для Edit/Write;
 // отсутствующий или битый файл режима — null, защита полная. guard-bash и
 // OS-песочница файлом не поднимаются: режим Edit/Write-only.
-if (file && protectionOf(file) === 'deny' && !isPathOpen(projectDir, file)) {
+// Сам файл режима закрыт ВСЕГДА (b9-ревью): иначе агент переписал бы paths
+// изнутри окна — молча расширив собственные права (файл gitignored, снапшот
+// и doctor его состояние не сверяют).
+const openedByMode = file !== null && file !== MAINTENANCE_FILE && isPathOpen(projectDir, file);
+if (file && protectionOf(file) === 'deny' && !openedByMode) {
   deny(
     'protect-paths',
     `${file} is a protected quality gate (tools/protected-paths.json). ` +

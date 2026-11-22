@@ -14,7 +14,7 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
-import { diagnoseStep, formatFindings, type StepDiagnostics } from './verify-diagnostics.ts';
+import { diagnoseStep, failedStepBody, type StepDiagnostics } from './verify-diagnostics.ts';
 import { budgetMsFor, parseBudgets, type VerifyBudgets } from './verify-budgets-loader.ts';
 import { allStepNames, fast, post, slow, type Step } from './verify-steps.ts';
 
@@ -214,14 +214,9 @@ if (json) {
   );
 } else {
   for (const result of results.filter((r) => !r.ok)) {
-    const diagnostics = result['diagnostics'];
     // Список «файл, строка, сообщение» вместо хвоста — только в текстовом
     // выводе и только когда диагностика есть; иначе прежний хвост (b9).
-    const body =
-      diagnostics !== undefined && diagnostics.findings.length > 0
-        ? formatFindings(diagnostics)
-        : result.output;
-    console.log(`\n── ${result.name} failed: ${result.command}\n${body}`);
+    console.log(`\n── ${result.name} failed: ${result.command}\n${failedStepBody(result)}`);
   }
   // Warning-only шаги (test-count) зелёные, но их предупреждения агент должен
   // увидеть в сводке, а не только в --json.

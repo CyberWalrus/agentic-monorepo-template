@@ -21,7 +21,7 @@ import { failClosedExit, projectDir, readHookInput } from './lib.ts';
 // Прямой вызов CLI наследует fail-closed: необработанный сбой — exit 2 (З4, C10.1).
 process.on('uncaughtException', failClosedExit);
 process.on('unhandledRejection', failClosedExit);
-import { formatFindings, type StepDiagnostics } from '../verify-diagnostics.ts';
+import { failedStepBody, type StepDiagnostics } from '../verify-diagnostics.ts';
 import { ensureStateRoot, stateDir } from '../snapshot.ts';
 
 const MAX_BLOCKS = 3;
@@ -106,15 +106,7 @@ const failed = report?.steps.filter((step) => !step.ok) ?? [];
 // Адресный канал (b9): если verify выдал диагностику — агент видит список
 // «файл, строка, сообщение», иначе прежний сырой хвост output.
 const details = failed.length
-  ? failed
-      .map((step) => {
-        const body =
-          step.diagnostics !== undefined && step.diagnostics.findings.length > 0
-            ? formatFindings(step.diagnostics)
-            : step.output;
-        return `### ${step.name} (${step.command})\n${body}`;
-      })
-      .join('\n\n')
+  ? failed.map((step) => `### ${step.name} (${step.command})\n${failedStepBody(step)}`).join('\n\n')
   : `verify did not produce a report:\n${result.stderr}`;
 console.log(
   JSON.stringify({

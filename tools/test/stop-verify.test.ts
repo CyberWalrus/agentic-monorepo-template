@@ -47,6 +47,14 @@ if (mode === 'garbage') {
 } else if (mode === 'halfvalid') {
   // ok-тип верен, шаг сломан: отчёт не читаем — хук обязан считать его красным
   console.log(JSON.stringify({ ok: true, steps: [{ name: 123 }] }));
+} else if (mode === 'diag') {
+  // b9: упавший шаг с корректной диагностикой
+  const steps = [{ name: 'stub', ok: false, command: 'stub verify', output: 'raw tail line', diagnostics: { source: 'vitest-json', findings: [{ file: 'src/x.test.ts', line: 4, message: 'expected 1 to be 2' }] } }];
+  console.log(JSON.stringify({ ok: false, steps }));
+} else if (mode === 'diag-broken') {
+  // b9: diagnostics битой формы — отчёт не читаем целиком (fail-closed)
+  const steps = [{ name: 'stub', ok: false, command: 'stub verify', output: 'tail', diagnostics: { source: 42, findings: 'nope' } }];
+  console.log(JSON.stringify({ ok: false, steps }));
 } else {
   const steps = [{ name: 'stub', ok: mode === 'green', command: 'stub verify', output: 'mode=' + mode }];
   console.log(JSON.stringify({ ok: mode === 'green', steps }));
@@ -311,6 +319,27 @@ it('отчёт verify, который не читается, блокирует 
   const result = stop(uniqueSession(), 'garbage');
   expect(result.stdout).toContain('"decision":"block"');
   expect(result.stdout).toMatch(/did not produce a report/i);
+}, 30_000);
+
+it('b9: diagnostics в отчёте — reason блока Stop показывает список «файл:строка: сообщение», не хвост', () => {
+  const result = stop(uniqueSession(), 'diag');
+  expect(result.stdout).toContain('"decision":"block"');
+  expect(result.stdout).toContain('src/x.test.ts:4: expected 1 to be 2');
+  expect(result.stdout).not.toContain('raw tail line');
+}, 30_000);
+
+it('b9: шаг без diagnostics — reason содержит прежний сырой хвост', () => {
+  const result = stop(uniqueSession(), 'diag-tail');
+  expect(result.stdout).toContain('"decision":"block"');
+  expect(result.stdout).toContain('mode=diag-tail');
+}, 30_000);
+
+it('b9: битое diagnostics инвалидирует весь отчёт — fail-closed, как нечитаемый', () => {
+  const result = stop(uniqueSession(), 'diag-broken');
+  expect(result.stdout).toContain('"decision":"block"');
+  expect(result.stdout).toMatch(/did not produce a report/i);
+  // битая диагностика не должна просочиться в reason как «данные»
+  expect(result.stdout).not.toContain('nope');
 }, 30_000);
 
 it('битый вход Stop закрывает хук кодом 2, а не неблокирующим 1', () => {

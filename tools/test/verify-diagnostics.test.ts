@@ -10,7 +10,7 @@ import { join } from 'node:path';
 
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 
-import { diagnoseStep, formatFindings } from '../verify-diagnostics.ts';
+import { diagnoseStep, failedStepBody, formatFindings } from '../verify-diagnostics.ts';
 
 const root = mkdtempSync(join(tmpdir(), 'verify-diagnostics-'));
 const NOW = 1_000_000_000_000;
@@ -186,6 +186,36 @@ describe('diagnoseStep: tsc-вывод (typecheck / typecheck:tools)', () => {
     expect(diagnoseStep(step, 'error TS5109: tsconfig broken', NOW, root)).toBeNull();
   });
 
+  it('turbo-префикс строки шага срезается (b9-ревью): реальный вывод typecheck', () => {
+    const output =
+      '@repo/api:typecheck: src/__b9review_tmp.ts(1,14): error TS2322: Type X is not assignable to type Y';
+    const diagnostics = diagnoseStep(step, output, NOW, root);
+    expect(diagnostics).toEqual({
+      source: 'tsc-stdout',
+      findings: [
+        {
+          file: 'src/__b9review_tmp.ts',
+          line: 1,
+          message: 'TS2322: Type X is not assignable to type Y',
+        },
+      ],
+    });
+  });
+
+  it('tsc-строка с путём в скобках не принимается за turbo-префикс', () => {
+    const diagnostics = diagnoseStep(
+      step,
+      'apps/api/src/a.ts(3,5): error TS7006: Parameter implicitly has an any type',
+      NOW,
+      root,
+    );
+    expect(diagnostics?.findings[0]).toEqual({
+      file: 'apps/api/src/a.ts',
+      line: 3,
+      message: 'TS7006: Parameter implicitly has an any type',
+    });
+  });
+
   it('управляющие символы в сообщении экранируются (log injection)', () => {
     const diagnostics = diagnoseStep(
       step,
@@ -233,6 +263,30 @@ describe('diagnoseStep: неизвестный шаг', () => {
         root,
       ),
     ).toBeNull();
+  });
+});
+
+describe('failedStepBody: единый выбор тела упавшего шага (b9-ревью)', () => {
+  it('диагностика есть — список вместо хвоста', () => {
+    expect(
+      failedStepBody({
+        output: 'raw tail',
+        diagnostics: {
+          source: 'vitest-json',
+          findings: [{ file: 'a.ts', line: 2, message: 'boom' }],
+        },
+      }),
+    ).toBe('a.ts:2: boom');
+  });
+
+  it('diagnostics с пустым findings — fallback на сырой хвост (пустой список хуже хвоста)', () => {
+    expect(
+      failedStepBody({ output: 'raw tail', diagnostics: { source: 'vitest-json', findings: [] } }),
+    ).toBe('raw tail');
+  });
+
+  it('диагностики нет — сырой хвост', () => {
+    expect(failedStepBody({ output: 'raw tail' })).toBe('raw tail');
   });
 });
 

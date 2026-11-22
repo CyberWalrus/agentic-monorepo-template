@@ -91,6 +91,18 @@ export function formatFindings(diagnostics: StepDiagnostics): string {
   return lines.join('\n');
 }
 
+/**
+ * Тело упавшего шага для агента (b9): диагностика «файл, строка, сообщение»,
+ * если она есть и непуста, иначе сырой хвост output. Чистая функция — единая
+ * точка выбора для текстового вывода verify и reason блока Stop; fallback на
+ * хвост при findings=[] — часть контракта (пустой список хуже хвоста).
+ */
+export function failedStepBody(step: { diagnostics?: StepDiagnostics; output: string }): string {
+  return step.diagnostics !== undefined && step.diagnostics.findings.length > 0
+    ? formatFindings(step.diagnostics)
+    : step.output;
+}
+
 // --- Vitest JSON -------------------------------------------------------------------
 
 function vitestReportPaths(stepName: string, root: string): string[] {
@@ -225,10 +237,19 @@ function truncate(message: string): string {
 
 const TSC_ERROR = /^\s*([^\s(:]+)\((\d+),(\d+)\):\s*error\s+(\S+):\s*(.*)$/;
 
+/**
+ * Шаг typecheck идёт через `turbo run --output-logs=errors-only`, и каждая
+ * строка префиксована id задачи: `@repo/api:typecheck: src/x.ts(1,14): …`.
+ * Префикс не содержит скобок — срезаем самый длинный `…:` до пробела;
+ * непрефиксованная tsc-строка содержит `(` до своего `:` и не режется.
+ * (b9-ревью: без этого tsc-диагностика мертва на реальном выводе turbo.)
+ */
+const TURBO_LINE_PREFIX = /^[^\s()]*:\s/;
+
 function fromTscOutput(fullOutput: string, root: string): StepDiagnostics | null {
   const findings: Diagnostic[] = [];
   for (const textLine of fullOutput.split('\n')) {
-    const match = TSC_ERROR.exec(textLine);
+    const match = TSC_ERROR.exec(textLine.replace(TURBO_LINE_PREFIX, ''));
     if (match === null) {
       continue;
     }
