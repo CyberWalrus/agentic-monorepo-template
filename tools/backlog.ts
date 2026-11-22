@@ -231,18 +231,25 @@ function commandNext(source: BoardSource, operator: boolean): void {
   const inProgress = open.filter((task) => all.claimedIds.has(task.id));
   const sorted = free.toSorted(
     (a, b) =>
-      PRIORITIES.indexOf(a.priority) - PRIORITIES.indexOf(b.priority) ||
-      Number(touchesOverlap(b, inProgress)) - Number(touchesOverlap(a, inProgress)) ||
-      a.id.localeCompare(b.id),
+      PRIORITIES.indexOf(a.priority) - PRIORITIES.indexOf(b.priority) || a.id.localeCompare(b.id),
   );
-  const chosen = sorted[0];
+  // D7 (запрет при пересечении): задача, чьи touches пересекаются с задачами
+  // в работе, не выдаётся. Захват всё равно встречает отказ в start под замком
+  // (commandStart): выдача — подсказка, граница — отказ захвата.
+  const overlapping = sorted.filter((task) => touchesOverlap(task, inProgress));
+  const issued = sorted.filter((task) => !touchesOverlap(task, inProgress));
+  if (issued.length === 0) {
+    die(
+      `Свободные задачи есть, но их touches пересекаются с задачами в работе (D7): ${overlapping.map((task) => task.id).join(', ')}.\nДождись мержа пересекающихся задач (их диффы сузят конфликты) или возьми работу по прямому поручению человека (ADR 0007, «Работа вне доски»).`,
+    );
+  }
+  const chosen = issued[0];
   if (chosen === undefined) {
     die('Свободных задач нет.');
   }
-  const overlapping = sorted.filter((task) => touchesOverlap(task, inProgress));
   if (overlapping.length > 0) {
     console.error(
-      `Пути пересекаются с задачами в работе (${overlapping.map((task) => task.id).join(', ')}) — они в конце списка. Возможны конфликты слияния (ADR 0007).`,
+      `Пути пересекаются с задачами в работе — не выдаются (D7): ${overlapping.map((task) => task.id).join(', ')}. Возврат в выдачу — после мержа пересекающихся задач.`,
     );
   }
   if (maintenance.length > 0) {
@@ -397,6 +404,33 @@ function commandStart(id: string, source: BoardSource, operator: boolean): void 
   const created = tryGit('branch', `task/${id}`, source.ref ?? 'main');
   if (created === null) {
     die(`Задача ${id} занята: ветка task/${id} уже существует. Возьми другую: pnpm backlog next.`);
+  }
+  // D7 (запрет при пересечении): проверка под замком — единственный атомарный
+  // примитив клона это создание ветки, поэтому пересечение проверяется ПОСЛЕ
+  // захвата. Три условия: (а) claimedIds перечитаны заново (свежий
+  // for-each-ref, tools/backlog-doctor.ts) — снапшот из начала команды устарел
+  // бы между проверкой и захватом, и два параллельных start пересекающихся
+  // задач прошли бы оба; (б) собственный id исключён: сразу после создания
+  // ветки задача сама в claimedIds, а touchesOverlap(task, [task]) всегда
+  // true — без исключения каждый start самооткажется; (в) откат — git branch
+  // -D (не -d: HEAD-зависимая «not fully merged» из worktree другой задачи),
+  // у ветки секунды жизни и ноль своих коммитов; неудача отката — громкий
+  // отказ: фантомный клейм блокирует задачу всему клону, снимает release.
+  const freshClaimed = claimedIds();
+  freshClaimed.delete(id);
+  const freshOverlaps = source.tasks.filter(
+    (item) => !item.done && freshClaimed.has(item.id) && touchesOverlap(task, [item]),
+  );
+  if (freshOverlaps.length > 0) {
+    const rolledBack = tryGit('branch', '-D', `task/${id}`);
+    if (rolledBack === null) {
+      die(
+        `Проверка под замком отказала (${freshOverlaps.map((other) => other.id).join(', ')}), но откат ветки task/${id} не удался — фантомный клейм. Освобождает человек: pnpm backlog release ${id}.`,
+      );
+    }
+    die(
+      `Задача ${id} пересекается по touches с задачами в работе (D7): ${freshOverlaps.map((other) => other.id).join(', ')}.\nВетка task/${id} откачена. Дождись их мержа или возьми другую: pnpm backlog next.`,
+    );
   }
   createWorktree(id, `task/${id}`);
 }

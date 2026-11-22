@@ -272,6 +272,19 @@ export function touchesOverlap(task: TaskFile, inProgress: TaskFile[]): boolean 
   );
 }
 
+/**
+ * Проверка «файл лежит в объявленных путях» для гейта branch-scope (D7, З2).
+ * Отличается от touchesOverlap: там пересечение двух множеств через
+ * expandTouches, здесь одна сторона — сырой путь диффа. Литеральный путь —
+ * точное равенство (bare-каталог без «/**» покрывает только сам себя,
+ * грамматика invalidTouch шире не разрешает), «каталог/**» — glob.
+ */
+export function fileInTouches(file: string, touches: string[]): boolean {
+  return touches.some(
+    (entry) => file === entry || (entry.endsWith('/**') && matchesGlob(file, entry)),
+  );
+}
+
 // --- Замыкание задачи (ADR 0007, «Замыкание задачи») --------------------------
 
 /** Сколько часов задача может висеть в работе без коммитов, прежде чем doctor предупредит. */
