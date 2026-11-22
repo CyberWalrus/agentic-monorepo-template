@@ -44,6 +44,7 @@
     "regen": "pnpm --filter @repo/contracts openapi && pnpm --filter @repo/web routes:gen",
     "env:check": "node tools/check-env-usage.ts && node tools/check-env-example.ts",
     "denial:report": "node tools/denial-trend.ts",
+    "telemetry:report": "node tools/telemetry-report.main.ts",
     "tool-class:check": "node tools/check-tool-class.ts",
     "docs:check": "node tools/check-docs.ts",
     "flaky:quarantine": "node tools/check-flaky-rate.ts --validate-quarantine --quarantine tools/flaky-quarantine.json",

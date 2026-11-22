@@ -39,7 +39,23 @@ jobs:
         env: { CI: 'true', PLAYWRIGHT_JSON_OUTPUT_NAME: 'e2e/reports/flake.json' }
         continue-on-error: true
       - name: flaky rate + quarantine (b4.4)
-        run: node tools/check-flaky-rate.ts --report e2e/reports/flake.json --quarantine tools/flaky-quarantine.json --repeat 5 --flaky-out e2e/reports/flaky-titles.txt
+        # --rate-out (c9.4): вычисленный гейтом rate — единственный источник
+        # тренда телеметрии, чтобы она не пересчитывала flaky rate сама.
+        run: node tools/check-flaky-rate.ts --report e2e/reports/flake.json --quarantine tools/flaky-quarantine.json --repeat 5 --flaky-out e2e/reports/flaky-titles.txt --rate-out e2e/reports/flaky-rate.json
+      # Артефакт телеметрии (c9.4, B1 ревью): без него тренд flaky rate
+      # неосуществим — flake.json раньше не покидал job. always: зелёный
+      # прогон тоже обязан оставить точку тренда; отсутствие файла у
+      # конкретного прогона телеметрия читает как «нет данных», битый
+      # flake.json красит сам шаг выше (exit 1) — З11 через job report.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: flaky-rate
+          path: |
+            e2e/reports/flake.json
+            e2e/reports/flaky-rate.json
+          retention-days: 90
+          if-no-files-found: ignore
       - name: flaky issues — один на тест (b4.4, дедуп)
         if: failure()
         env:
@@ -316,6 +332,42 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+  telemetry:
+    name: telemetry trends (c9.4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # З6: бюджет времени и минимальный набор permissions. issues: write не
+    # нужен — issue при красном telemetry создаёт job report (telemetry в его
+    # needs — решение B3 ревью c9.4); untrusted-входы (артефакты, тела PR)
+    # валидируются в чекере, в summary идут только числа/id/статусы.
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        # Полная история: конфликты пар task/* считаются git merge-tree по
+        # удалённым ссылкам — fetch-depth 1 их не привозит.
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup
+      - name: fetch task branches
+        run: git fetch origin '+refs/heads/task/*:refs/remotes/origin/task/*'
+      - name: telemetry report (trends.json + step summary)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p reports
+          node tools/telemetry-report.main.ts --period-days 30 --out reports/trends.json --summary
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        # Всегда: даже красный сбор телеметрии оставляет trends.json с
+        # problems[] — диагностика по артефакту, issue создаёт report.
+        if: always()
+        with:
+          name: trends-${{ github.run_id }}
+          path: reports/trends.json
+          retention-days: 90
+
   report:
     name: report failure
     needs:
@@ -327,6 +379,7 @@ jobs:
         gate-canaries,
         verify-budgets,
         backlog-doctor,
+        telemetry,
       ]
     if: failure()
     runs-on: ubuntu-latest

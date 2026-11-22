@@ -105,6 +105,8 @@ const KNOWN_GATES: readonly string[] = [
   'tools/run-gate-canaries.ts',
   'tools/run-template-copy-canary.ts',
   'tools/snapshot.ts',
+  'tools/telemetry-report.main.ts',
+  'tools/telemetry-report.ts',
   'tools/verify-budgets-loader.ts',
   'tools/verify-steps.ts',
   'tools/verify.ts',
