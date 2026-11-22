@@ -180,7 +180,12 @@ jobs:
       - uses: ./.github/actions/setup
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: apps/api/reports/mutation/stryker-incremental.json
+          # b2.4: incremental-файлы web и контрактов — как у api (отложенное
+          # сюда решение b2.2: кэш в CI для всех трёх мутируемых пакетов).
+          path: |
+            apps/api/reports/mutation/stryker-incremental.json
+            apps/web/reports/mutation/stryker-incremental.json
+            packages/contracts/reports/mutation/stryker-incremental.json
           # Restore-key stryker-main- удалён (e16): mutation не бежит на push в main
           # (if: github.event_name != 'push') — ключ stryker-main-* не пишется никем,
           # чтение несуществующего ключа всегда мимо. Межветочный кэш — отдельная
@@ -195,7 +200,12 @@ jobs:
         if: always()
         with:
           name: mutation-report
-          path: apps/api/reports/mutation/
+          # b2.4: отчёты всех трёх мутируемых пакетов (у web и контрактов свои
+          # thresholds.break — красный прогон диагностируется по артефакту).
+          path: |
+            apps/api/reports/mutation/
+            apps/web/reports/mutation/
+            packages/contracts/reports/mutation/
           if-no-files-found: ignore
       - name: duration to summary
         if: always()

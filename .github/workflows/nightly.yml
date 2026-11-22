@@ -81,17 +81,140 @@ jobs:
   mutation-full:
     name: mutation (full)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     # Явный contents: read (e16): job issues не создаёт — читает, а не наследует.
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
+      # b2.4: mutation-full остаётся артефактом ТОЛЬКО api — телеметрия c9.4
+      # (telemetry-report.main.ts:397) ищет артефакт по точному имени и берёт
+      # contents[0] глоба '*mutation.json' как «домен apps/api»; три отчёта в
+      # одном артефакте молча подменяли бы домен тренда (находка план-ревью
+      # b2.4). Web и контракты — соседними артефактами: mutation-full-web и
+      # mutation-full-contracts, читает их джоба mutation-ratchet.
       - run: pnpm --filter @repo/api exec stryker run --force
+      - run: pnpm --filter @repo/web exec stryker run --force
+      - run: pnpm --filter @repo/contracts exec stryker run --force
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with: { name: mutation-full, path: apps/api/reports/mutation/ }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with: { name: mutation-full-web, path: apps/web/reports/mutation/ }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with: { name: mutation-full-contracts, path: packages/contracts/reports/mutation/ }
+
+  # Храповик мутационных порогов web и контрактов (b2.4, З7): порог поднимает
+  # автоматика по правилу ADR 0009 (факт, округлённый вниз, минус 5 п.п.),
+  # только вверх; предлагает PR, когда счёт пакета выше порога в двух
+  # последних зелёных прогонах подряд («устойчивое превышение»; зелёность
+  # job-scoped — артефакт состояния пишется только от успеха собственных
+  # шагов, по образцу perf-baseline). Логика в tools/check-mutation-ratchet
+  # (.main).ts; красная джоба заводит issue через report.needs (L5, З11).
+  mutation-ratchet:
+    name: mutation ratchet (b2.4)
+    needs: [mutation-full]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read # fetch-state: артефакты прошлых ночных прогонов
+      contents: write # ветка и коммит храповика
+      pull-requests: write # PR храповика
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/setup
+      - name: download this run's reports
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ github.run_id }}" -n mutation-full-web -D work/web
+          gh run download "${{ github.run_id }}" -n mutation-full-contracts -D work/contracts
+      # Зубья порога дублем от stryker (он красит mutation-full сам): отчёт из
+      # артефакта обязан читаться и не упасть ниже break — иначе храповик
+      # молчал бы на битом артефакте (З11).
+      - name: check current scores
+        run: node tools/check-mutation-ratchet.main.ts check --web work/web/reports/mutation/mutation.json --contracts work/contracts/reports/mutation/mutation.json
+      - name: fetch previous state
+        id: prev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Коды как у perf fetch-baseline: 0 найден, 3 первый запуск, 1 ошибка.
+          code=0
+          node tools/check-mutation-ratchet.main.ts fetch-state --out prev --exclude-run "${{ github.run_id }}" || code=$?
+          case "$code" in
+            0) echo "mode=found" >> "$GITHUB_OUTPUT";;
+            3) echo "mode=none" >> "$GITHUB_OUTPUT";;
+            *) exit 1;;
+          esac
+      - name: decide
+        run: |
+          mkdir -p state
+          PREV_FLAG=""
+          if [ "${{ steps.prev.outputs.mode }}" = "found" ]; then
+            PREV_FLAG="--prev prev"
+          fi
+          node tools/check-mutation-ratchet.main.ts decide \
+            --web work/web/reports/mutation/mutation.json \
+            --contracts work/contracts/reports/mutation/mutation.json \
+            $PREV_FLAG \
+            --state-out state \
+            --proposal-out state/proposal.json \
+            --head-sha "${{ github.sha }}" \
+            --run-id "${{ github.run_id }}"
+      - name: upload state artifact
+        # Только от успеха check/decide: окно устойчивости считается по зелёным
+        # собственным шагам, красный прогон состояние не пишет.
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: mutation-ratchet-state, path: state/ratchet-state.json }
+      - name: PR with raised thresholds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -f state/proposal.json ]; then
+            echo "Устойчивого превышения нет — PR храповика не нужен."
+            exit 0
+          fi
+          git config user.name "nightly-ratchet"
+          git config user.email "nightly-ratchet@users.noreply.github.com"
+          BRANCH="chore/mutation-ratchet-web-contracts"
+          git checkout -b "$BRANCH"
+          node tools/check-mutation-ratchet.main.ts apply --proposal state/proposal.json
+          git commit -am "chore: поднятие мутационного порога break web и контрактов (nightly, b2.4)"
+          git push origin ":refs/heads/$BRANCH" 2>/dev/null || true
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore: поднятие мутационного порога break web и контрактов (nightly)" \
+            --body-file <(printf '%s\n%s\n' "Автоматическое поднятие thresholds.break web и контрактов после зелёного nightly (b2.4, З7): правило ADR 0009 «Пороги» от устойчивого счёта, только вверх. Порог может только ужесточаться — каждое повышение проходит приёмку человека: label \`gate-change-approved\` после последнего push (force-repush ветки снимает label на synchronize, ADR 0002)." "$(cat state/proposal.json)") \
+            || echo "PR храповика уже открыт — ветка обновлена."
+
+  # Канарейка храповика (критерий приёмки b2.4): искусственно завышенный
+  # порог обязан дать нарушение — иначе job красный («канарейка не ловит»).
+  # Порог подаётся прямо на вход чекера (--break-override), реальный
+  # stryker.conf.json не правится и полный прогон мутаций не повторяется
+  # (находка план-ревью b2.4). Вторая половина критерия — предложение PR при
+  # устойчивом превышении — покрыта юнит-тестами decide в tools/test/.
+  mutation-canary:
+    name: mutation canary (inflated break)
+    needs: [mutation-ratchet]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/setup
+      - name: download this run's reports
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ github.run_id }}" -n mutation-full-web -D work/web
+          gh run download "${{ github.run_id }}" -n mutation-full-contracts -D work/contracts
+      - name: check must fail
+        run: node tools/check-mutation-ratchet.main.ts check --web work/web/reports/mutation/mutation.json --contracts work/contracts/reports/mutation/mutation.json --break-override web=1000 --break-override contracts=1000 --expect-regression
 
   # Дрейф живого ruleset от снимка (a11): живое правило меняется в интерфейсе
   # в любой момент — снимок продолжит утверждать защиту, которой нет.
@@ -375,6 +498,8 @@ jobs:
       [
         flake-hunt,
         mutation-full,
+        mutation-ratchet,
+        mutation-canary,
         perf-trend,
         perf-canary,
         gate-canaries,
