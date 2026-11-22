@@ -1,10 +1,14 @@
 /**
  * Визуальный базлайн страницы задач. Запускается только в Docker (`pnpm visual`).
  * Обновление базлайнов — `pnpm visual:update`, делает человек.
+ *
+ * Изоляция по рабочему пространству (ADR 0020): каждый тест сеет данные в свой
+ * workspace и видит только их, поэтому сценарии не сериализуются — SHARED_DATA_LOCK
+ * снят (c1.5). Seed-данные той же формы: пиксельные базлайны не меняются.
  */
 import type { Page } from '@playwright/test';
 
-import { expect, makeTasks, SHARED_DATA_LOCK, test } from '../../fixtures.ts';
+import { expect, makeTasks, test } from '../../fixtures.ts';
 
 /** Скриншот только после гидратации: до неё контролы disabled. */
 async function openHydrated(page: Page) {
@@ -12,11 +16,9 @@ async function openHydrated(page: Page) {
   await expect(page.getByRole('button', { name: 'Add task' })).toBeEnabled();
 }
 
-test.describe.configure({ mode: 'serial' });
-
-test.describe('tasks page', { lock: SHARED_DATA_LOCK }, () => {
-  test('tasks page with seeded data', async ({ page, seedTasks }) => {
-    await seedTasks(makeTasks(5));
+test.describe('tasks page', () => {
+  test('tasks page with seeded data', async ({ page, seedTasks, workspace }) => {
+    await seedTasks(makeTasks(5, workspace));
     await openHydrated(page);
     await expect(page.getByTestId('task-item')).toHaveCount(5);
 
@@ -31,8 +33,8 @@ test.describe('tasks page', { lock: SHARED_DATA_LOCK }, () => {
     await expect(page).toHaveScreenshot('tasks-page-empty.webp', { fullPage: true });
   });
 
-  test('validation error state', async ({ page, seedTasks }) => {
-    await seedTasks(makeTasks(2));
+  test('validation error state', async ({ page, seedTasks, workspace }) => {
+    await seedTasks(makeTasks(2, workspace));
     await openHydrated(page);
     await page.getByRole('button', { name: 'Add task' }).click();
     await expect(page.getByRole('alert')).toBeVisible();
@@ -40,8 +42,8 @@ test.describe('tasks page', { lock: SHARED_DATA_LOCK }, () => {
     await expect(page.locator('form')).toHaveScreenshot('create-form-error.webp');
   });
 
-  test('error banner after a failed toggle', async ({ page, seedTasks }) => {
-    await seedTasks(makeTasks(2));
+  test('error banner after a failed toggle', async ({ page, seedTasks, workspace }) => {
+    await seedTasks(makeTasks(2, workspace));
     // Баннер ошибки после неудачного toggle — единственное состояние страницы,
     // меняющееся по рантайм-данным (b12). Запрос блокируется до клика:
     // оптимистичная галочка откатывается, остаётся баннер role="alert".
