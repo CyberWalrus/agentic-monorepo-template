@@ -259,7 +259,7 @@ function expandTouches(paths: string[]): string[] {
   return paths.map((path) => (path.endsWith('/**') ? path : `${path}/__literal__`));
 }
 
-/** Задачи, в работе на этом клоне, пересекающиеся по touches с данной (ADR 0007, D7 — предупреждение). */
+/** Задачи, в работе на этом клоне, пересекающиеся по touches с данной (ADR 0007, D7 — запрет при захвате). */
 export function touchesOverlap(task: TaskFile, inProgress: TaskFile[]): boolean {
   return inProgress.some((other) =>
     expandTouches(task.touches).some((mine) =>

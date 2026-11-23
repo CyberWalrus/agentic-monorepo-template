@@ -10,8 +10,8 @@
  * Математика пересечения канареечна отдельно (backlog-board.test.ts,
  * touchesOverlap), сообщение next отличимо от «свободных задач нет».
  * Отказ действует одинаково для обычного и --operator захвата: путь commandStart
- * общий (граница «одна операторская задача за раз» commandNextOperator не
- * проверяет пересечения — осознанное решение, журнал d7).
+ * общий. Оба next (обычный и --operator) пересекающиеся задачи лишь не
+ * предлагают: выдача — подсказка, граница — отказ под замком (З3).
  */
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
