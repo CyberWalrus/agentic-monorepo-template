@@ -257,6 +257,28 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node tools/check-ruleset-drift.ts --create-issue --run-url "$RUN_URL"
 
+  # Сводный check здоровья workflow (e26): каждый workflow, ожидаемо
+  # стартующий на main (триггеры push/schedule из .github/workflows/**),
+  # обязан иметь зелёный прогон на свежем head-коммите main либо свежий
+  # schedule-прогон в окне. Закрывает escaped-defect 2026-11-21: workflow с
+  # битым uses не стартовал ни разу, а вне required checks main оставался
+  # зелёным. Красный прогон заводит issue через job report (needs). Незавершённый
+  # молодой прогон — не красный (окно CI на свежем коммите), старше 6 ч — красный.
+  workflow-health:
+    name: workflow health (e26)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false }
+      - name: workflow health check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node tools/check-workflow-health.ts
+
   # Храповик числа тестов (a10): поднимает автоматика, не автор PR
   # (test-count-baseline.json — «горячий» файл, З9). Update refuses to lower.
   test-count-ratchet:
@@ -538,6 +560,7 @@ jobs:
         gate-canaries,
         verify-budgets,
         backlog-doctor,
+        workflow-health,
         telemetry,
       ]
     if: failure()
