@@ -28,8 +28,11 @@
 **/stryker.config.json          @CyberWalrus
 /e2e/playwright.config.ts       @CyberWalrus
 /.gitignore                     @CyberWalrus
+**/.gitignore                   @CyberWalrus
 /.nvmrc                         @CyberWalrus
+/.secretlintrc.cjs              @CyberWalrus
 /.secretlintrc.json             @CyberWalrus
+/.secretlintrc.js               @CyberWalrus
 /.secretlintignore              @CyberWalrus
 **/__screenshots__/             @CyberWalrus
 /copier.yml                     @CyberWalrus

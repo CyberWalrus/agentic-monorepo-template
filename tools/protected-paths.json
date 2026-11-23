@@ -1,5 +1,5 @@
 {
-  "$comment": "Единый список защищённых путей для хука агента (tools/hooks/protect-paths.ts) и CI (tools/check-protected-paths.ts). deny: агент не может менять, в CI нужен label gate-change-approved. review: менять можно, но обязательно ревью CODEOWNERS. Класс защиты файла — его роль в контуре merge, а не каталог (ADR 0014): deny внутри tools/ — вычисленное замыкание гейт-контурa, равенство держит гейт check-tool-class (pnpm tool-class:check); инструменты разработчика tools/ — review через blanket tools/**. Осознанный null (b8): test-count-baseline.json — базлайн warning-only храповика, его легитимно поднимает pnpm test:count:update (заголовок tools/check-test-count.ts), deny заблокировал бы обновление; когда человек сделает храповик блокирующим, файл уходит в deny. Опровергнутые векторы (b8, дополнять не нужно): knip.config.ts инертен — knip.json первый в KNIP_CONFIG_LOCATIONS; sherif RC-файла не имеет (настройки в CLI и package.json); depcruise получает --config явно (.dependency-cruiser.cjs в deny).",
+  "$comment": "Единый список защищённых путей для хука агента (tools/hooks/protect-paths.ts) и CI (tools/check-protected-paths.ts). deny: агент не может менять, в CI нужен label gate-change-approved. review: менять можно, но обязательно ревью CODEOWNERS. Класс защиты файла — его роль в контуре merge, а не каталог (ADR 0014): deny внутри tools/ — вычисленное замыкание гейт-контурa, равенство держит гейт check-tool-class (pnpm tool-class:check); инструменты разработчика tools/ — review через blanket tools/**. Осознанный null (b8): test-count-baseline.json — базлайн warning-only храповика, его легитимно поднимает pnpm test:count:update (заголовок tools/check-test-count.ts), deny заблокировал бы обновление; когда человек сделает храповик блокирующим, файл уходит в deny. Опровергнутые векторы (b8, дополнять не нужно): knip.config.ts инертен — knip.json первый в KNIP_CONFIG_LOCATIONS; sherif RC-файла не имеет (настройки в CLI и package.json); depcruise получает --config явно (.dependency-cruiser.cjs в deny). Замыкание по ревью PR (23.11): .gitignore расширен до **/.gitignore — вложенный .gitignore уводит закоммиченный файл от oxlint, oxfmt и secretlint (посылка подтверждена живыми прогонами ревью в каталоге вне репозитория); .claude/**/.gitignore, .claude-plugin/.gitignore и .github/**/.gitignore перечислены явно, потому что ** в path.matchesGlob не матчит сегменты, начинающиеся с точки: **/.gitignore не покрывает скрытые каталоги, а .github/** — dot-файлы прямо в .github; .secretlintrc.cjs и .secretlintrc.js — имена, которые загрузчик secretlint (rc-config-loader 4.2.0) ищет раньше .secretlintrc.json, поэтому JS-конфиг перекрывает защищённый json (живой прогон: rules: [] → EMPTY_RULES, exit 0). Опровергнутые имена: .secretlintrc, .secretlintrc.yaml и .secretlintrc.yml ищутся после .secretlintrc.json и, пока он на месте, не читаются (yaml — живым прогоном, остальные — порядком поиска); secretlint.config.js в список поиска не входит.",
   "deny": [
     "**/__screenshots__/**",
     "perf-budgets.json",
@@ -31,9 +31,14 @@
     ".claude/settings.local.json",
     ".claude/maintenance.json",
     ".claude/hooks/**",
-    ".gitignore",
+    "**/.gitignore",
+    ".claude/**/.gitignore",
+    ".claude-plugin/.gitignore",
+    ".github/**/.gitignore",
     ".nvmrc",
+    ".secretlintrc.cjs",
     ".secretlintrc.json",
+    ".secretlintrc.js",
     ".secretlintignore",
     "tools/analyze-command.ts",
     "tools/backlog-board.ts",
