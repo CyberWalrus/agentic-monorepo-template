@@ -7,13 +7,20 @@
  *   node tools/perf-canary-patch.ts apply [--file PATH]
  *
  * По умолчанию — apps/api/src/tasks/repository.ts (in-memory репозиторий: в
- * ночном прогоне Postgres нет). Откат — git checkout -- <файл> в job'е.
+ * ночном прогоне Postgres нет). Откат: джоба ночи работает на эфемерном
+ * раннере — патч не переживает job'у и шага отката в nightly.yml нет;
+ * локально — git checkout -- <файл>.
+ *
+ * Дрейф якоря (устарел после C1.5: workspaceId в сигнатуре create) ловит
+ * тест tools/test/perf-canary-patch.test.ts: apply на настоящем файле краснеет
+ * при каждом изменении create(), а не только в ночной джобе.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const DEFAULT_FILE = 'apps/api/src/tasks/repository.ts';
-const ANCHOR = '  async create(title: string, ownerId?: string | null): Promise<Task> {\n';
+const ANCHOR =
+  '  async create(title: string, ownerId?: string | null, workspaceId?: string): Promise<Task> {\n';
 const DELAY = '    await new Promise((resolve) => setTimeout(resolve, 200));\n';
 
 const fileArg = process.argv.indexOf('--file');
@@ -39,7 +46,13 @@ if (source.includes('setTimeout(resolve, 200)')) {
 }
 const patched = source.replace(ANCHOR, `${ANCHOR}${DELAY}`);
 if (patched === source) {
-  console.error(`✗ ${target}: якорь create() не найден — патч не применился`);
+  console.error(
+    [
+      `✗ ${target}: якорь create() не найден — патч не применился.`,
+      `  Искомая строка: ${JSON.stringify(ANCHOR)}`,
+      '  Файл дрейфовал — обнови ANCHOR в tools/perf-canary-patch.ts под текущую сигнатуру create()',
+    ].join('\n'),
+  );
   process.exit(1);
 }
 if (!patched.includes(DELAY)) {
