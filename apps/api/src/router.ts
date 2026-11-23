@@ -30,10 +30,18 @@ export const router = os.router({
       }
       return task;
     }),
-    // Домен не проверяет владельца: NOT_FOUND здесь недостижим — у задачи без
-    // владельца (нет или чужая) мидлварь отказывает раньше (C2.3, план).
-    remove: os.tasks.remove.handler(async ({ input, context }) => {
-      await context.tasks.remove(input.id, context.workspaceId ?? undefined);
+    // Домен не проверяет владельца: у задачи без владельца (нет или чужая)
+    // мидлварь отказывает раньше (C2.3). А вот scope рабочего пространства
+    // проверяет только домен: проверка владельца сквозная (ADR 0020), поэтому
+    // до домена доходит и запрос владельца из чужого scope. Неудалённая задача
+    // (undefined) — отказ FORBIDDEN, тот же, что для неизвестного id: NOT_FOUND
+    // для remove контрактом не заявлен, задача вне scope для клиента не
+    // существует (e52).
+    remove: os.tasks.remove.handler(async ({ input, context, errors }) => {
+      const removed = await context.tasks.remove(input.id, context.workspaceId ?? undefined);
+      if (!removed) {
+        throw errors.FORBIDDEN();
+      }
     }),
   },
 });
