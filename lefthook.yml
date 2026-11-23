@@ -10,8 +10,8 @@ pre-commit:
     lint:
       glob: '*.{ts,tsx,js,mjs,cjs}'
       run: pnpm exec oxlint --type-aware --deny-warnings {staged_files}
-    # Сканер секретов (b6): фикстуры с синтетическими секретами —
-    # в защищённом .secretlintignore.
+    # Сканер секретов (b6): конфиг и исключения (.secretlintrc.json,
+    # .secretlintignore) — deny в tools/protected-paths.json (b8).
     secrets:
       glob: '*.*'
       run: pnpm exec secretlint {staged_files}
