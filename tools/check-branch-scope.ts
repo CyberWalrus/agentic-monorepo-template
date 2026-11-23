@@ -9,7 +9,11 @@
  * ветке себе не помогает. Bare-каталог без «/**» покрывает только точный путь.
  * Собственные пути файла задачи (backlog/<id>.md и backlog/done/<id>.md,
  * перенос между ними и правки журнала) разрешены всегда — их перенос требует
- * гейт замыкания docs (канарейка «файл задачи не перенесён в done/»).
+ * гейт замыкания docs (канарейка «файл задачи не перенесён в done/»). Общие
+ * пути (SHARED_PATHS в backlog-board.ts — docs/escaped-defects.md) разрешены
+ * любой задаче независимо от touches: строку реестра несёт каждый
+ * PR-исправление (AGENTS.md), и файл, который правит каждая задача, не строит
+ * задачи в очередь (d7tail, З9).
  *
  * Ветке вне task/* гейт зелёный skip: работа вне доски по прямому поручению
  * легальна (ADR 0007, «Работа вне доски»), граница остаётся приёмке человека
@@ -38,7 +42,7 @@
  * verify-budgets.json, файл тем же PR в deny protected-paths.json и в
  * KNOWN_GATES check-tool-class.ts.
  */
-import { fileInTouches, parseTask } from './backlog-board.ts';
+import { SHARED_PATHS, fileInTouches, parseTask } from './backlog-board.ts';
 import { tryGit } from './backlog-doctor.ts';
 
 const problems: string[] = [];
@@ -164,7 +168,7 @@ if (problems.length > 0) {
   die(
     `branch-scope: дифф ветки task/${id} не укладывается в touches задачи (D7):\n` +
       problems.map((problem) => `  - ${problem}`).join('\n') +
-      `\nСобственные файлы задачи (${[...ownPaths].join(', ')}) разрешены всегда — их перенос делает pnpm backlog close.\n` +
+      `\nВсегда разрешены: собственные файлы задачи (${[...ownPaths].join(', ')}) — их перенос делает pnpm backlog close; общие пути (${SHARED_PATHS.join(', ')}) — SHARED_PATHS в tools/backlog-board.ts.\n` +
       `Выход: расширь touches задачи PR-ом в main (доска читается из main — правка touches в ветке не видна, З2) или убери файлы из диффа.`,
   );
 }
