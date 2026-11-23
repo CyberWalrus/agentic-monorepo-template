@@ -102,6 +102,14 @@ const MUST_DENY: string[] = [
   // e45: обратные кавычки на строке-операторе; `#` после `$( … )` — не комментарий
   "cat <<'EOF' `\ngit commit --no-verify`\nbody\nEOF",
   "cat <<'EOF' $(echo a)#b$(\ngit commit --no-verify\n)\nbody\nEOF",
+  // e45 (ревью): внутри прилипшей `$( … )` слово начинается заново — `#` там комментарий, `case` — ключевое слово
+  "cat <<'EOF' a=$(# )\ngit commit --no-verify)\nbody\nEOF",
+  "cat <<'EOF' a=$(# )\necho x > tools/protected-paths.json)\nbody\nEOF",
+  "cat <<'EOF' a=$(case x in x)\ngit push --force origin main;; esac)\nbody\nEOF",
+  // e45: `<<` внутри арифметики `$[ … ]`, в индексе и в присваивании массива — не оператор
+  'echo $[1<<2]\ngit commit --no-verify\n2]',
+  'a[1<<2]=3\ngit commit --no-verify\n2]=3',
+  'a=(1<<2)\ngit commit --no-verify\n2',
   // e45: `<<` внутри `[[ ]]` и в шаблоне `case` — не оператор; разделитель раскрывается в рантайме
   '[[ $a == x<<EOF ]]\ngit commit --no-verify\nEOF',
   'case $x in a<<EOF)\ngit commit --no-verify\nEOF',
@@ -142,6 +150,12 @@ const MUST_PASS: string[] = [
   'echo "$((1 + 2))" && cat <<\'EOF\' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF',
   'echo "${VAR:-x}" && cat <<\'EOF\' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF',
   "git add . && cat <<'EOF' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF",
+  // e45 (ревью): комментарий сразу за `$(` — подстановка закрыта на строке-операторе, тело — данные
+  "cat <<'EOF' a=$(# comment\necho b)\nLEFTHOOK=0 is forbidden\nEOF",
+  "cat <<'EOF' x=$(echo a)\nLEFTHOOK=0 is forbidden\nEOF",
+  // e45: определение функции и `[` в начале слова — легитимны, прилипшей скобки и индекса там нет
+  "f() { :; }\ncat <<'EOF' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF",
+  "if [ -f x ]; then cat <<'EOF' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF\nfi",
 ];
 
 for (const command of MUST_PASS) {

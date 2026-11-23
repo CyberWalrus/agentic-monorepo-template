@@ -217,6 +217,22 @@ describe('stripHeredocs', () => {
       lines: ["cat <<'EOF' $(echo a;", 'echo x > tools/a.json)', 'body', 'EOF'],
       kept: ["cat <<'EOF' $(echo a;", 'echo x > tools/a.json)', ''],
     },
+    // слово внутри `$(`…`)` начинается заново (ревью e45): `#` сразу за прилипшей `$(` — комментарий,
+    // `)` в нём подстановку не закрывает, и строка продолжения — команда
+    {
+      lines: ["cat <<'EOF' a=$(# )", 'git commit --no-verify)', 'body', 'EOF'],
+      kept: ["cat <<'EOF' a=$(# )", 'git commit --no-verify)', ''],
+    },
+    // `case` за прилипшей `$(` — ключевое слово: разбор не уверен, команда остаётся целиком
+    { lines: ["cat <<'EOF' a=$(case x in x)", 'git commit --no-verify;; esac)', 'body', 'EOF'] },
+    {
+      lines: [
+        "cat <<'EOF' a=$(echo a)$(case x in x)",
+        'git commit --no-verify;; esac)',
+        'body',
+        'EOF',
+      ],
+    },
     // группа команд и сабшелл после оператора на той же строке, обратные кавычки на следующей строке:
     // разбор не уверен — команда остаётся в разборе целиком
     { lines: ["cat <<'EOF' >/dev/null && { echo a;", 'git commit --no-verify; }', 'body', 'EOF'] },
@@ -231,6 +247,13 @@ describe('stripHeredocs', () => {
     // `<<` внутри `[[ ]]` и в шаблоне `case` — не оператор, но их разбор не моделируется
     { lines: ['[[ $a == x<<EOF ]]', 'git commit --no-verify', 'EOF'] },
     { lines: ['case $x in a<<EOF)', 'git commit --no-verify', 'EOF'] },
+    // `(`, прилипшая к слову, — присваивание массива или ошибка синтаксиса: не уверены, где оболочка начнёт тело
+    { lines: ["cat <<'EOF' a=(# )", 'git commit --no-verify)', 'body', 'EOF'] },
+    // присваивание массива с `<<` в элементе: bash и zsh читают следующую строку как команду
+    { lines: ['a=(1<<2)', 'git commit --no-verify', '2'] },
+    // арифметика `$[ … ]` и индекс присваивания массива: `<<` там — сдвиг, границы выражения не моделируются
+    { lines: ['echo $[1<<2]', 'git commit --no-verify', '2]'] },
+    { lines: ['a[1<<2]=3', 'git commit --no-verify', '2]=3'] },
     // разделитель раскрывается в рантайме: строка «тела» может оказаться командой
     { lines: ['D=EOF && cat <<$D', "cat <<'A'", 'EOF', 'git commit --no-verify', 'A'] },
   ])('keeps everything when the analysis is not sure: $lines', ({ lines }) => {
@@ -260,6 +283,8 @@ describe('stripHeredocs', () => {
   it.each([
     // `$(`…`)` на одной строке
     { lines: ["cat <<'EOF' $(echo a; echo b)", 'echo x > tools/a.json', 'EOF'] },
+    // комментарий сразу за прилипшей `$(`: подстановка закрыта на строке-операторе
+    { lines: ["cat <<'EOF' a=$(# comment", 'echo b)', 'echo x > tools/a.json', 'EOF'] },
     // внутренний heredoc подстановки — данные её cat; внешний открывается за `)`
     {
       lines: [

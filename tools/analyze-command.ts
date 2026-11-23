@@ -108,9 +108,11 @@ type Waiting = Heredoc & { epoch: number };
  * `${ … }` и не после `\`. Сканер ведёт стек открытых рамок, и тело открывается на переводе
  * строки, когда из рамок, открывшихся после оператора, не осталось ни одной. Открытые
  * `$( … )` — норма: их текст оболочка читает внутри слова, и строки подстановки исполняет.
+ * Внутри `$( … )` и `( … )` слово начинается заново: `#` и `case` читаются там так же, как в команде.
  *
  * Не моделируются (null): `[[ … ]]`, `case` с их `<<` и `)`, обратные кавычки, `(` и `` ` ``
- * внутри `${…}`, `"$( … )"` — кавычки для разбора непрозрачны.
+ * внутри `${…}`, `"$( … )"` — кавычки для разбора непрозрачны; арифметика `$[ … ]` и индекс
+ * присваивания массива (`a[…]=…`); `(`, прилипшая к слову, кроме `name()`.
  */
 function scan(command: string): { outside: string; bodies: [number, number][] } | null {
   const stack: Open[] = [];
@@ -130,7 +132,11 @@ function scan(command: string): { outside: string; bodies: [number, number][] } 
     if (stack.some((open) => open.kind === 'dq')) return false;
     const arithmetic = command[index + 2] === '(';
     if (arithmetic) push({ kind: 'arith', parens: 2, substitution: true });
-    else push({ kind: 'cmd' });
+    else {
+      push({ kind: 'cmd' });
+      // внутри `$( … )` оболочка начинает новое слово: `a$(#` — комментарий, `a=$(case` — ключевое слово
+      boundary = true;
+    }
     index += arithmetic ? 3 : 2;
     return true;
   };
@@ -157,9 +163,15 @@ function scan(command: string): { outside: string; bodies: [number, number][] } 
       } else if (char === '$' && next === '{') {
         push({ kind: 'param' });
         index += 2;
+      } else if ((char === '$' && next === '[') || (char === '[' && !boundary)) {
+        // арифметика `$[ … ]` и индекс массива (`a[…]=…`): `<<` внутри — сдвиг, а где выражение кончается, не видно
+        return null;
       } else if (char === '$' && next === '(') {
         if (!pushSubstitution()) return null;
       } else if (char === '(') {
+        // прилипла к слову (`a=( … )`, `${a}(`): присваивание массива читается не как команда, остальное —
+        // ошибка синтаксиса; `name()` — определение функции
+        if (!boundary && next !== ')') return null;
         // `((` — арифметическая команда. `$((cmd); (cmd))` оболочка читает как подстановку команд — скобки те же
         if (next === '(') push({ kind: 'arith', parens: 2, substitution: false });
         else push({ kind: 'sub' });
