@@ -38,6 +38,19 @@ const runHook = (file: string): { status: number | null; stderr: string } => {
 
 afterAll(() => {
   rmSync(probe, { force: true });
+  // Стейдженная запись пробника — часть диффа для branch-scope (гейт читает
+  // git status --porcelain, b13 ревью): наблюдаемое AD-состояние краснило
+  // branch-scope на ветках с файлом вне touches, хотя в HEAD файла нет.
+  // Снимаем из индекса best-effort: --ignore-unmatch — no-op, когда пробник
+  // не стейджен (CI, где ничего не стейджит), без --cached disk-состояние
+  // не трогаем (файл уже удалён rmSync выше).
+  spawnSync(
+    'git',
+    ['rm', '--cached', '-q', '--ignore-unmatch', 'tools/hooks/.lint-probe.fixture.ts'],
+    {
+      cwd: repoDir,
+    },
+  );
 });
 
 describe('lint-changed-file CLI', () => {

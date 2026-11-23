@@ -84,6 +84,7 @@ const KNOWN_GATES: readonly string[] = [
   'tools/check-test-report.ts',
   'tools/check-tool-class.ts',
   'tools/check-visual-image.ts',
+  'tools/check-workflow-health.ts',
   'tools/copier-version.txt',
   'tools/e2e-select.ts',
   'tools/evals/run.ts',

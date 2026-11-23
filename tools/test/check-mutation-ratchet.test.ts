@@ -20,6 +20,8 @@ import {
   ProposalFileSchema,
   RatchetStateSchema,
   scoreFromReport,
+  STATE_ARTIFACT_NAME,
+  STATE_FILE_NAME,
   validateProposals,
 } from '../check-mutation-ratchet.ts';
 
@@ -637,4 +639,41 @@ it('apply: не единственное вхождение break — отказ
 it('fetch-state: неизвестный аргумент — exit 2; без --out — exit 2', () => {
   expect(runCli(['fetch-state', '--evil']).status).toBe(2);
   expect(runCli(['fetch-state']).status).toBe(2);
+});
+
+// ─── Workflow ↔ константы: соответствие имён upload ↔ download ↔ read (e33) ───
+// Разводка текста workflow и чекера — тот самый дрейф, что ослепил храповик в
+// первом же прогоне (nightly 45013082390): upload-artifact с одним каталогом в
+// path кладёт его содержимое в КОРЕНЬ артефакта, поэтому отчёт после `gh run
+// download -D work/web/reports/mutation` лежит в work/web/reports/mutation/
+// mutation.json, и путь чтения обязан быть зеркалом reportPath из DOMAINS под
+// work/, а имена артефактов — константами из одного места.
+
+it('nightly.yml: имена артефактов и пути чтения — из констант чекера (upload ↔ download ↔ read)', () => {
+  const workflow = readFileSync(join(repoDir, '.github', 'workflows', 'nightly.yml'), 'utf8');
+
+  for (const spec of DOMAINS) {
+    const uploadDir = spec.reportPath.slice(0, spec.reportPath.lastIndexOf('/')) + '/';
+    // work-зеркало reportPath: work + reportPath без первого сегмента каталога
+    const readPath = `work${spec.reportPath.slice(spec.reportPath.indexOf('/'))}`;
+    const downloadDir = readPath.slice(0, readPath.lastIndexOf('/'));
+
+    // upload в mutation-full: имя артефакта — константа DOMAINS.artifactName,
+    // path — каталог отчёта (его содержимое и есть артефакт)
+    expect(workflow).toContain(`with: { name: ${spec.artifactName}, path: ${uploadDir} }`);
+
+    // download ровно в двух джобах (mutation-ratchet и mutation-canary):
+    // имя из DOMAINS.artifactName, каталог — work-зеркало
+    const downloadLine = `gh run download "\${{ github.run_id }}" -n ${spec.artifactName} -D ${downloadDir}`;
+    expect(workflow.split(downloadLine).length - 1).toBe(2);
+
+    // пути чтения чекера: download-dir + имя файла отчёта — check, decide и canary
+    const readArg = `--${spec.domain} ${readPath}`;
+    expect(workflow.split(readArg).length - 1).toBe(3);
+  }
+
+  // артефакт состояния: имя и файл — те же константы, что читает fetch-state
+  expect(workflow).toContain(
+    `with: { name: ${STATE_ARTIFACT_NAME}, path: state/${STATE_FILE_NAME} }`,
+  );
 });

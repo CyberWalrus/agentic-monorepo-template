@@ -1,7 +1,8 @@
 {
-  "apps/api/reports/vitest.json": 114,
-  "apps/web/reports/vitest.json": 71,
-  "packages/contracts/reports/vitest.json": 16,
+  "apps/api/reports/vitest.json": 232,
+  "apps/web/reports/vitest.json": 93,
+  "packages/contracts/reports/vitest.json": 59,
+  "packages/preflight/reports/vitest.json": 27,
   "packages/ui/reports/vitest.json": 21,
   "reports/vitest-hooks.json": 296
 }

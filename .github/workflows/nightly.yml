@@ -147,8 +147,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run download "${{ github.run_id }}" -n mutation-full-web -D work/web
-          gh run download "${{ github.run_id }}" -n mutation-full-contracts -D work/contracts
+          # upload-artifact с одним каталогом в path кладёт его СОДЕРЖИМОЕ в
+          # корень артефакта: mutation.json лежит в корне, а не в reports/mutation/
+          # (e33: «-D work/web» + чтение work/web/reports/mutation/mutation.json —
+          # missing-report с первого прогона, джоба родилась слепой). Каталог —
+          # зеркало reportPath из tools/check-mutation-ratchet.ts под work/;
+          # соответствие upload↔download↔read сверяет тест tools/test/.
+          gh run download "${{ github.run_id }}" -n mutation-full-web -D work/web/reports/mutation
+          gh run download "${{ github.run_id }}" -n mutation-full-contracts -D work/contracts/reports/mutation
       # Зубья порога дублем от stryker (он красит mutation-full сам): отчёт из
       # артефакта обязан читаться и не упасть ниже break — иначе храповик
       # молчал бы на битом артефакте (З11).
@@ -233,8 +239,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run download "${{ github.run_id }}" -n mutation-full-web -D work/web
-          gh run download "${{ github.run_id }}" -n mutation-full-contracts -D work/contracts
+          # upload-artifact с одним каталогом в path кладёт его СОДЕРЖИМОЕ в
+          # корень артефакта: mutation.json лежит в корне, а не в reports/mutation/
+          # (e33: «-D work/web» + чтение work/web/reports/mutation/mutation.json —
+          # missing-report с первого прогона, джоба родилась слепой). Каталог —
+          # зеркало reportPath из tools/check-mutation-ratchet.ts под work/;
+          # соответствие upload↔download↔read сверяет тест tools/test/.
+          gh run download "${{ github.run_id }}" -n mutation-full-web -D work/web/reports/mutation
+          gh run download "${{ github.run_id }}" -n mutation-full-contracts -D work/contracts/reports/mutation
       - name: check must fail
         run: node tools/check-mutation-ratchet.main.ts check --web work/web/reports/mutation/mutation.json --contracts work/contracts/reports/mutation/mutation.json --break-override web=1000 --break-override contracts=1000 --expect-regression
 
@@ -256,6 +268,34 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node tools/check-ruleset-drift.ts --create-issue --run-url "$RUN_URL"
+
+  # Сводный check здоровья workflow (e26): каждый workflow, ожидаемо
+  # стартующий на main (триггеры push/schedule из .github/workflows/**),
+  # обязан иметь зелёный прогон на свежем head-коммите main либо свежий
+  # schedule-прогон в окне. Закрывает escaped-defect 2026-11-21: workflow с
+  # битым uses не стартовал ни разу, а вне required checks main оставался
+  # зелёным. Красный прогон заводит issue через job report (needs). Незавершённый
+  # молодой прогон — не красный (окно CI на свежем коммите), старше 6 ч — красный.
+  workflow-health:
+    name: workflow health (e26)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # actions: read обязателен: чекер читает Actions API (gh api repos/…/commits,
+    # /actions/workflows, /actions/runs) — без него GITHUB_TOKEN получает 403 на
+    # /actions/* и гейт был бы красным каждый первый прогон (находка ревью e26).
+    # contents: read — commits API и checkout. Job-level permissions заменяет
+    # workflow-уровень целиком (e16).
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false }
+      - name: workflow health check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node tools/check-workflow-health.ts
 
   # Храповик числа тестов (a10): поднимает автоматика, не автор PR
   # (test-count-baseline.json — «горячий» файл, З9). Update refuses to lower.
@@ -538,6 +578,7 @@ jobs:
         gate-canaries,
         verify-budgets,
         backlog-doctor,
+        workflow-health,
         telemetry,
       ]
     if: failure()
