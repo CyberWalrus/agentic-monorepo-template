@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 
-import { expect, test } from '../../fixtures.ts';
+import { expect, makeTasks, test } from '../../fixtures.ts';
 
 /**
  * Клиентская навигация без перезагрузки документа: `<Link>` в шаблоне нет
@@ -34,19 +34,33 @@ test.describe('route states', () => {
     await expect(page.getByRole('heading', { name: 'Tasks' })).toBeVisible();
   });
 
-  test('shows the route error state with an accessible "Try again" [AC-3] @critical', async ({
+  test('recovers from a route error via "Try again" [AC-3] [AC-4] @critical', async ({
     page,
+    seedTasks,
+    workspace,
   }) => {
-    // То, что получает браузер, когда API недоступен: прокси web отдаёт 502
-    // (apps/web/src/server-app.ts). Документ-запрос и SSR не затрагиваются:
-    // loader `/` в этом сценарии исполняет браузер.
-    await page.route(/\/rpc(\?|\/|$)/, (route) =>
-      route.fulfill({
+    // Данные попадают на страницу только после успешного loader'а: так
+    // восстановление нельзя спутать с простым уходом сообщения об ошибке.
+    const tasks = makeTasks(2, workspace);
+    await seedTasks(tasks);
+
+    let apiReachable = false;
+    let rpcAttempts = 0;
+    await page.route(/\/rpc(\?|\/|$)/, async (route) => {
+      rpcAttempts += 1;
+      if (apiReachable) {
+        await route.continue();
+        return;
+      }
+      // То, что получает браузер, когда API недоступен: прокси web отдаёт 502
+      // (apps/web/src/server-app.ts). Документ-запрос и SSR не затрагиваются:
+      // loader `/` в этом сценарии исполняет браузер.
+      await route.fulfill({
         status: 502,
         contentType: 'application/json',
         body: JSON.stringify({ error: 'API is unreachable' }),
-      }),
-    );
+      });
+    });
 
     // Индексный маршрут в этом документе ещё не совпадал — его loader пойдёт
     // из браузера. До гидратации popstate слушать некому, поэтому навигация
@@ -64,11 +78,19 @@ test.describe('route states', () => {
     // Технические детали ошибки пользователю не показываются.
     await expect(page.getByText('API is unreachable')).toHaveCount(0);
 
-    // Действие кнопки (перезапуск загрузки, восстановление страницы) — AC-4:
-    // сейчас «Try again» не перезапускает loader (дефект, Журнал задачи e61);
-    // критерий и его проверка добавляются вместе с исправлением.
     const retry = page.getByRole('button', { name: 'Try again' });
     await expect(retry).toBeVisible();
     await expect(retry).toBeEnabled();
+
+    const failedAttempts = rpcAttempts;
+    apiReachable = true;
+    await retry.click();
+
+    await expect(alert).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Tasks' })).toBeVisible();
+    for (const { title } of tasks) {
+      await expect(page.getByRole('checkbox', { name: title })).toBeVisible();
+    }
+    expect(rpcAttempts, '«Try again» повторяет запрос данных').toBeGreaterThan(failedAttempts);
   });
 });
