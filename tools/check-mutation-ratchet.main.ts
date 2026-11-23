@@ -28,11 +28,11 @@ import {
   type ParsedDomain,
   StrykerThresholdsSchema,
   scoreFromReport,
+  STATE_ARTIFACT_NAME,
+  STATE_FILE_NAME,
   validateProposals,
 } from './check-mutation-ratchet.ts';
 
-const STATE_ARTIFACT = 'mutation-ratchet-state';
-const STATE_FILE = 'ratchet-state.json';
 const SHA_RE = /^[0-9a-f]{40}$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -100,7 +100,9 @@ function hasStateArtifact(runId: number): boolean {
   const artifacts = isRecord(raw) && Array.isArray(raw['artifacts']) ? raw['artifacts'] : [];
   return artifacts.some(
     (artifact) =>
-      isRecord(artifact) && artifact['name'] === STATE_ARTIFACT && artifact['expired'] !== true,
+      isRecord(artifact) &&
+      artifact['name'] === STATE_ARTIFACT_NAME &&
+      artifact['expired'] !== true,
   );
 }
 
@@ -391,9 +393,9 @@ if (command === 'fetch-state') {
       rmSync(downloadDir, { recursive: true, force: true });
       mkdirSync(downloadDir, { recursive: true });
       try {
-        gh(['run', 'download', String(run.id), '-n', STATE_ARTIFACT, '-D', downloadDir]);
+        gh(['run', 'download', String(run.id), '-n', STATE_ARTIFACT_NAME, '-D', downloadDir]);
         state = RatchetStateSchema.parse(
-          JSON.parse(readFileSync(join(downloadDir, STATE_FILE), 'utf8')),
+          JSON.parse(readFileSync(join(downloadDir, STATE_FILE_NAME), 'utf8')),
         );
         foundRun = run;
         break;
@@ -408,7 +410,7 @@ if (command === 'fetch-state') {
       process.exit(1);
     }
     mkdirSync(out, { recursive: true });
-    const target = join(out, STATE_FILE);
+    const target = join(out, STATE_FILE_NAME);
     writeFileSync(target, JSON.stringify(state, null, 2));
     console.log(`mutation-ratchet: состояние от прогона ${foundRun.id} — ${target}`);
     process.exit(0);
@@ -450,7 +452,7 @@ if (command === 'decide') {
     breaks = resolveBreaks(configWeb, configContracts, {});
     const prevDir = parseFlag(['--prev']);
     if (prevDir) {
-      const prevPath = join(prevDir, STATE_FILE);
+      const prevPath = join(prevDir, STATE_FILE_NAME);
       prev = RatchetStateSchema.parse(JSON.parse(readFileSync(prevPath, 'utf8')));
     }
   } catch (error) {
@@ -470,7 +472,7 @@ if (command === 'decide') {
     date,
   });
   mkdirSync(stateOut, { recursive: true });
-  writeFileSync(join(stateOut, STATE_FILE), JSON.stringify(result.state, null, 2));
+  writeFileSync(join(stateOut, STATE_FILE_NAME), JSON.stringify(result.state, null, 2));
   if (proposalOut !== undefined) {
     if (result.proposals.length > 0) {
       const proposalFile = {
@@ -490,7 +492,7 @@ if (command === 'decide') {
   for (const note of result.notes) {
     console.log(`mutation-ratchet: ${note}`);
   }
-  console.log(`mutation-ratchet: состояние записано (${stateOut}/${STATE_FILE})`);
+  console.log(`mutation-ratchet: состояние записано (${stateOut}/${STATE_FILE_NAME})`);
   process.exit(0);
 }
 

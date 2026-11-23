@@ -147,8 +147,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run download "${{ github.run_id }}" -n mutation-full-web -D work/web
-          gh run download "${{ github.run_id }}" -n mutation-full-contracts -D work/contracts
+          # upload-artifact с одним каталогом в path кладёт его СОДЕРЖИМОЕ в
+          # корень артефакта: mutation.json лежит в корне, а не в reports/mutation/
+          # (e33: «-D work/web» + чтение work/web/reports/mutation/mutation.json —
+          # missing-report с первого прогона, джоба родилась слепой). Каталог —
+          # зеркало reportPath из tools/check-mutation-ratchet.ts под work/;
+          # соответствие upload↔download↔read сверяет тест tools/test/.
+          gh run download "${{ github.run_id }}" -n mutation-full-web -D work/web/reports/mutation
+          gh run download "${{ github.run_id }}" -n mutation-full-contracts -D work/contracts/reports/mutation
       # Зубья порога дублем от stryker (он красит mutation-full сам): отчёт из
       # артефакта обязан читаться и не упасть ниже break — иначе храповик
       # молчал бы на битом артефакте (З11).
@@ -233,8 +239,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run download "${{ github.run_id }}" -n mutation-full-web -D work/web
-          gh run download "${{ github.run_id }}" -n mutation-full-contracts -D work/contracts
+          # upload-artifact с одним каталогом в path кладёт его СОДЕРЖИМОЕ в
+          # корень артефакта: mutation.json лежит в корне, а не в reports/mutation/
+          # (e33: «-D work/web» + чтение work/web/reports/mutation/mutation.json —
+          # missing-report с первого прогона, джоба родилась слепой). Каталог —
+          # зеркало reportPath из tools/check-mutation-ratchet.ts под work/;
+          # соответствие upload↔download↔read сверяет тест tools/test/.
+          gh run download "${{ github.run_id }}" -n mutation-full-web -D work/web/reports/mutation
+          gh run download "${{ github.run_id }}" -n mutation-full-contracts -D work/contracts/reports/mutation
       - name: check must fail
         run: node tools/check-mutation-ratchet.main.ts check --web work/web/reports/mutation/mutation.json --contracts work/contracts/reports/mutation/mutation.json --break-override web=1000 --break-override contracts=1000 --expect-regression
 
