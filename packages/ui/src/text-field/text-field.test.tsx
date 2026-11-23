@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-react';
 
 import { collectA11yViolations } from '../../testing/a11y.ts';
-import { TextField } from './TextField.tsx';
+import { TextField } from './text-field.tsx';
 
 describe('TextField', () => {
   it('associates the label with the input', async () => {

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
 import { collectA11yViolations } from '../../testing/a11y.ts';
-import { ErrorState } from './ErrorState.tsx';
+import { ErrorState } from './error-state.tsx';
 
 describe('ErrorState', () => {
   it('announces the failure and offers a retry', async () => {

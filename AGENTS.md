@@ -140,6 +140,8 @@ MCP (`.mcp.json`): `playwright` — исследование и воспроиз
 - Не импортируй код между фичами (`features/a` → `features/b`), между приложениями и из пакетов в приложения. Общее выноси в `src/lib` или `packages/`.
 - Не используй `git commit --no-verify`, `LEFTHOOK=0`, `git push --force`.
 
+**Нейминг путей:** каталоги, имена файлов и пути — только строчными буквами, слова через дефис: `tasks-page.tsx`, `error-state/`, `task-item.visual.test.tsx`. Правило — о путях, а не о символах кода: компонент остаётся `Button`, файл — `button.tsx`. Исключения — только имена, которые внешний инструмент требует дословно: `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, `README.md`, `LICENSE`, `Dockerfile` (включая `tools/visual.Dockerfile`), `CODEOWNERS`, `CODEOWNERS.jinja`, `routeTree.gen.ts`. Инвентарь: `git ls-files | grep -E '[A-Z]'` возвращает ровно эти пути; список с обоснованием и правило переименования визуальных тестов — [architecture.md, 2.7](docs/architecture.md).
+
 **Производные файлы:** конфликт в `packages/contracts/openapi.json` или `apps/web/src/routeTree.gen.ts` решается `pnpm regen` — руками его не сливают. Реестры (`contract`/`router`/UI) держат одну строку на домен в алфавитном порядке — порядок проверяет гейт `registries` (b7).
 
 **Всегда:**
