@@ -52,13 +52,15 @@ import { dirname, join } from 'node:path';
 import * as z from 'zod';
 
 import { journalPath, readDenials } from './denial-journal.ts';
-import { PerfReportSchema } from './perf-metrics.ts';
 import { loadPerfBudgets } from './perf-budgets.ts';
 import { parseBudgets } from './verify-budgets-loader.ts';
 import {
   buildTrendsReport,
   evalsMissingArtifactPolicy,
+  ghRunArtifactsArgs,
+  ghWorkflowRunsArgs,
   mutationScoreFromMutants,
+  parsePerfPoint,
   DenialRecordSchema,
   MergedPrSchema,
   renderSummary,
@@ -90,7 +92,11 @@ const GhRunsPageSchema = z.object({
   runs: z.array(GhRunSchema),
 });
 const GhArtifactSchema = z.object({ name: z.string(), id: z.number() });
-const GhArtifactsPageSchema = z.object({ artifacts: z.array(GhArtifactSchema) });
+// Форма вывода jq listArtifacts — готовый массив (expired отфильтрованы jq),
+// не «страница» {artifacts: [...]}: рассинхрон схемы и jq красил артефакты
+// каждого прогона «неожиданный ответ API» (e34, прогон локально с фиксом
+// метода: 167 проблем на одном наборе прогонов).
+const GhArtifactsPageSchema = z.array(GhArtifactSchema);
 const FlakyRateFileSchema = z.object({
   ratePct: z.number(),
   flaky: z.number().int().nonnegative(),
@@ -126,6 +132,13 @@ interface GhRun {
   updatedAt: string;
 }
 
+/**
+ * gh api: параметры `-f` без явного метода переводят запрос в POST —
+ * GET-only эндпоинт отвечает 404 (ночь 45013082390, e34: все источники
+ * «не собраны», CLI красный). Новые вызовы с `-f` строят argv через билдеры
+ * ghWorkflowRunsArgs/ghRunArtifactsArgs (tools/telemetry-report.ts, там же
+ * тест-барьер) или явно указывают `-X GET`.
+ */
 function gh(args: string[]): string {
   return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 }
@@ -150,14 +163,9 @@ function listRuns(
     try {
       raw = gh([
         'api',
-        `repos/${repo}/actions/workflows/${workflow}/runs`,
-        '-f',
-        'per_page=100',
-        '-f',
-        `page=${page}`,
-        '-f',
-        `created=>=${createdSince}`,
-        ...(branch !== undefined ? ['-f', `branch=${branch}`] : []),
+        // Билдер держит `-X GET`: с `-f` без явного метода gh шлёт POST и
+        // GET-only эндпоинт отвечает 404 (ночь 45013082390, e34).
+        ...ghWorkflowRunsArgs(repo, workflow, createdSince, page, branch),
         '--jq',
         '{count: (.workflow_runs|length), runs: [.workflow_runs[] | {id: .id, event: .event, conclusion: .conclusion, runStartedAt: .run_started_at, updatedAt: .updated_at}]}',
       ]);
@@ -199,9 +207,8 @@ function listArtifacts(
   try {
     raw = gh([
       'api',
-      `repos/${repo}/actions/runs/${runId}/artifacts`,
-      '-f',
-      'per_page=100',
+      // `-X GET` из билдера: см. gh() — `-f` без явного метода = POST = 404.
+      ...ghRunArtifactsArgs(repo, runId),
       '--jq',
       '[.artifacts[] | select(.expired != true) | {name: .name, id: .id}]',
     ]);
@@ -216,7 +223,7 @@ function listArtifacts(
     problems.push(`gh api artifacts прогона ${runId}: неожиданный ответ API`);
     return [];
   }
-  return parsed.data.artifacts;
+  return parsed.data;
 }
 
 /** Скачивает zip артефакта и распаковывает файлы по glob-паттерну (unzip -j). */
@@ -459,7 +466,8 @@ function collectNightly(
       }
     }
     // Perf: отсутствие perf.json у прогона — no-data (артефакт пишется
-    // только при успехе perf+baseline), problem не ставится.
+    // только при успехе perf+baseline), problem не ставится; legacy-форма
+    // исторического артефакта — тоже точка вне тренда, не problem (e34).
     const perfArtifact = findArtifact(artifacts, (name) => name.startsWith('perf-trend-'));
     if (perfArtifact !== null) {
       const contents = extractArtifactFiles(
@@ -472,12 +480,9 @@ function collectNightly(
       );
       const raw = contents[0];
       if (raw !== undefined) {
-        const parsed = PerfReportSchema.safeParse(JSON.parse(raw));
-        if (parsed.success) {
-          perfPoints.push({ runId: run.id, date: run.updatedAt, report: parsed.data });
-        } else {
-          problems.push(`ночной ${run.id}/perf.json: неожиданная схема`);
-        }
+        const { point, problem } = parsePerfPoint(raw, run.id, run.updatedAt);
+        if (problem !== null) problems.push(problem);
+        if (point !== null) perfPoints.push(point);
       }
     }
     // Mutation: полный score домена apps/api.
