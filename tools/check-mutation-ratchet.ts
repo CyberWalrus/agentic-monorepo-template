@@ -53,6 +53,17 @@ export const DOMAINS: readonly DomainSpec[] = [
   },
 ];
 
+/**
+ * Имена артефактов и файлов храповика — единый источник правды для текстов
+ * nightly.yml (upload/download шаги) и CLI (fetch-state читает артефакт
+ * состояния по имени, e33: до этого имена жили строками в workflow и в
+ * чекере по отдельности). Тест tools/test/check-mutation-ratchet.test.ts
+ * сверяет тексты шагов workflow с этими константами — дрейф ловится локально.
+ */
+export const STATE_ARTIFACT_NAME = 'mutation-ratchet-state';
+/** Имя файла состояния внутри артефакта и в --state-out джобы. */
+export const STATE_FILE_NAME = 'ratchet-state.json';
+
 /** Форма json-репорта Stryker (как MutationFileSchema телеметрии — там схема не экспортируется). */
 export const MutationReportSchema = z.object({
   files: z.record(z.string(), z.object({ mutants: z.array(z.object({ status: z.string() })) })),

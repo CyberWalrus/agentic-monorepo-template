@@ -5,9 +5,11 @@
  * Сам прогон канареек здесь не запускается — он тяжёлый (worktree + install) и
  * идёт из workflow canaries.yml и nightly (`pnpm canaries`).
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { gzipSync } from 'node:zlib';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BLOAT, BLOAT_DELTA, CANARIES } from '../gate-canaries.ts';
 import { allStepNames, fast, post, serialFast, slow } from '../verify-steps.ts';
@@ -42,14 +44,18 @@ describe('таблица канареек гейтов', () => {
   });
 
   it('каждый блокирующий шаг verify покрыт канарейкой (кроме вайтлиста З6)', () => {
-    const canaried = new Set(CANARIES.flatMap((canary) => canary.steps.split(',')));
+    // b14: покрытие — ЧЕЙ-ТО failedStep, не членство в union steps. Build годами
+    // проходил формально через union соседей «build,bundle», хотя ни одна
+    // канарейка не требовала красный build: членство в union допускает только
+    // попутный прогон шага-пререквизита, красить обязан целевой шаг.
+    const failedTargets = new Set(CANARIES.map((canary) => canary.failedStep));
     const blocking = [...serialFast, ...fast, ...post, ...slow].map((step) => step.name);
     for (const step of blocking) {
       if (CANARY_EXEMPT_STEPS.has(step)) {
         continue;
       }
       expect(
-        canaried.has(step),
+        failedTargets.has(step),
         `блокирующий шаг ${step} без канарейки — добавь канарейку или задокументируй исключение в З6`,
       ).toBe(true);
     }
@@ -106,6 +112,53 @@ describe('таблица канареек гейтов', () => {
       budget - total,
     );
   });
+});
+
+describe('strict-канарейка: проба жива только при noUncheckedIndexedAccess (b13)', () => {
+  const repoRoot = resolve(import.meta.dirname, '..', '..');
+
+  function runTsc(probe: string, flags: string[]): { status: number | null; output: string } {
+    const result = spawnSync(
+      'pnpm',
+      ['exec', 'tsc', '--noEmit', '--ignoreConfig', ...flags, probe],
+      {
+        encoding: 'utf8',
+        cwd: repoRoot,
+        timeout: 60_000,
+      },
+    );
+    return { status: result.status, output: `${result.stdout}${result.stderr}` };
+  }
+
+  // Два спавна tsc на маленьком файле (~1-2s каждый): дефолтного таймаута мало
+  // под параллельной нагрузкой verify (приём check-required-tasks.test.ts).
+  it('проба красит tsc с флагом, зелёная без него, путь пробы — живой якорь', () => {
+    // Условие возврата b13: канарейка дублит защиту B8 как защита в глубину,
+    // её смысл держится на том, что ошибка пробы видна ИМЕННО при
+    // noUncheckedIndexedAccess. Если правка пробы или тип тихо сделает её
+    // флагонезависимой (как соседние «type-ошибки»), этот инвариант краснеет
+    // в test:hooks раньше, чем ночная канарейка «пролетит».
+    const canary = CANARIES.find((item) => item.name === 'strict-флаг tsconfig ослаблен');
+    if (canary === undefined) {
+      throw new Error('канарейки «strict-флаг tsconfig ослаблен» нет в таблице');
+    }
+    const root = mkdtempSync(join(tmpdir(), 'b13-strict-probe-'));
+    try {
+      canary.apply(root);
+      const probe = join(root, 'apps', 'api', 'src', 'evil-strict-probe.ts');
+      const withFlag = runTsc(probe, ['--strict', '--noUncheckedIndexedAccess']);
+      expect(withFlag.status, 'проба при noUncheckedIndexedAccess обязана красить').not.toBe(0);
+      expect(withFlag.output, 'путь пробы в ошибке — якорь expect канарейки').toMatch(
+        /evil-strict-probe/,
+      );
+      const withoutFlag = runTsc(probe, ['--strict']);
+      expect(withoutFlag.status, 'без флага проба обязана компилироваться (strict не ловит)').toBe(
+        0,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 /** Достаёт число по пути ключей; на любом не-объекте/не-числе возвращает undefined. */

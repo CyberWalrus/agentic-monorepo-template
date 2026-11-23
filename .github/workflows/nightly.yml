@@ -34,10 +34,24 @@ jobs:
         with: { playwright: 'true' }
       - run: pnpm turbo run build --filter=@repo/web --output-logs=errors-only
       # Случайный порядок и повторы ловят зависимые и нестабильные тесты.
-      # Случайный порядок и повторы ловят зависимые и нестабильные тесты.
-      # JSON-репорт пишет файл (PLAYWRIGHT_JSON_OUTPUT_NAME), stdout — человек.
-      - run: pnpm --filter @repo/e2e exec playwright test --project=functional --shuffle --repeat-each=5 --reporter=json
-        env: { CI: 'true', PLAYWRIGHT_JSON_OUTPUT_NAME: 'e2e/reports/flake.json' }
+      # Случайный порядок и повторы локально красили прогон (18.3с, 2 failed+1 flaky на
+      # e2e-reporting/api-logs): канарейка отчётов API (c4) — спавн дочернего прогона
+      # с REUSE_SERVER=1 — не переживает параллельную копию самой себя: два повтора
+      # теста делят e2e/reports/instance-token (перезапись между записью и чтением)
+      # и test-results-canary (старт дочернего прогона чистит outputDir соседа —
+      # «attachment file does not exist»). Локальное воспроизведение e31: --workers=2
+      # → 2 failed + 1 flaky, --workers=1 → 60 passed. flake.json не писался — каскад
+      # на check-flaky-rate (ENOENT). Серийный прогон убирает только параллельные
+      # гонки повторов (их продолжает ловить PR CI); shuffle и repeat-each остаются.
+      # --workers=1 фиксирует серийность детерминированно, а не как workers: 1 в
+      # конфиге, который поменял бы PR CI.
+      - run: pnpm --filter @repo/e2e exec playwright test --project=functional --shuffle --repeat-each=5 --workers=1 --reporter=json
+        # Путь от пакета, не от корня: pnpm exec исполняет команду в каталоге
+        # пакета (e2e/), 'e2e/reports/flake.json' уезжал бы в e2e/e2e/reports/ —
+        # чекер ниже читает e2e/reports/flake.json от корня и всегда падал бы
+        # ENOENT, даже на зелёном playwright-шаге (наблюдалось: ENOENT был и при
+        # падении канарейки, и был бы при её успехе).
+        env: { CI: 'true', PLAYWRIGHT_JSON_OUTPUT_NAME: 'reports/flake.json' }
         continue-on-error: true
       - name: flaky rate + quarantine (b4.4)
         # --rate-out (c9.4): вычисленный гейтом rate — единственный источник
@@ -133,8 +147,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run download "${{ github.run_id }}" -n mutation-full-web -D work/web
-          gh run download "${{ github.run_id }}" -n mutation-full-contracts -D work/contracts
+          # upload-artifact с одним каталогом в path кладёт его СОДЕРЖИМОЕ в
+          # корень артефакта: mutation.json лежит в корне, а не в reports/mutation/
+          # (e33: «-D work/web» + чтение work/web/reports/mutation/mutation.json —
+          # missing-report с первого прогона, джоба родилась слепой). Каталог —
+          # зеркало reportPath из tools/check-mutation-ratchet.ts под work/;
+          # соответствие upload↔download↔read сверяет тест tools/test/.
+          gh run download "${{ github.run_id }}" -n mutation-full-web -D work/web/reports/mutation
+          gh run download "${{ github.run_id }}" -n mutation-full-contracts -D work/contracts/reports/mutation
       # Зубья порога дублем от stryker (он красит mutation-full сам): отчёт из
       # артефакта обязан читаться и не упасть ниже break — иначе храповик
       # молчал бы на битом артефакте (З11).
@@ -219,8 +239,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run download "${{ github.run_id }}" -n mutation-full-web -D work/web
-          gh run download "${{ github.run_id }}" -n mutation-full-contracts -D work/contracts
+          # upload-artifact с одним каталогом в path кладёт его СОДЕРЖИМОЕ в
+          # корень артефакта: mutation.json лежит в корне, а не в reports/mutation/
+          # (e33: «-D work/web» + чтение work/web/reports/mutation/mutation.json —
+          # missing-report с первого прогона, джоба родилась слепой). Каталог —
+          # зеркало reportPath из tools/check-mutation-ratchet.ts под work/;
+          # соответствие upload↔download↔read сверяет тест tools/test/.
+          gh run download "${{ github.run_id }}" -n mutation-full-web -D work/web/reports/mutation
+          gh run download "${{ github.run_id }}" -n mutation-full-contracts -D work/contracts/reports/mutation
       - name: check must fail
         run: node tools/check-mutation-ratchet.main.ts check --web work/web/reports/mutation/mutation.json --contracts work/contracts/reports/mutation/mutation.json --break-override web=1000 --break-override contracts=1000 --expect-regression
 
@@ -243,6 +269,34 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node tools/check-ruleset-drift.ts --create-issue --run-url "$RUN_URL"
 
+  # Сводный check здоровья workflow (e26): каждый workflow, ожидаемо
+  # стартующий на main (триггеры push/schedule из .github/workflows/**),
+  # обязан иметь зелёный прогон на свежем head-коммите main либо свежий
+  # schedule-прогон в окне. Закрывает escaped-defect 2026-11-21: workflow с
+  # битым uses не стартовал ни разу, а вне required checks main оставался
+  # зелёным. Красный прогон заводит issue через job report (needs). Незавершённый
+  # молодой прогон — не красный (окно CI на свежем коммите), старше 6 ч — красный.
+  workflow-health:
+    name: workflow health (e26)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # actions: read обязателен: чекер читает Actions API (gh api repos/…/commits,
+    # /actions/workflows, /actions/runs) — без него GITHUB_TOKEN получает 403 на
+    # /actions/* и гейт был бы красным каждый первый прогон (находка ревью e26).
+    # contents: read — commits API и checkout. Job-level permissions заменяет
+    # workflow-уровень целиком (e16).
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false }
+      - name: workflow health check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node tools/check-workflow-health.ts
+
   # Храповик числа тестов (a10): поднимает автоматика, не автор PR
   # (test-count-baseline.json — «горячий» файл, З9). Update refuses to lower.
   test-count-ratchet:
@@ -255,7 +309,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { persist-credentials: false }
+      # playwright: 'true' обязателен (e31): turbo test включает @repo/ui#test —
+      # vitest browser mode, ему нужен Chromium. Без флага шаги Cache/Install
+      # Chromium пропускаются и джоба красная с первого прогона (ночь 21.11,
+      # run 44894601530: "Executable doesn't exist ... chromium_headless_shell").
       - uses: $/.github/actions/setup
+        with: { playwright: 'true' }
       - run: pnpm turbo run test --output-logs=errors-only
       - run: pnpm test:count:update
       - name: PR with raised baseline
@@ -519,6 +578,7 @@ jobs:
         gate-canaries,
         verify-budgets,
         backlog-doctor,
+        workflow-health,
         telemetry,
       ]
     if: failure()

@@ -7,7 +7,7 @@
  * заканареченного правила делает шаг зелёным и роняет канарейку.
  *
  * Исключения (документированы в architecture.md З6): test-count — warning-only,
- * exit 0 по контракту; e2e-report/perf — тяжёлые, их время покрывают бюджеты.
+ * exit 0 по контракту; e2e-report — тяжёлый, его время покрывают бюджеты.
  * e2e канареечится начиная с ADR 0005 (прокси /rpc): удаление прокси —
  * детерминированный bad-change, уроняющий e2e. Изменение защищённого файла как
  * таковое ловят контуры L0 (хуки) и L3 (gate-integrity); локально канареечится
@@ -161,6 +161,26 @@ export const CANARIES: GateCanary[] = [
       write(root, 'tools/evil-probe.ts', "export const evil: number = 'not-a-number';\n"),
   },
   {
+    // Хардненинг strict-флагов (b13): соседние канарейки «type-ошибка» вставляют
+    // ошибку, видимую и без strict, — ослабление noUncheckedIndexedAccess/
+    // strict в tsconfig остаётся зелёным. Проба ловит ошибку TS2532
+    // («Object is possibly 'undefined'») ТОЛЬКО при noUncheckedIndexedAccess
+    // (проверено: `tsc --strict` на той же пробе зелёный). Ослабление флага в
+    // tsconfig.base.json или пакетном tsconfig делает пробу компилируемой,
+    // шаг typecheck зелёным — и канарейка красная (защита в глубину: код
+    // tsconfig покрыт CODEOWNERS, инвариант пробы — в gates-canary.test.ts).
+    name: 'strict-флаг tsconfig ослаблен',
+    steps: 'typecheck',
+    failedStep: 'typecheck',
+    expect: /evil-strict-probe/,
+    apply: (root) =>
+      write(
+        root,
+        'apps/api/src/evil-strict-probe.ts',
+        'export const evilStrictProbe = (([] as string[])[0]).length;\n',
+      ),
+  },
+  {
     name: 'expected failure в тесте',
     steps: 'test-integrity',
     failedStep: 'test-integrity',
@@ -285,6 +305,29 @@ export const CANARIES: GateCanary[] = [
         throw new Error('canary anchor not found: contracts/src/tasks.ts has no closing brace');
       }
       writeFileSync(path, withEvilProcedure);
+    },
+  },
+  {
+    // b14: build до этой канарейки жил только в union соседей («build,bundle»):
+    // инвариант таблицы проходил формально, а красный сам build (fail-open дрейф
+    // шага — скрипт, раннер, тихий пропуск задачи) не детектировал никто:
+    // удаление шага ловит gates-canary.test, исчезновение turbo-задачи —
+    // required-tasks, прогон сломанной сборки — никто. Проба — битый ассет-импорт
+    // в клиентском модуле import-графа index-роута (orphan-модули tree-shaken,
+    // не годятся): резолвер Vite не находит файл ([UNRESOLVED_IMPORT]), сборка
+    // краснеет детерминированно и offline.
+    name: 'битый ассет в клиентском модуле',
+    steps: 'build',
+    full: true,
+    failedStep: 'build',
+    expect: /evil-build-probe/,
+    apply: (root) => {
+      const path = join(root, 'apps', 'web', 'src', 'features', 'tasks', 'use-tasks.ts');
+      const source = readFileSync(path, 'utf8');
+      if (!source.includes("from '../../lib/api-client.ts'")) {
+        throw new Error('canary anchor not found: use-tasks.ts has no lib import');
+      }
+      writeFileSync(path, `${source}\nimport './evil-build-probe.png';\n`);
     },
   },
   {
@@ -899,6 +942,31 @@ export const CANARIES: GateCanary[] = [
         delete scripts['mutation'];
         writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
       }
+    },
+  },
+  {
+    // Частичное выключение (b13): удаление скрипта mutation из ОДНОГО носителя
+    // при живых остальных раньше оставало гейт зелёным — мутационный гейт
+    // пакета выключался тихо (test-count warning-only, отчёту test-report
+    // нечего требовать у исчезнувшего скрипта). Гейт b13 красит носителей
+    // меньше MIN_CARRIERS: проба удаляет mutation у apps/api — остаются два
+    // носителя при минимуме 3.
+    name: 'носитель mutation потерял скрипт',
+    steps: 'required-tasks',
+    failedStep: 'required-tasks',
+    expect: /mutation: носителей 2, минимум 3/,
+    apply: (root) => {
+      const path = join(root, 'apps', 'api', 'package.json');
+      const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      if (!isRecord(parsed) || !isRecord(parsed['scripts'])) {
+        throw new Error('canary anchor not found: apps/api/package.json scripts');
+      }
+      const scripts = parsed['scripts'];
+      if (typeof scripts['mutation'] !== 'string') {
+        throw new Error('canary anchor not found: apps/api has no mutation script');
+      }
+      delete scripts['mutation'];
+      writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
     },
   },
   {

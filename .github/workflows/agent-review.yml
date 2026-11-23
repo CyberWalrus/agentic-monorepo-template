@@ -2,11 +2,41 @@
 # детерминированные проверки. Требует секрет ANTHROPIC_API_KEY (или CLAUDE_CODE_OAUTH_TOKEN)
 # и установленное Claude GitHub App.
 #
-# Гарантии b5:
-# - ревью не исполняет код проекта: whitelist инструментов (чтение, git diff/log/show и
-#   MCP-инструмент комментария); defaultMode "default" — всё непокрытое правилами = отказ,
-#   а не ревью LLM; deny закрывает исполнение (pnpm/npm/node/python), запись файлов,
-#   браузерные MCP и чтение /proc (цепочка утечки ключа);
+# Гарантии b5 + e25:
+# - ревью не исполняет код проекта: whitelist инструментов в ОБОИХ шагах (чтение,
+#   git diff/log/show и MCP-инструмент комментария); defaultMode "default" — всё
+#   непокрытое правилами = отказ, а не ревью LLM; deny закрывает исполнение
+#   (pnpm/npm/node/python), запись файлов, браузерные MCP и чтение /proc (цепочка
+#   утечки ключа). JSON settings в шагах 1 и 2 идентичен (e25) — правь их синхронно;
+# - источник плагина code-review запинен по SHA (e25): маркетплейс клонируется в
+#   runner.temp на фиксированный коммит anthropics/claude-plugins-official и
+#   передаётся plugin_marketplaces локальным путём. Запиненная версия action
+#   (v1.0.284) принимает только .git-URL или локальный путь — синтаксис URL#<sha>
+#   она отклоняет (base-action/src/install-plugins.ts: MARKETPLACE_URL_REGEX
+#   требует окончания ".git"); манифест и код плагина лежат в том же репо
+#   (source: ./plugins/code-review), поэтому пин SHA закрывает и то и другое.
+#   Обновление SHA — осознанная правка этого файла, её видит ревью;
+# - клон переименовывается в манифесте (sed в шаге пина): CLI резервирует
+#   официальные имена маркетплейсов (даже с суффиксами) за GitHub-источниками
+#   org anthropics — локальная копия с именем «claude-plugins-official» не
+#   добавляется (проверено прогоном CLI 2.1.267, e25-ревью: «name impersonates
+#   an official...»). Правка одного поля name — единственное отличие клона от
+#   запиненного дерева; квалификатор плагина — code-review@e25-pinned-marketplace;
+# - первый зелёный прогон этого workflow (workflow_dispatch на тестовом PR) —
+#   обязательный шаг приёмки ДО merge (критерий e25): рантайм-схема (клон + rename +
+#   локальный путь в plugin_marketplaces, permissions шага 1, интеракция с
+#   frontmatter плагина) проверена локальным CLI лишь частично — версии CLI на
+#   раннере и локально могут различаться;
+# - шаг 1 работает поверх плагина code-review, чья команда декларирует собственные
+#   allowed-tools во frontmatter (проверено на пине 73c8cf3e, commands/code-review.md):
+#   чтение gh (pr view/list/diff, issue view/list, search — голый грант
+#   Bash(gh search:*): repos/code/commits/issues), постинг gh pr comment
+#   и mcp__github_inline_comment__create_inline_comment — они действуют как allow
+#   поверх settings ниже. Постинг комментария — функция ревью: отразить недоверенный
+#   контент PR в тексте комментария (инъекция) полностью нельзя, не отключив ревью;
+#   этот трейд-офф решает человек при приёмке. Остальное gh-пространство (api,
+#   auth, secret, pr review/edit/close/merge/...) закрыто deny в обоих шагах —
+#   deny старше любого allow, включая frontmatter команды;
 # - запуск по ready_for_review и вручную (workflow_dispatch с номером PR), не на каждый push;
 #   dispatch чекаутит head PR (без этого ревьюилось бы дерево ref запуска);
 # - модель и предел ходов заданы явно (ANTHROPIC_MODEL, --max-turns);
@@ -54,6 +84,29 @@ jobs:
         if: env.HAS_KEY == 'true'
         with: { fetch-depth: 0, persist-credentials: false }
 
+      # e25: маркетплейс плагинов подключается локальной копией, запиненной по SHA.
+      # URL#<sha> запиненная версия action не принимает (MARKETPLACE_URL_REGEX —
+      # только .git-URL), поэтому клон на фиксированный коммит в runner.temp —
+      # вне workspace ревьюера — и локальный путь в plugin_marketplaces.
+      # Обновление SHA ниже — осознанная правка этого файла.
+      - name: Pin plugin marketplace at SHA
+        if: env.HAS_KEY == 'true'
+        run: |
+          set -euo pipefail
+          git clone --quiet --filter=blob:none \
+            https://github.com/anthropics/claude-plugins-official.git \
+            "${RUNNER_TEMP}/claude-plugins-official"
+          git -C "${RUNNER_TEMP}/claude-plugins-official" checkout --quiet --detach \
+            73c8cf3ea7e296057b467990f2f5d61b4c922260 # 2026-11-21, e25
+          # CLI резервирует официальные имена маркетплейсов (даже с суффиксами) за
+          # GitHub-источниками org anthropics: локальная копия с именем
+          # «claude-plugins-official» не добавляется (проверено прогоном CLI
+          # 2.1.267, раунд ревью e25: «name impersonates an official...»).
+          # Переименование одного поля name — единственное отличие клона от
+          # запиненного дерева; квалификатор ниже — code-review@e25-pinned-marketplace.
+          sed -i 's/"name": "claude-plugins-official"/"name": "e25-pinned-marketplace"/' \
+            "${RUNNER_TEMP}/claude-plugins-official/.claude-plugin/marketplace.json"
+
       # dispatch запускается с ref main: чекаутим head PR явно. На pull_request
       # checkout уже стоит на head — fetch той же SHA идемпотентен.
       - name: Checkout PR head
@@ -62,11 +115,82 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          plugin_marketplaces: https://github.com/anthropics/claude-plugins-official.git
-          plugins: code-review@claude-plugins-official
-          prompt: /code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+          # Локальная копия маркетплейса, запиненная по SHA шагом выше (e25).
+          plugin_marketplaces: ${{ runner.temp }}/claude-plugins-official
+          plugins: code-review@e25-pinned-marketplace
+          # env.PR_NUMBER, а не сырой event: при workflow_dispatch поле
+          # pull_request.number пусто (см. concurrency и env выше) — e25-ревью.
+          prompt: /code-review:code-review --comment ${{ github.repository }}/pull/${{ env.PR_NUMBER }}
+          # e25: тот же settings, что у шага «Specialist reviewers» ниже, — ревьюер
+          # читает недоверенный контент PR и в шаге плагина: whitelist (defaultMode
+          # "default", deny Write/Edit/исполнители/Read(/proc/**)) действует в обоих
+          # шагах. Правь два блока синхронно.
           # Локальные хуки (Stop → pnpm verify) не нужны: детерминированные проверки делает CI.
-          settings: '{"disableAllHooks": true}'
+          settings: |
+            {
+              "disableAllHooks": true,
+              "permissions": {
+                "defaultMode": "default",
+                "allow": [
+                  "Read",
+                  "Grep",
+                  "Glob",
+                  "LS",
+                  "TodoWrite",
+                  "Task",
+                  "Bash(git diff:*)",
+                  "Bash(git log:*)",
+                  "Bash(git show:*)",
+                  "mcp__github_comment__update_claude_comment"
+                ],
+                "deny": [
+                  "Write",
+                  "Edit",
+                  "MultiEdit",
+                  "NotebookEdit",
+                  "WebFetch",
+                  "WebSearch",
+                  "Read(/proc/**)",
+                  "Bash(git config:*)",
+                  "Bash(git -c:*)",
+                  "Bash(env:*)",
+                  "Bash(printenv:*)",
+                  "Bash(pnpm:*)",
+                  "Bash(npm:*)",
+                  "Bash(npx:*)",
+                  "Bash(node:*)",
+                  "Bash(python:*)",
+                  "Bash(python3:*)",
+                  "Bash(bun:*)",
+                  "Bash(deno:*)",
+                  "Bash(gh api:*)",
+                  "Bash(gh auth:*)",
+                  "Bash(gh secret:*)",
+                  "Bash(gh variable:*)",
+                  "Bash(gh release:*)",
+                  "Bash(gh repo:*)",
+                  "Bash(gh label:*)",
+                  "Bash(gh gist:*)",
+                  "Bash(gh project:*)",
+                  "Bash(gh workflow:*)",
+                  "Bash(gh run:*)",
+                  "Bash(gh cache:*)",
+                  "Bash(gh alias:*)",
+                  "Bash(gh config:*)",
+                  "Bash(gh ssh-key:*)",
+                  "Bash(gh gpg-key:*)",
+                  "Bash(gh pr review:*)",
+                  "Bash(gh pr edit:*)",
+                  "Bash(gh pr close:*)",
+                  "Bash(gh pr reopen:*)",
+                  "Bash(gh pr merge:*)",
+                  "Bash(gh pr ready:*)",
+                  "Bash(gh pr lock:*)",
+                  "mcp__playwright*",
+                  "mcp__chrome-devtools*"
+                ]
+              }
+            }
           claude_args: --max-turns 40
 
       - name: Specialist reviewers (repo subagents)
@@ -112,6 +236,29 @@ jobs:
                   "Bash(python3:*)",
                   "Bash(bun:*)",
                   "Bash(deno:*)",
+                  "Bash(gh api:*)",
+                  "Bash(gh auth:*)",
+                  "Bash(gh secret:*)",
+                  "Bash(gh variable:*)",
+                  "Bash(gh release:*)",
+                  "Bash(gh repo:*)",
+                  "Bash(gh label:*)",
+                  "Bash(gh gist:*)",
+                  "Bash(gh project:*)",
+                  "Bash(gh workflow:*)",
+                  "Bash(gh run:*)",
+                  "Bash(gh cache:*)",
+                  "Bash(gh alias:*)",
+                  "Bash(gh config:*)",
+                  "Bash(gh ssh-key:*)",
+                  "Bash(gh gpg-key:*)",
+                  "Bash(gh pr review:*)",
+                  "Bash(gh pr edit:*)",
+                  "Bash(gh pr close:*)",
+                  "Bash(gh pr reopen:*)",
+                  "Bash(gh pr merge:*)",
+                  "Bash(gh pr ready:*)",
+                  "Bash(gh pr lock:*)",
                   "mcp__playwright*",
                   "mcp__chrome-devtools*"
                 ]

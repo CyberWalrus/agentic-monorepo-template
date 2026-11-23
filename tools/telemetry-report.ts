@@ -135,6 +135,66 @@ export const TaskConflictsSchema = z.object({
 });
 export type TaskConflicts = z.infer<typeof TaskConflictsSchema>;
 
+/**
+ * gh api argv списка прогонов workflow (страницы, per_page=100 — урок e16).
+ * Явный `-X GET` обязателен: gh CLI с параметрами `-f` и без явного метода
+ * отправляет POST (`gh api --help`: «GET normally and POST if any parameters
+ * were added»), а GET-only эндпоинт runs отвечает 404 — все четыре источника
+ * отчёта «не собраны», CLI красный (ночь 45013082390, e34). Чистая функция —
+ * здесь, а не в main: тест-барьер (tools/test/) держит контракт «argv с `-f`
+ * несёт явный метод GET» без исполнения CLI (шов констант b2.4/e33).
+ */
+export function ghWorkflowRunsArgs(
+  repo: string,
+  workflow: string,
+  createdSince: string,
+  page: number,
+  branch?: string,
+): string[] {
+  return [
+    `repos/${repo}/actions/workflows/${workflow}/runs`,
+    '-X',
+    'GET',
+    '-f',
+    'per_page=100',
+    '-f',
+    `page=${page}`,
+    '-f',
+    `created=>=${createdSince}`,
+    ...(branch !== undefined ? ['-f', `branch=${branch}`] : []),
+  ];
+}
+
+/** gh api argv списка артефактов прогона — тот же контракт `-f` ⇔ `-X GET`. */
+export function ghRunArtifactsArgs(repo: string, runId: number): string[] {
+  return [`repos/${repo}/actions/runs/${runId}/artifacts`, '-X', 'GET', '-f', 'per_page=100'];
+}
+
+/**
+ * Разбор perf.json артефакта ночи: point — точка тренда; problem — текст
+ * problem или null. Битый JSON — problem (файл нечитаем). Файл, не
+ * проходящий текущую PerfReportSchema, — точка вне тренда («нет данных»)
+ * БЕЗ problem: схема перф-отчёта эволюционирует (A6 PR-1 сделал обязательными
+ * детерминированные метрики), legacy-артефакты 30-дневного окна не должны
+ * красить прогон месяц (e34: ночь 43408771806). Дрейф свежих данных виден в
+ * самой метрике: без читаемых точек свежего окна perf показывает «нет данных».
+ */
+export function parsePerfPoint(
+  raw: string,
+  runId: number,
+  date: string,
+): { point: PerfPoint | null; problem: string | null } {
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(raw);
+  } catch {
+    return { point: null, problem: `ночной ${runId}/perf.json: файл не разбирается как JSON` };
+  }
+  const parsed = PerfReportSchema.safeParse(parsedJson);
+  if (!parsed.success) return { point: null, problem: null };
+  return { point: { runId, date, report: parsed.data }, problem: null };
+}
+
 export interface TelemetryTargets {
   /** vision L3: PR CI p50 < 10 мин. */
   ciP50Min: number;
