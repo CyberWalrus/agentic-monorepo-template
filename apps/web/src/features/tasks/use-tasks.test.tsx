@@ -66,6 +66,13 @@ const dog: Task = {
   createdAt: '2026-11-01T09:00:00.000Z',
 };
 
+const rust: Task = {
+  id: '00000000-0000-4000-8000-000000000003',
+  title: 'Learn Rust',
+  completed: false,
+  createdAt: '2026-11-01T11:00:00.000Z',
+};
+
 const listKey = orpc.tasks.list.queryKey();
 
 function TaskScreen() {
@@ -132,6 +139,8 @@ function stubToggle(server: Server) {
   };
 
   return {
+    /** Сервер получил запрос на toggle: мутация вышла за пределы onMutate. */
+    isRequested: (id: string) => pending.has(id),
     settleToggle: (id: string) => {
       server.commitToggle(id);
       const task = server.tasks.find((item) => item.id === id);
@@ -258,6 +267,83 @@ describe('use-tasks concurrency', () => {
         dog,
       ]),
     );
+  });
+
+  it('applies the optimistic toggle synchronously, before the handler yields', async () => {
+    const server = fakeServer([milk, dog]);
+    const { failToggle, isRequested } = stubToggle(server);
+    const client = createQueryClient();
+    const screen = await renderTasksScreen(client, [milk, dog]);
+    const milkCheckbox = screen.getByRole('checkbox', { name: 'Buy milk' }).element();
+
+    // Синхронный DOM-клик, следующая строка — в том же тике, без единого await:
+    // управляемый чекбокс не откатывается ни на кадр.
+    milkCheckbox.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(client.getQueryData<Task[]>(listKey)).toEqual([{ ...milk, completed: true }, dog]);
+
+    await vi.waitFor(() => expect(isRequested(milk.id), 'toggle reached the server').toBe(true));
+    failToggle(milk.id, new Error('Network down'));
+    await expect
+      .element(screen.getByRole('alert'))
+      .toHaveTextContent('Could not update the task. Try again.');
+  });
+
+  it('keeps a task added by a concurrent refetch when the failed toggle is rolled back', async () => {
+    const server = fakeServer([milk, dog]);
+    const { failToggle } = stubToggle(server);
+    const client = createQueryClient();
+    const screen = await renderTasksScreen(client, [milk, dog]);
+
+    await screen.getByRole('checkbox', { name: 'Buy milk' }).click();
+    await expect.element(screen.getByRole('checkbox', { name: 'Buy milk' })).toBeChecked();
+
+    // Refetch, начатый после клика, cancelQueries не трогает: он приносит задачу
+    // из другой вкладки, пока мутация toggle ещё в полёте.
+    server.add(rust);
+    await client.refetchQueries({ queryKey: listKey });
+    await expect.element(screen.getByText('Learn Rust')).toBeVisible();
+
+    failToggle(milk.id, new Error('Network down'));
+
+    await expect
+      .element(screen.getByRole('alert'))
+      .toHaveTextContent('Could not update the task. Try again.');
+    await expect.element(screen.getByRole('checkbox', { name: 'Buy milk' })).not.toBeChecked();
+
+    // Откат вернул к до-кликовому состоянию ровно одну задачу и не тронул то,
+    // что пришло в кэш после клика.
+    expect(client.getQueryData<Task[]>(listKey), 'cache after rollback').toEqual([milk, dog, rust]);
+    await expect.element(screen.getByText('Learn Rust')).toBeVisible();
+  });
+
+  it('keeps a change to another task from a concurrent refetch when the failed toggle is rolled back', async () => {
+    const server = fakeServer([milk, dog]);
+    const { failToggle } = stubToggle(server);
+    const client = createQueryClient();
+    const screen = await renderTasksScreen(client, [milk, dog]);
+
+    await screen.getByRole('checkbox', { name: 'Buy milk' }).click();
+    await expect.element(screen.getByRole('checkbox', { name: 'Buy milk' })).toBeChecked();
+
+    // Другая вкладка завершила «Walk the dog»; refetch, начатый после клика,
+    // приносит это в кэш, пока мутация toggle ещё в полёте.
+    server.commitToggle(dog.id);
+    await client.refetchQueries({ queryKey: listKey });
+    await expect.element(screen.getByRole('checkbox', { name: 'Walk the dog' })).not.toBeChecked();
+
+    failToggle(milk.id, new Error('Network down'));
+
+    await expect
+      .element(screen.getByRole('alert'))
+      .toHaveTextContent('Could not update the task. Try again.');
+    await expect.element(screen.getByRole('checkbox', { name: 'Buy milk' })).not.toBeChecked();
+
+    // Откат не вернул «Walk the dog» к состоянию до клика: на сервере она завершена.
+    expect(client.getQueryData<Task[]>(listKey), 'cache after rollback').toEqual([
+      milk,
+      { ...dog, completed: false },
+    ]);
+    await expect.element(screen.getByRole('checkbox', { name: 'Walk the dog' })).not.toBeChecked();
   });
 
   it('refetches exactly once after the last mutation settles', async () => {
