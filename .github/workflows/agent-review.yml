@@ -16,6 +16,15 @@
 #   требует окончания ".git"); манифест и код плагина лежат в том же репо
 #   (source: ./plugins/code-review), поэтому пин SHA закрывает и то и другое.
 #   Обновление SHA — осознанная правка этого файла, её видит ревью;
+# - шаг 1 работает поверх плагина code-review, чья команда декларирует собственные
+#   allowed-tools во frontmatter (проверено на пине 73c8cf3e, commands/code-review.md):
+#   чтение gh (pr view/list/diff, issue view/list, search), постинг gh pr comment
+#   и mcp__github_inline_comment__create_inline_comment — они действуют как allow
+#   поверх settings ниже. Постинг комментария — функция ревью: отразить недоверенный
+#   контент PR в тексте комментария (инъекция) полностью нельзя, не отключив ревью;
+#   этот трейд-офф решает человек при приёмке. Остальное gh-пространство (api,
+#   auth, secret, pr review/edit/close/merge/...) закрыто deny в обоих шагах —
+#   deny старше любого allow, включая frontmatter команды;
 # - запуск по ready_for_review и вручную (workflow_dispatch с номером PR), не на каждый push;
 #   dispatch чекаутит head PR (без этого ревьюилось бы дерево ref запуска);
 # - модель и предел ходов заданы явно (ANTHROPIC_MODEL, --max-turns);
@@ -89,7 +98,9 @@ jobs:
           # Локальная копия маркетплейса, запиненная по SHA шагом выше (e25).
           plugin_marketplaces: ${{ runner.temp }}/claude-plugins-official
           plugins: code-review@claude-plugins-official
-          prompt: /code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+          # env.PR_NUMBER, а не сырой event: при workflow_dispatch поле
+          # pull_request.number пусто (см. concurrency и env выше) — e25-ревью.
+          prompt: /code-review:code-review --comment ${{ github.repository }}/pull/${{ env.PR_NUMBER }}
           # e25: тот же settings, что у шага «Specialist reviewers» ниже, — ревьюер
           # читает недоверенный контент PR и в шаге плагина: whitelist (defaultMode
           # "default", deny Write/Edit/исполнители/Read(/proc/**)) действует в обоих
@@ -132,6 +143,29 @@ jobs:
                   "Bash(python3:*)",
                   "Bash(bun:*)",
                   "Bash(deno:*)",
+                  "Bash(gh api:*)",
+                  "Bash(gh auth:*)",
+                  "Bash(gh secret:*)",
+                  "Bash(gh variable:*)",
+                  "Bash(gh release:*)",
+                  "Bash(gh repo:*)",
+                  "Bash(gh label:*)",
+                  "Bash(gh gist:*)",
+                  "Bash(gh project:*)",
+                  "Bash(gh workflow:*)",
+                  "Bash(gh run:*)",
+                  "Bash(gh cache:*)",
+                  "Bash(gh alias:*)",
+                  "Bash(gh config:*)",
+                  "Bash(gh ssh-key:*)",
+                  "Bash(gh gpg-key:*)",
+                  "Bash(gh pr review:*)",
+                  "Bash(gh pr edit:*)",
+                  "Bash(gh pr close:*)",
+                  "Bash(gh pr reopen:*)",
+                  "Bash(gh pr merge:*)",
+                  "Bash(gh pr ready:*)",
+                  "Bash(gh pr lock:*)",
                   "mcp__playwright*",
                   "mcp__chrome-devtools*"
                 ]
@@ -182,6 +216,29 @@ jobs:
                   "Bash(python3:*)",
                   "Bash(bun:*)",
                   "Bash(deno:*)",
+                  "Bash(gh api:*)",
+                  "Bash(gh auth:*)",
+                  "Bash(gh secret:*)",
+                  "Bash(gh variable:*)",
+                  "Bash(gh release:*)",
+                  "Bash(gh repo:*)",
+                  "Bash(gh label:*)",
+                  "Bash(gh gist:*)",
+                  "Bash(gh project:*)",
+                  "Bash(gh workflow:*)",
+                  "Bash(gh run:*)",
+                  "Bash(gh cache:*)",
+                  "Bash(gh alias:*)",
+                  "Bash(gh config:*)",
+                  "Bash(gh ssh-key:*)",
+                  "Bash(gh gpg-key:*)",
+                  "Bash(gh pr review:*)",
+                  "Bash(gh pr edit:*)",
+                  "Bash(gh pr close:*)",
+                  "Bash(gh pr reopen:*)",
+                  "Bash(gh pr merge:*)",
+                  "Bash(gh pr ready:*)",
+                  "Bash(gh pr lock:*)",
                   "mcp__playwright*",
                   "mcp__chrome-devtools*"
                 ]
