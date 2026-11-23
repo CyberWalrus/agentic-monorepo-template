@@ -1,6 +1,6 @@
 import type { ButtonHTMLAttributes } from 'react';
 
-import styles from './Button.module.css';
+import styles from './button.module.css';
 
 export type ButtonVariant = 'primary' | 'secondary';
 

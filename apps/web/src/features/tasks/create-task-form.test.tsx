@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
-import { CreateTaskForm } from './CreateTaskForm.tsx';
+import { CreateTaskForm } from './create-task-form.tsx';
 
 describe('CreateTaskForm', () => {
   it('submits the trimmed title and clears the field', async () => {

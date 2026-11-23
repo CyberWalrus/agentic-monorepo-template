@@ -1,6 +1,6 @@
 import { useId } from 'react';
 
-import styles from './TaskItem.module.css';
+import styles from './task-item.module.css';
 
 export interface TaskItemData {
   id: string;

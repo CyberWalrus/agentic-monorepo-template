@@ -10,6 +10,18 @@ inputs:
 runs:
   using: composite
   steps:
+    # E28_MARKER — разовый маркер канарейки «какую версию локального экшена исполняет
+    # $/.github/actions/setup в pull_request_target» (ADR 0002, ADR 0014). Шаг есть
+    # только в версии PR: появился в логе gate-integrity — исполнилась версия из PR;
+    # не появился — из base. После считывания лога шаг удаляется тем же PR.
+    - name: E28 marker (step exists only in the PR version of the action)
+      shell: bash
+      run: |
+        echo "E28_MARKER: PR version of .github/actions/setup/action.yml is executing"
+        echo "E28_MARKER: event=${GITHUB_EVENT_NAME} action_path=${GITHUB_ACTION_PATH}"
+        echo "E28_MARKER: marker lines in executed action.yml: $(grep -c E28_MARKER "${GITHUB_ACTION_PATH}/action.yml" 2>/dev/null || true)"
+        echo "E28_MARKER: marker lines in workspace action.yml: $(grep -c E28_MARKER .github/actions/setup/action.yml 2>/dev/null || true)"
+        echo "E28_MARKER: workspace HEAD=$(git -C "${GITHUB_WORKSPACE:-.}" rev-parse HEAD 2>/dev/null || echo n/a)"
     # В контейнерных job (visual) workspace смонтирован с чужим uid: git отказывает
     # с "dubious ownership", и prepare-скрипт pnpm install (lefthook install) падает.
     - name: Trust workspace for git (container jobs)

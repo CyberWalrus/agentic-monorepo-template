@@ -3,9 +3,9 @@ import { TaskItem } from '@repo/ui';
 import { useState } from 'react';
 
 import { useHydrated } from '../../lib/use-hydrated.ts';
-import { CreateTaskForm } from './CreateTaskForm.tsx';
+import { CreateTaskForm } from './create-task-form.tsx';
 import { formatSummary, summarizeTasks } from './summarize.ts';
-import styles from './TasksPage.module.css';
+import styles from './tasks-page.module.css';
 
 export interface TasksPageProps {
   tasks: readonly Task[];
