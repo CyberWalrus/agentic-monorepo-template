@@ -155,6 +155,16 @@ function stubToggle(server: Server) {
       if (!pendingToggle) throw new Error(`no pending toggle for ${id}`);
       pendingToggle.reject(error);
     },
+    /**
+     * Сервер стал недоступен: refetch списка, который мутация запускает по
+     * ошибке, падает тоже. В кэше остаётся только то, что записал откат, —
+     * успешный refetch отвечает серверным состоянием и маскирует его.
+     */
+    failList: (error: Error) => {
+      transport.list = async () => {
+        throw error;
+      };
+    },
   };
 }
 
@@ -247,26 +257,23 @@ describe('use-tasks concurrency', () => {
 
   it('rolls the optimistic toggle back when the mutation fails', async () => {
     const server = fakeServer([milk, dog]);
-    const { failToggle } = stubToggle(server);
+    const { failList, failToggle } = stubToggle(server);
     const client = createQueryClient();
     const screen = await renderTasksScreen(client, [milk, dog]);
 
     await screen.getByRole('checkbox', { name: 'Buy milk' }).click();
     await expect.element(screen.getByRole('checkbox', { name: 'Buy milk' })).toBeChecked();
 
+    // Сервер недоступен: refetch, который мутация запускает по ошибке, падает
+    // тоже, — в кэше оказывается не ответ сервера, а результат отката.
+    failList(new Error('Server is down'));
     failToggle(milk.id, new Error('Network down'));
 
     await expect
       .element(screen.getByRole('alert'))
       .toHaveTextContent('Could not update the task. Try again.');
+    expect(client.getQueryData<Task[]>(listKey), 'cache after rollback').toEqual([milk, dog]);
     await expect.element(screen.getByRole('checkbox', { name: 'Buy milk' })).not.toBeChecked();
-
-    await vi.waitFor(() =>
-      expect(client.getQueryData<Task[]>(listKey), 'cache restored to the server truth').toEqual([
-        milk,
-        dog,
-      ]),
-    );
   });
 
   it('applies the optimistic toggle synchronously, before the handler yields', async () => {
@@ -290,7 +297,7 @@ describe('use-tasks concurrency', () => {
 
   it('keeps a task added by a concurrent refetch when the failed toggle is rolled back', async () => {
     const server = fakeServer([milk, dog]);
-    const { failToggle } = stubToggle(server);
+    const { failList, failToggle } = stubToggle(server);
     const client = createQueryClient();
     const screen = await renderTasksScreen(client, [milk, dog]);
 
@@ -303,22 +310,25 @@ describe('use-tasks concurrency', () => {
     await client.refetchQueries({ queryKey: listKey });
     await expect.element(screen.getByText('Learn Rust')).toBeVisible();
 
+    // Сервер недоступен: refetch по ошибке мутации падает тоже, и подмена
+    // снимком осталась бы в кэше до следующего успешного refetch.
+    failList(new Error('Server is down'));
     failToggle(milk.id, new Error('Network down'));
 
     await expect
       .element(screen.getByRole('alert'))
       .toHaveTextContent('Could not update the task. Try again.');
-    await expect.element(screen.getByRole('checkbox', { name: 'Buy milk' })).not.toBeChecked();
 
-    // Откат вернул к до-кликовому состоянию ровно одну задачу и не тронул то,
-    // что пришло в кэш после клика.
+    // Откат не затёр то, что пришло в кэш после клика: подмена снимком до
+    // клика оставила бы две задачи без «Learn Rust».
     expect(client.getQueryData<Task[]>(listKey), 'cache after rollback').toEqual([milk, dog, rust]);
+    await expect.element(screen.getByRole('checkbox', { name: 'Buy milk' })).not.toBeChecked();
     await expect.element(screen.getByText('Learn Rust')).toBeVisible();
   });
 
   it('keeps a change to another task from a concurrent refetch when the failed toggle is rolled back', async () => {
     const server = fakeServer([milk, dog]);
-    const { failToggle } = stubToggle(server);
+    const { failList, failToggle } = stubToggle(server);
     const client = createQueryClient();
     const screen = await renderTasksScreen(client, [milk, dog]);
 
@@ -331,18 +341,22 @@ describe('use-tasks concurrency', () => {
     await client.refetchQueries({ queryKey: listKey });
     await expect.element(screen.getByRole('checkbox', { name: 'Walk the dog' })).not.toBeChecked();
 
+    // Сервер недоступен: refetch по ошибке мутации падает тоже, и подмена
+    // снимком осталась бы в кэше до следующего успешного refetch.
+    failList(new Error('Server is down'));
     failToggle(milk.id, new Error('Network down'));
 
     await expect
       .element(screen.getByRole('alert'))
       .toHaveTextContent('Could not update the task. Try again.');
-    await expect.element(screen.getByRole('checkbox', { name: 'Buy milk' })).not.toBeChecked();
 
-    // Откат не вернул «Walk the dog» к состоянию до клика: на сервере она завершена.
+    // Откат не вернул «Walk the dog» к состоянию до клика: снимок до клика
+    // держал её завершённой, а на сервере она не завершена.
     expect(client.getQueryData<Task[]>(listKey), 'cache after rollback').toEqual([
       milk,
       { ...dog, completed: false },
     ]);
+    await expect.element(screen.getByRole('checkbox', { name: 'Buy milk' })).not.toBeChecked();
     await expect.element(screen.getByRole('checkbox', { name: 'Walk the dog' })).not.toBeChecked();
   });
 
