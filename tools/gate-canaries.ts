@@ -161,6 +161,26 @@ export const CANARIES: GateCanary[] = [
       write(root, 'tools/evil-probe.ts', "export const evil: number = 'not-a-number';\n"),
   },
   {
+    // Хардненинг strict-флагов (b13): соседние канарейки «type-ошибка» вставляют
+    // ошибку, видимую и без strict, — ослабление noUncheckedIndexedAccess/
+    // strict в tsconfig остаётся зелёным. Проба ловит ошибку TS2532
+    // («Object is possibly 'undefined'») ТОЛЬКО при noUncheckedIndexedAccess
+    // (проверено: `tsc --strict` на той же пробе зелёный). Ослабление флага в
+    // tsconfig.base.json или пакетном tsconfig делает пробу компилируемой,
+    // шаг typecheck зелёным — и канарейка красная (защита в глубину: код
+    // tsconfig покрыт CODEOWNERS, инвариант пробы — в gates-canary.test.ts).
+    name: 'strict-флаг tsconfig ослаблен',
+    steps: 'typecheck',
+    failedStep: 'typecheck',
+    expect: /evil-strict-probe/,
+    apply: (root) =>
+      write(
+        root,
+        'apps/api/src/evil-strict-probe.ts',
+        'export const evilStrictProbe = (([] as string[])[0]).length;\n',
+      ),
+  },
+  {
     name: 'expected failure в тесте',
     steps: 'test-integrity',
     failedStep: 'test-integrity',
@@ -899,6 +919,31 @@ export const CANARIES: GateCanary[] = [
         delete scripts['mutation'];
         writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
       }
+    },
+  },
+  {
+    // Частичное выключение (b13): удаление скрипта mutation из ОДНОГО носителя
+    // при живых остальных раньше оставало гейт зелёным — мутационный гейт
+    // пакета выключался тихо (test-count warning-only, отчёту test-report
+    // нечего требовать у исчезнувшего скрипта). Гейт b13 красит носителей
+    // меньше MIN_CARRIERS: проба удаляет mutation у apps/api — остаются два
+    // носителя при минимуме 3.
+    name: 'носитель mutation потерял скрипт',
+    steps: 'required-tasks',
+    failedStep: 'required-tasks',
+    expect: /mutation: носителей 2, минимум 3/,
+    apply: (root) => {
+      const path = join(root, 'apps', 'api', 'package.json');
+      const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      if (!isRecord(parsed) || !isRecord(parsed['scripts'])) {
+        throw new Error('canary anchor not found: apps/api/package.json scripts');
+      }
+      const scripts = parsed['scripts'];
+      if (typeof scripts['mutation'] !== 'string') {
+        throw new Error('canary anchor not found: apps/api has no mutation script');
+      }
+      delete scripts['mutation'];
+      writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
     },
   },
   {

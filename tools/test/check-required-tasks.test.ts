@@ -13,7 +13,12 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { REQUIRED_TASKS, carriersFromGraph, evaluateTask } from '../check-required-tasks.ts';
+import {
+  REQUIRED_TASKS,
+  carriersFromGraph,
+  evaluateTask,
+  MIN_CARRIERS,
+} from '../check-required-tasks.ts';
 import { fast } from '../verify-steps.ts';
 
 // Интеграционный кейс спавнит чекер (4 dry-спавна turbo ~1-2s): дефолтных 5s
@@ -69,11 +74,32 @@ describe('носители обязательных задач в dry-графе
     expect(REQUIRED_TASKS).toEqual(['build', 'test', 'e2e', 'mutation']);
   });
 
+  it('у каждой обязательной задачи есть порог MIN_CARRIERS (fail-closed, З4)', () => {
+    // Задача без порога красит веткой «нет порога в MIN_CARRIERS»: списки
+    // обязаны идти в ногу, иначе гейт мёртв при рождении новой задачи.
+    for (const task of REQUIRED_TASKS) {
+      expect(MIN_CARRIERS[task], `нет порога MIN_CARRIERS для задачи ${task}`).toBeTypeOf('number');
+    }
+  });
+
   it('полный workspace: все задачи с носителями, призраки не считаются', () => {
+    // Составы = факт репо на момент b13 = пороги MIN_CARRIERS: ровно минимум —
+    // зелёный.
     expect(run('mutation', ['@repo/api', '@repo/contracts', '@repo/web'])).toEqual([]);
     expect(run('e2e', ['@repo/e2e'])).toEqual([]);
     expect(run('build', ['@repo/web'])).toEqual([]);
-    expect(run('test', ['@repo/api', '@repo/web'])).toEqual([]);
+    expect(
+      run('test', ['@repo/api', '@repo/contracts', '@repo/preflight', '@repo/ui', '@repo/web']),
+    ).toEqual([]);
+  });
+
+  it('носитель удалён при живых остальных — красный с числом ниже минимума (b13)', () => {
+    expect(run('mutation', ['@repo/contracts', '@repo/web'])).toEqual([
+      'mutation: носителей 2, минимум 3',
+    ]);
+    expect(run('test', ['@repo/api', '@repo/contracts', '@repo/preflight', '@repo/ui'])).toEqual([
+      'test: носителей 4, минимум 5',
+    ]);
   });
 
   it('все носители mutation удалены — «mutation: ни одного пакета»', () => {
@@ -181,15 +207,35 @@ describe('проводка гейта required-tasks', () => {
 });
 
 describe('интеграция: чекер на реальном workspace', () => {
-  it('все четыре задачи с носителями — exit 0', () => {
+  it('все четыре задачи с достаточными носителями — exit 0, порог = факту (b13)', () => {
     const result = spawnSync(process.execPath, [checker], { encoding: 'utf8', timeout: 60_000 });
     if (result.error !== undefined) {
       throw result.error;
     }
     expect(result.status).toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain('required tasks: ok');
+    const output = `${result.stdout}${result.stderr}`;
+    expect(output).toContain('required tasks: ok');
     for (const task of REQUIRED_TASKS) {
-      expect(`${result.stdout}${result.stderr}`).toContain(`${task}:`);
+      expect(output).toContain(`${task}:`);
+    }
+    // Порог = состав репо (b13): носителей в реальном графе ровно MIN_CARRIERS.
+    // Рост состава не должен оставлять порог устаревшим-заниженным — инвариант
+    // требует синхронной правки MIN_CARRIERS тем же PR.
+    const okLine = output.split('\n').find((line) => line.startsWith('required tasks: ok'));
+    if (okLine === undefined) {
+      throw new Error('в выводе чекера нет строки required tasks: ok');
+    }
+    const sections = (okLine.split('—')[1] ?? '').split(';').map((part) => part.trim());
+    for (const task of REQUIRED_TASKS) {
+      const section = sections.find((part) => part.startsWith(`${task}:`));
+      if (section === undefined) {
+        throw new Error(`в выводе чекера нет секции ${task}`);
+      }
+      const carriers = section
+        .slice(`${task}:`.length)
+        .split(',')
+        .filter((id) => id.trim() !== '');
+      expect(carriers.length, `носителей ${task} против MIN_CARRIERS`).toBe(MIN_CARRIERS[task]);
     }
   });
 });
