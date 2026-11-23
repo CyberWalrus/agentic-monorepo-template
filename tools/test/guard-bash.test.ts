@@ -76,6 +76,21 @@ const MUST_DENY: string[] = [
   'rm tools/protected-paths.json',
   'cp /tmp/evil.json tools/protected-paths.json',
   'mv tools/protected-paths.json /tmp/stolen.json',
+  // e45: heredoc, поданный интерпретатору, — команды; тело проверяется правилами
+  "bash <<'EOF'\ngit commit --no-verify\nEOF",
+  'sh <<EOF\ngit push --force origin main\nEOF',
+  "zsh -s <<'EOF'\npnpm exec playwright test -u\nEOF",
+  "node <<'EOF'\nexecSync('git commit --no-verify')\nEOF",
+  "python3 - <<'EOF'\nsubprocess.run('git push --force', shell=True)\nEOF",
+  "eval $(cat <<'EOF'\ngit commit --no-verify\nEOF\n)",
+  // конвейер: cat печатает тело, bash исполняет
+  "cat <<'EOF' | bash\ngit commit --no-verify\nEOF",
+  // запись в защищённый файл из тела, которое исполняет bash
+  "bash <<'EOF'\necho x > tools/protected-paths.json\nEOF",
+  // e45: фальшивый фрейм — `<<` в кавычках, в комментарии и here-string оператором не считается
+  'echo "<<END"\ngit commit --no-verify\nEND',
+  '# cat <<EOF\ngit commit --no-verify\nEOF',
+  'cat <<<EOF\ngit commit --no-verify\nEOF',
 ];
 
 for (const command of MUST_DENY) {
@@ -101,6 +116,10 @@ const MUST_PASS: string[] = [
   'pnpm verify --full',
   'echo x > README.md',
   'cd apps/web && echo x > package.json',
+  // e45: запись файла через heredoc — тело-данные правила не читают
+  "cat > README.md <<'EOF'\n# Title\nbody\nEOF",
+  "cat <<'EOF' > docs/notes.md\nThe marker EOF ends the block\nEOF\necho done",
+  'cat <<EOF > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF',
 ];
 
 for (const command of MUST_PASS) {

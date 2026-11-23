@@ -5,6 +5,9 @@ import { repoWriteTargets, stripHeredocs, tokenize, writeTargets } from '../anal
 
 const REPO = '/repo';
 
+/** Строки команды в одну строку: heredoc'ы в тестах читаются как в терминале. */
+const script = (lines: string[]) => lines.join('\n');
+
 describe('writeTargets', () => {
   const cases: [string, string[]][] = [
     ['echo x > a.json', ['a.json']],
@@ -76,8 +79,131 @@ describe('repoWriteTargets: cd учитывается', () => {
 });
 
 describe('stripHeredocs', () => {
-  it('replaces heredoc bodies, so their content is not parsed as commands', () => {
-    const command = ['cat <<EOF', 'echo x > tools/a.json', 'EOF', 'echo done'].join('\n');
-    expect(repoWriteTargets(stripHeredocs(command), REPO, REPO)).toEqual([]);
+  const PROTECTED = `${REPO}/tools/a.json`;
+
+  /** Тело heredoc, поданного не интерпретатору, — данные: вырезается и командами не считается. */
+  it('cuts the body, so its content is not parsed as commands', () => {
+    const input = script(['cat <<EOF', 'echo x > tools/a.json', 'EOF', 'echo done']);
+    expect(repoWriteTargets(stripHeredocs(input), REPO, REPO)).toEqual([]);
+  });
+
+  it('keeps the redirect of the opener line: its target is outside the body', () => {
+    const input = script(['cat > tools/a.json <<EOF', 'content', 'EOF']);
+    expect(repoWriteTargets(stripHeredocs(input), REPO, REPO)).toEqual([PROTECTED]);
+  });
+
+  it.each([
+    // `<<-`: табы в начале строк тела игнорируются, в том числе у терминатора
+    { lines: ['cat <<-EOF', '\techo x > tools/a.json', '\tEOF', 'echo done'] },
+    // терминатор — строка целиком; слово внутри строки тела им не считается
+    {
+      lines: [
+        "cat <<'EOF'",
+        'EOF is just a word here',
+        'echo x > tools/a.json',
+        'EOF',
+        'echo done',
+      ],
+    },
+    // два heredoc'а одной строки: тела идут в порядке операторов
+    {
+      lines: [
+        'cat <<A <<B',
+        'echo x > tools/a.json',
+        'A',
+        'echo x > tools/a.json',
+        'B',
+        'echo done',
+      ],
+    },
+    // пробел между оператором и разделителем
+    { lines: ["cat << 'EOF'", 'echo x > tools/a.json', 'EOF', 'echo done'] },
+  ])('cuts the body of a heredoc to a non-interpreter: $lines', ({ lines }) => {
+    expect(repoWriteTargets(stripHeredocs(script(lines)), REPO, REPO)).toEqual([]);
+  });
+
+  /** Разделитель читается как в оболочке: кавычки снимаются, `\x` — экранированный символ. */
+  it.each([
+    // в оболочке разделитель — EOF, а не E
+    { lines: ['cat <<E"O"F', 'echo x > tools/a.json', 'EOF', 'echo done'] },
+    { lines: ['cat <<\\EOF', 'echo x > tools/a.json', 'EOF', 'echo done'] },
+  ])('reads the delimiter the way the shell does: $lines', ({ lines }) => {
+    expect(repoWriteTargets(stripHeredocs(script(lines)), REPO, REPO)).toEqual([]);
+  });
+
+  /** e45: heredoc, поданный интерпретатору, — команды: правила и цели записи проверяются по телу. */
+  it.each([
+    'bash',
+    'sh',
+    'zsh',
+    'bash -s',
+    '/bin/bash',
+    'source /dev/stdin',
+    'node',
+    'python3',
+    'perl',
+  ])('keeps the body fed to an interpreter: %s', (reader) => {
+    const input = script([`${reader} <<'EOF'`, 'echo x > tools/a.json', 'EOF']);
+    expect(stripHeredocs(input)).toBe(input);
+    expect(repoWriteTargets(stripHeredocs(input), REPO, REPO)).toEqual([PROTECTED]);
+  });
+
+  /** Тело дойдёт до интерпретатора и тогда, когда он назван не в начале строки-оператора. */
+  it.each([
+    // конвейер: cat печатает тело, bash исполняет
+    { lines: ["cat <<'EOF' | bash", 'git commit --no-verify', 'EOF'] },
+    // два шага одной командой: скрипт записан и запущен
+    { lines: ["cat > /tmp/s.sh <<'EOF'", 'git commit --no-verify', 'EOF', 'bash /tmp/s.sh'] },
+    // подстановка процесса
+    { lines: ["bash <(cat <<'EOF'", 'git commit --no-verify', 'EOF', ')'] },
+    { lines: ['env FOO=1 timeout 5 bash <<EOF', 'git commit --no-verify', 'EOF'] },
+  ])('keeps the body when an interpreter is named anywhere in the command: $lines', ({ lines }) => {
+    expect(stripHeredocs(script(lines))).toBe(script(lines));
+  });
+
+  /** e45: `<<` — оператор только вне кавычек и комментариев: фальшивый фрейм не вырезает команды. */
+  it.each([
+    { lines: ['echo "<<END"', 'git commit --no-verify', 'END'] },
+    { lines: ["echo '<<END'", 'git commit --no-verify', 'END'] },
+    { lines: ["echo $'it\\'s <<END'", 'git commit --no-verify', 'END'] },
+    { lines: ['# cat <<EOF', 'git commit --no-verify', 'EOF'] },
+    // here-string `<<<` — не heredoc
+    { lines: ['cat <<<EOF', 'git commit --no-verify', 'EOF'] },
+  ])('does not cut after a << that is not an operator: $lines', ({ lines }) => {
+    expect(stripHeredocs(script(lines))).toBe(script(lines));
+  });
+
+  /** В арифметике `<<` — сдвиг, в подстановке параметра — часть слова: это тоже фальшивый фрейм. */
+  it.each([
+    // число после `<<` не бывает разделителем
+    { lines: ['echo $(( 1<<2 ))', 'git commit --no-verify', '2'] },
+    { lines: ['(( 1<<2 ))', 'git commit --no-verify', '2'] },
+    { lines: ['echo ${x:-<<EOF}', 'git commit --no-verify', 'EOF'] },
+  ])('does not cut after a << inside arithmetic or parameter expansion: $lines', ({ lines }) => {
+    expect(stripHeredocs(script(lines))).toBe(script(lines));
+  });
+
+  it.each(['echo $(( 1 << 2 ))', 'echo ${x:-1}'])(
+    'still cuts a real heredoc that follows arithmetic: %s',
+    (line) => {
+      const input = script([line, "cat > notes.md <<'EOF'", 'git commit --no-verify', 'EOF']);
+      expect(stripHeredocs(input)).not.toContain('git commit --no-verify');
+    },
+  );
+
+  /** Где кончается такое тело, неизвестно: остаётся в разборе (ложный отказ безопаснее пропуска). */
+  it.each([
+    // незакрытый heredoc
+    { lines: ['cat <<EOF', 'echo x > tools/a.json'] },
+    // разделитель раскрывается в рантайме
+    { lines: ['cat <<$DELIM', 'echo x > tools/a.json', 'DELIM'] },
+  ])('keeps a heredoc whose terminator the analysis cannot locate: $lines', ({ lines }) => {
+    expect(stripHeredocs(script(lines))).toBe(script(lines));
+  });
+
+  /** Кавычки для разбора непрозрачны: heredoc внутри `"$( … )"` не вырезается. */
+  it('keeps a heredoc that sits inside double quotes', () => {
+    const input = script(["git commit -m \"$(cat <<'EOF'", 'echo x > tools/a.json', 'EOF', ')"']);
+    expect(repoWriteTargets(stripHeredocs(input), REPO, REPO)).toEqual([PROTECTED]);
   });
 });
