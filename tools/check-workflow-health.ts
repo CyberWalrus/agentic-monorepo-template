@@ -11,14 +11,24 @@
  * - push на main без paths-фильтра — прогон обязан быть на head SHA main и
  *   завершиться успехом (каждый пуш триггерит);
  * - push с paths-фильтром — последний завершённый push-прогон на main обязан
- *   быть зелёным (на head SHA прогона может не быть: paths не совпали);
- * - schedule — последний schedule-прогон в окне свежести
- *   (--schedule-freshness-days, по умолчанию 8: недельные расписания + запас).
+ *   быть зелёным; отсутствие прогонов легитимно навсегда (paths могли не
+ *   совпасть ни с одним пушем — находка ревью e26), наличие прогонов требуется
+ *   только у push-без-paths;
+ * - schedule — последний завершённый schedule-прогон в окне свежести
+ *   (--schedule-freshness-days, по умолчанию 8: недельные расписания + запас)
+ *   И зелёный: персистентно красный schedule вне required checks — тот же
+ *   класс escaped-defect, startup_failure ловится сравнением conclusion
+ *   (находка ревью e26).
  * pull_request, pull_request_target, issue_comment, merge_group и
  * workflow_dispatch-воркфлоу вне области: их здоровье видно в check-ах PR.
- * workflow в состоянии не active — вне области. Молодой workflow (created_at в
- * окне свежести) без прогонов — зелёный: совпадений paths ещё могло не быть
- * (ложных красных нет, условие возврата e26).
+ * workflow в состоянии не active — вне области.
+ *
+ * Известная граница (находка ревью e26): чекер живёт внутри nightly.yml и не
+ * может засветить собственный хост — если nightly перестал стартовать (класс
+ * escaped-defect), ни один его job не исполнится и сводный check не увидит
+ * пробела. Внешний контур (шаг в ci.yml или dispatch-воркфлоу вне ночи) —
+ * кандидат в задачи; в строке docs/escaped-defects.md покрытие сформулировано
+ * с учётом этой границы.
  *
  * Джоба nightly.yml (workflow-health) зовёт чекер с GH_TOKEN; красный прогон
  * заводит issue через job report (needs), дублировать issue-логику здесь не
@@ -609,9 +619,15 @@ export function evaluateHealth(
     }
 
     if (entry.pushPaths) {
+      // Отсутствие push-прогонов — легитимное состояние навсегда, а не только
+      // у молодых workflow: paths-фильтр мог не совпасть ни с одним пушем
+      // (находка ревью e26 — окно created_at тут не аргумент). Наличие
+      // прогонов требуем только у pushHeadSha-workflow; здесь красим лишь
+      // фактическую красноту или застревание.
       const all = pushByPath.get(entry.file) ?? [];
+      const completed = all.filter((run) => run.status === 'completed').toSorted(RUN_SORT);
       const latestOverall = all.toSorted(RUN_SORT)[0];
-      if (latestOverall !== undefined && latestOverall.status !== 'completed') {
+      if (latestOverall !== undefined && completed.length === 0) {
         if (stalePending(latestOverall)) {
           violations.push({
             workflow: entry.file,
@@ -620,33 +636,25 @@ export function evaluateHealth(
           continue;
         }
         ok = false;
-      } else {
-        const completedLatest = all
-          .filter((run) => run.status === 'completed')
-          .toSorted(RUN_SORT)[0];
-        if (completedLatest === undefined) {
-          if (!young) {
-            violations.push({
-              workflow: entry.file,
-              reason:
-                'не стартовал ни разу (event=push, ветка main) при created_at вне окна свежести — workflow существует, но не запускается',
-            });
-            continue;
-          }
-        } else if (completedLatest.conclusion !== 'success') {
-          violations.push({
-            workflow: entry.file,
-            reason: `последний завершённый push-прогон красный: conclusion=${String(completedLatest.conclusion)} (${completedLatest.headSha.slice(0, 7)})`,
-          });
-          continue;
-        }
+      } else if (completed.length > 0 && completed[0]?.conclusion !== 'success') {
+        violations.push({
+          workflow: entry.file,
+          reason: `последний завершённый push-прогон красный: conclusion=${String(completed[0]?.conclusion)} (${completed[0]?.headSha.slice(0, 7)})`,
+        });
+        continue;
       }
     }
 
     if (entry.schedule) {
+      // Schedule-прогон обязан быть свежим И зелёным: персистентно красный
+      // schedule вне required checks — тот же класс escaped-defect, что и
+      // «не стартовал» (находка ревью e26); startup_failure невалидного YAML
+      // ловится тем же сравнением conclusion.
       const all = scheduleByPath.get(entry.file) ?? [];
-      const latest = all.toSorted(RUN_SORT)[0];
-      if (latest === undefined) {
+      const completed = all.filter((run) => run.status === 'completed').toSorted(RUN_SORT);
+      const latestOverall = all.toSorted(RUN_SORT)[0];
+      const latestCompleted = completed[0];
+      if (latestOverall === undefined) {
         if (!young) {
           violations.push({
             workflow: entry.file,
@@ -655,10 +663,29 @@ export function evaluateHealth(
           });
           continue;
         }
-      } else if (options.now.getTime() - Date.parse(latest.createdAt) > options.freshnessMs) {
+      } else if (latestCompleted === undefined) {
+        // Незавершённый schedule-прогон: молодой — ещё гонится; старый — застрял.
+        if (stalePending(latestOverall)) {
+          violations.push({
+            workflow: entry.file,
+            reason: `schedule-прогон не завершился и старше окна незавершённых — застрял (fail-closed, З11)`,
+          });
+          continue;
+        }
+        ok = false;
+      } else if (
+        options.now.getTime() - Date.parse(latestCompleted.createdAt) >
+        options.freshnessMs
+      ) {
         violations.push({
           workflow: entry.file,
-          reason: `schedule-прогон старше окна свежести: последний ${latest.createdAt}`,
+          reason: `schedule-прогон старше окна свежести: последний ${latestCompleted.createdAt}`,
+        });
+        continue;
+      } else if (latestCompleted.conclusion !== 'success') {
+        violations.push({
+          workflow: entry.file,
+          reason: `красный schedule-прогон: conclusion=${String(latestCompleted.conclusion)} (${latestCompleted.createdAt.slice(0, 10)})`,
         });
         continue;
       }

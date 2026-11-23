@@ -268,8 +268,14 @@ jobs:
     name: workflow health (e26)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # actions: read обязателен: чекер читает Actions API (gh api repos/…/commits,
+    # /actions/workflows, /actions/runs) — без него GITHUB_TOKEN получает 403 на
+    # /actions/* и гейт был бы красным каждый первый прогон (находка ревью e26).
+    # contents: read — commits API и checkout. Job-level permissions заменяет
+    # workflow-уровень целиком (e16).
     permissions:
       contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { persist-credentials: false }

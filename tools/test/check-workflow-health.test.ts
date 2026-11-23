@@ -239,6 +239,75 @@ it('schedule-прогон старше окна свежести — красн�
   expect(run.stderr).toContain('старше окна свежести');
 });
 
+it('красный свежий schedule-прогон — красный (находка ревью e26)', () => {
+  const tree = setupTree('red-schedule', {
+    workflows: { 'nightly.yml': SCHEDULE_WF },
+    apiWorkflows: [{ id: 2, path: '.github/workflows/nightly.yml', created_at: iso(30) }],
+    scheduleRuns: [
+      runOf(2, {
+        event: 'schedule',
+        conclusion: 'failure',
+        created_at: iso(1),
+        run_started_at: iso(1),
+      }),
+    ],
+  });
+  const run = runChecker(tree.api);
+  expect(run.status).toBe(1);
+  expect(run.stderr).toContain('красный schedule-прогон');
+  expect(run.stderr).toContain('conclusion=failure');
+});
+
+it('startup_failure невалидного schedule-воркфлоу — красный', () => {
+  const tree = setupTree('startup-failure', {
+    workflows: { 'nightly.yml': SCHEDULE_WF },
+    apiWorkflows: [{ id: 2, path: '.github/workflows/nightly.yml', created_at: iso(30) }],
+    scheduleRuns: [
+      runOf(2, {
+        event: 'schedule',
+        conclusion: 'startup_failure',
+        created_at: iso(1),
+        run_started_at: iso(1),
+      }),
+    ],
+  });
+  const run = runChecker(tree.api);
+  expect(run.status).toBe(1);
+  expect(run.stderr).toContain('conclusion=startup_failure');
+});
+
+it('push с paths: прогонов нет никогда (created_at вне окна), свежий зелёный schedule — зелёный (кейс ревью e26)', () => {
+  // Отсутствие push-прогонов у paths-фильтрованного workflow — легитимное
+  // состояние «paths не совпали», а не «не стартовал»: окно created_at здесь
+  // не аргумент (до фикса ревью этот кейс был ложным красным).
+  const tree = setupTree('paths-no-runs-old', {
+    workflows: { 'evals.yml': PUSH_PATHS },
+    apiWorkflows: [{ id: 1, path: '.github/workflows/evals.yml', created_at: iso(30) }],
+    scheduleRuns: [runOf(1, { event: 'schedule', created_at: iso(1), run_started_at: iso(1) })],
+  });
+  const run = runChecker(tree.api);
+  expect(run.status).toBe(0);
+});
+
+it('незавершённый старый schedule-прогон — красный «застрял»', () => {
+  const tree = setupTree('pending-schedule', {
+    workflows: { 'nightly.yml': SCHEDULE_WF },
+    apiWorkflows: [{ id: 2, path: '.github/workflows/nightly.yml', created_at: iso(30) }],
+    scheduleRuns: [
+      runOf(2, {
+        event: 'schedule',
+        status: 'in_progress',
+        conclusion: null,
+        created_at: iso(2),
+        run_started_at: iso(2),
+      }),
+    ],
+  });
+  const run = runChecker(tree.api);
+  expect(run.status).toBe(1);
+  expect(run.stderr).toContain('schedule-прогон не завершился');
+});
+
 it('молодой workflow без прогонов (created_at в окне) — зелёный: ложных красных нет', () => {
   const tree = setupTree('young', {
     workflows: { 'evals.yml': PUSH_PATHS, 'nightly.yml': SCHEDULE_WF },
