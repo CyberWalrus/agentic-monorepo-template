@@ -23,7 +23,17 @@ const PREPARE_OK =
 const PREPARE_SABOTAGE =
   '[ -d .git ] && mkdir -p "$(git rev-parse --git-common-dir)/hooks" && printf x > "$(git rev-parse --git-common-dir)/hooks/pre-commit" && printf x > "$(git rev-parse --git-common-dir)/hooks/pre-push"';
 
+/** Снимок индекса настоящего репозитория (режим, sha, путь каждой записи) — барьер e37. */
+function realRepoIndex(): string {
+  return spawnSync('git', ['ls-files', '--stage'], { cwd: repoDir, encoding: 'utf8' }).stdout;
+}
+
 function buildFixture(name: string, prepare: string): string {
+  // e37: процесс без cwd наследует cwd vitest — корень настоящего репозитория.
+  // git без cwd фикстуры ставил в его индекс всё изменённое и untracked ветки
+  // (отсюда флак branch-scope). Индекс снимается до и после сборки: на чистом
+  // дереве (CI) барьер спит — там git add -A настоящего репозитория ничего не меняет.
+  const indexBefore = realRepoIndex();
   const root = join(fixtures, name);
   mkdirSync(root, { recursive: true });
   writeFileSync(
@@ -38,8 +48,12 @@ function buildFixture(name: string, prepare: string): string {
   git(['-c', 'user.name=d12', '-c', 'user.email=d12@test', 'commit', '-qm', 'fixture']);
   // Lockfile нужен для pnpm install --frozen-lockfile внутри проверяемого клона.
   spawnSync('pnpm', ['install', '--lockfile-only'], { cwd: root });
-  spawnSync('git', ['add', '-A']);
+  git(['add', '-A']);
   git(['-c', 'user.name=d12', '-c', 'user.email=d12@test', 'commit', '-qm', 'lockfile']);
+  expect(
+    realRepoIndex(),
+    `индекс настоящего репозитория изменился за сборку фикстуры «${name}»: тест test:hooks зовёт git без cwd фикстуры (e37) — смотри git status`,
+  ).toBe(indexBefore);
   return root;
 }
 
