@@ -179,11 +179,12 @@ it('чистая main: все в области стартовали и зелё
   expect(run.stdout).toContain('все стартовали и зелёные');
 });
 
-it('красный прогон на head SHA — красный с conclusion', () => {
+it('красный прогон на head SHA — красный с conclusion; dispatch-success не маскирует', () => {
   const tree = setupTree('red-head', {
     workflows: { 'ci.yml': CI_PUSH },
     apiWorkflows: [{ id: 1, path: '.github/workflows/ci.yml', created_at: iso(30) }],
-    headRuns: [runOf(1, { conclusion: 'failure' })],
+    // Удачный ручной dispatch на том же SHA не доказывает здоровье push-контура.
+    headRuns: [runOf(1, { conclusion: 'failure' }), runOf(1, { event: 'workflow_dispatch' })],
   });
   const run = runChecker(tree.api);
   expect(run.status).toBe(1);

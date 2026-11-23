@@ -571,25 +571,21 @@ export function evaluateHealth(
     let ok = true;
 
     if (entry.pushHeadSha) {
-      const onHead = headByPath.get(entry.file) ?? [];
-      const completed = onHead.filter((run) => run.status === 'completed');
+      // Только push-прогоны: dispatch-запуски на том же SHA здоровье
+      // push-контура не доказывают (удачный ручной запуск мог замаскировать
+      // красный push-прогон). Решает последний завершённый прогон: rerun
+      // green→fail остаётся красным до зелёного перезапуска.
+      const onHead = (headByPath.get(entry.file) ?? []).filter((run) => run.event === 'push');
+      const completed = onHead.filter((run) => run.status === 'completed').toSorted(RUN_SORT);
       if (onHead.length === 0) {
         violations.push({
           workflow: entry.file,
-          reason: `не стартовал на head SHA ${data.headSha.slice(0, 7)} — прогонов нет (escaped-defect 2026-11-21: workflow существует, но не запускается)`,
+          reason: `не стартовал на head SHA ${data.headSha.slice(0, 7)} — push-прогонов нет (escaped-defect 2026-11-21: workflow существует, но не запускается)`,
         });
         continue;
       }
-      if (completed.some((run) => run.conclusion === 'success')) {
-        ok = true;
-      } else if (completed.length > 0) {
-        const latest = completed.toSorted(RUN_SORT)[0];
-        violations.push({
-          workflow: entry.file,
-          reason: `красный на head SHA ${data.headSha.slice(0, 7)}: conclusion=${String(latest?.conclusion)}`,
-        });
-        continue;
-      } else {
+      const latestCompleted = completed[0];
+      if (latestCompleted === undefined) {
         // Незавершённые: молодой — ночной прогон попал в окно CI на свежем
         // коммите (не «пройдено»); старый — застрял (fail-closed, З11).
         const running = onHead.toSorted(RUN_SORT)[0];
@@ -601,6 +597,14 @@ export function evaluateHealth(
           continue;
         }
         ok = false;
+      } else if (latestCompleted.conclusion === 'success') {
+        ok = true;
+      } else {
+        violations.push({
+          workflow: entry.file,
+          reason: `красный на head SHA ${data.headSha.slice(0, 7)}: conclusion=${String(latestCompleted.conclusion)}`,
+        });
+        continue;
       }
     }
 
