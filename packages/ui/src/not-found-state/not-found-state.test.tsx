@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-react';
 
 import { collectA11yViolations } from '../../testing/a11y.ts';
-import { NotFoundState } from './NotFoundState.tsx';
+import { NotFoundState } from './not-found-state.tsx';
 
 describe('NotFoundState', () => {
   it('explains the missing page and offers a way back', async () => {

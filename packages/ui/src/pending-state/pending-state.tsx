@@ -1,4 +1,4 @@
-import styles from './PendingState.module.css';
+import styles from './pending-state.module.css';
 
 export interface PendingStateProps {
   /** Что загружается; текст виден пользователю и скринридеру. */
