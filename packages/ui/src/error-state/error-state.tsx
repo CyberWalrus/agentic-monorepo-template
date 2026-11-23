@@ -1,6 +1,6 @@
-import { Button } from '../button/Button.tsx';
+import { Button } from '../button/button.tsx';
 
-import styles from './ErrorState.module.css';
+import styles from './error-state.module.css';
 
 export interface ErrorStateProps {
   /** Заголовок ошибки, одна строка. */
