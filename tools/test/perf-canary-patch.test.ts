@@ -10,13 +10,45 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+
+// spawnSync-тяжёлый тест: дефолтные 5 c на тест падают под параллельной
+// нагрузкой verify (реестр 2026-11-13), конвенция соседей — 30 c.
+vi.setConfig({ testTimeout: 30_000 });
 
 const repoDir = resolve(import.meta.dirname, '..', '..');
 const TARGET = 'apps/api/src/tasks/repository.ts';
+const targetPath = join(repoDir, TARGET);
+const PATCH_MARKER = 'setTimeout(resolve, 200)';
 const fixtures = mkdtempSync(join(tmpdir(), 'e32-fixtures-'));
 afterAll(() => {
   rmSync(fixtures, { recursive: true, force: true });
+});
+
+/**
+ * Точечное самозалечивание: маркер патча в дереве — остаток воркера, жёстко
+ * убитого между apply и finally (SIGKILL/OOM; ре-рид в finally при этом не
+ * выполнился). Залетный патч легитимной незакоммиченной правкой быть не может,
+ * файл восстанавливается из git; прочие незакоммиченные изменения не трогаются.
+ */
+function healLeftoverPatch(): void {
+  if (readFileSync(targetPath, 'utf8').includes(PATCH_MARKER)) {
+    const restored = spawnSync('git', ['checkout', '--', TARGET], {
+      cwd: repoDir,
+      encoding: 'utf8',
+    });
+    if (restored.status !== 0) {
+      throw new Error(`не удалось восстановить ${TARGET} из git: ${restored.stderr}`);
+    }
+  }
+}
+
+beforeAll(() => {
+  healLeftoverPatch();
+});
+
+afterAll(() => {
+  healLeftoverPatch();
 });
 
 interface PatchResult {
@@ -35,9 +67,9 @@ function runPatch(...args: string[]): PatchResult {
 }
 
 it('apply вставляет задержку в create() настоящего файла, revert возвращает байт в байт', () => {
-  const path = join(repoDir, TARGET);
+  const path = targetPath;
   const original = readFileSync(path, 'utf8');
-  expect(original).not.toContain('setTimeout(resolve, 200)');
+  expect(original).not.toContain(PATCH_MARKER);
 
   try {
     const applied = runPatch();
@@ -47,10 +79,8 @@ it('apply вставляет задержку в create() настоящего �
     const patched = readFileSync(path, 'utf8');
     expect(patched).not.toBe(original);
     // Задержка стоит внутри create() — после строки сигнатуры, не в конце файла.
-    expect(patched).toContain('    await new Promise((resolve) => setTimeout(resolve, 200));\n');
-    expect(patched.indexOf('setTimeout(resolve, 200)')).toBeGreaterThan(
-      patched.indexOf('async create('),
-    );
+    expect(patched).toContain(`    await new Promise((resolve) => ${PATCH_MARKER});\n`);
+    expect(patched.indexOf(PATCH_MARKER)).toBeGreaterThan(patched.indexOf('async create('));
   } finally {
     writeFileSync(path, original);
   }

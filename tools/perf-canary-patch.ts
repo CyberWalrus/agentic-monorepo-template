@@ -7,7 +7,9 @@
  *   node tools/perf-canary-patch.ts apply [--file PATH]
  *
  * По умолчанию — apps/api/src/tasks/repository.ts (in-memory репозиторий: в
- * ночном прогоне Postgres нет). Откат — git checkout -- <файл> в job'е.
+ * ночном прогоне Postgres нет). Откат: джоба ночи работает на эфемерном
+ * раннере — патч не переживает job'у и шага отката в nightly.yml нет;
+ * локально — git checkout -- <файл>.
  *
  * Дрейф якоря (устарел после C1.5: workspaceId в сигнатуре create) ловит
  * тест tools/test/perf-canary-patch.test.ts: apply на настоящем файле краснеет
