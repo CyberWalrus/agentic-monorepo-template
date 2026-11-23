@@ -5,24 +5,53 @@
  * утверждать защиту, которой нет (находка security-ревью A9).
  *
  * Реестр пар «id → снимок» — docs/template-state.md, раздел «Реестр живых
- * правил» (парсится отсюда, machine-readable таблица).
+ * правил» (парсируется отсюда, machine-readable таблица).
  *
- * Сравнение: каноническая проекция {name, target, enforcement, conditions,
- * bypass_actors, rules} обеих сторон (снимок может нести не-апишные ключи
- * вроде $comment — они вырезаются рекурсивно).
+ * Сравнение: проекция живого ответа на форму снимка {name, target, enforcement,
+ * conditions, bypass_actors, rules} (снимок может нести не-апишные ключи вроде
+ * $comment — они вырезаются рекурсивно). Лишние поля API игнорируются, массивы —
+ * нет: массив обходится по более длинной стороне, поэтому элемент, добавленный
+ * в живом ruleset сверх снимка (правило, обходчик), — дрейф (e35: раньше не был
+ * виден).
+ *
+ * Три исхода на пару (e35):
+ *   - дрейф — ответ получен, доступная токену часть расходится со снимком:
+ *     exit 1, сообщение называет пути расхождений (--create-issue → issue с
+ *     label nightly-failure, дедуп по заголовку); 404 — ruleset удалён;
+ *   - граница проверки — ключ снимка отсутствует в ответе, потому что GitHub
+ *     отдаёт его только при write-доступе (TOKEN_HIDDEN_KEYS): джоба зелёная,
+ *     непроверенное названо поимённо (предупреждение, аннотация, сводка шага);
+ *   - отказ API — сравнивать не с чем (403, сеть, битый JSON): exit 2 с кодом и
+ *     телом, в сообщении прямо сказано, что это не дрейф.
  *
  * Fail-loud (З11): gh api недоступен/ошибся, реестр не парсится, снимок не
- * найден — exit 2 с причиной, а не «дрейфа нет». Дрейф/удалённый ruleset —
- * exit 1 (--create-issue → issue с label nightly-failure, дедуп по заголовку).
+ * найден — exit 2 с причиной, а не «дрейфа нет».
  * Тест-режим: --fixture-api <dir> читает <dir>/<id>.json вместо gh api.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+/**
+ * Ключи ответа rulesets/<id>, которые GitHub отдаёт только при write-доступе
+ * к ruleset (REST, «Get a repository ruleset»: «To prevent leaking sensitive
+ * information, the bypass_actors property is only returned if the user making
+ * the API request has write access to the ruleset»). У токена ночной джобы
+ * доступ read: ключа в ответе нет. Отсутствие такого ключа — граница проверки,
+ * а не дрейф (e35: джоба красила обе пары фантомным дрейфом с рождения).
+ * Любой другой отсутствующий ключ снимка — по-прежнему дрейф.
+ */
+const TOKEN_HIDDEN_KEYS = new Set(['bypass_actors']);
+
+const LOCAL_CHECK =
+  'сверь локально токеном администратора — node tools/check-ruleset-drift.ts (docs/architecture.md, 3.4)';
+
+/** Предел строк расхождений на один ruleset: красный объясняет себя, не тонет. */
+const MAX_DIFF_LINES = 12;
 
 interface RegistryPair {
   id: string;
@@ -42,9 +71,7 @@ function parseRegistry(markdownPath: string): RegistryPair[] {
   return pairs;
 }
 
-function stripNonApi(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stripNonApi);
-  if (!isRecord(value)) return value;
+function stripRecord(value: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
     if (key === '$comment' || key === '$schema') continue;
@@ -53,17 +80,36 @@ function stripNonApi(value: unknown): unknown {
   return out;
 }
 
-/** Проекция live на форму снимка: снимок ⊆ живое, лишние поля API игнорируются. */
-function project(shape: unknown, live: unknown): unknown {
+function stripNonApi(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripNonApi);
+  if (!isRecord(value)) return value;
+  return stripRecord(value);
+}
+
+/**
+ * Проекция live на форму снимка: лишние поля API игнорируются. Массив
+ * обходится по более длинной из сторон (e35): элемент живого сверх снимка
+ * попадает в проекцию и расходится со снимком, а не отбрасывается. Ключи
+ * снимка, которых нет в живом ответе, в проекцию не входят — их пути (от корня
+ * снимка) пишутся в missing: дальше они делятся на скрытые токену и дрейф.
+ */
+function project(shape: unknown, live: unknown, path: string, missing: string[]): unknown {
   if (Array.isArray(shape)) {
     if (!Array.isArray(live)) return live;
-    return shape.map((item, index) => project(item, live[index]));
+    const size = Math.max(shape.length, live.length);
+    return Array.from({ length: size }, (_, index) =>
+      project(shape[index], live[index], `${path}[${index}]`, missing),
+    );
   }
-  if (!isRecord(shape)) return live;
-  if (!isRecord(live)) return live;
+  if (!isRecord(shape) || !isRecord(live)) return live;
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(shape)) {
-    if (key in live) out[key] = project(shape[key], live[key]);
+    const keyPath = path === '' ? key : `${path}.${key}`;
+    if (!(key in live)) {
+      missing.push(keyPath);
+      continue;
+    }
+    out[key] = project(shape[key], live[key], keyPath, missing);
   }
   return out;
 }
@@ -93,7 +139,40 @@ function sortedJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
-function fetchLive(id: string, fixtureDir: string): { status: number; body: unknown } {
+function show(value: unknown): string {
+  return value === undefined ? '<нет>' : JSON.stringify(value);
+}
+
+/** Пути расхождений живого и снимка: красный называет конкретное поле (З11). */
+function diffPaths(live: unknown, snapshot: unknown, path = ''): string[] {
+  if (deepEqual(live, snapshot)) return [];
+  if (Array.isArray(live) && Array.isArray(snapshot)) {
+    const size = Math.max(live.length, snapshot.length);
+    return Array.from({ length: size }, (_, index) =>
+      diffPaths(live[index], snapshot[index], `${path}[${index}]`),
+    ).flat();
+  }
+  if (isRecord(live) && isRecord(snapshot)) {
+    return [...new Set([...Object.keys(live), ...Object.keys(snapshot)])]
+      .toSorted()
+      .flatMap((key) => diffPaths(live[key], snapshot[key], path === '' ? key : `${path}.${key}`));
+  }
+  return [`${path}: живое ${show(live)}, снимок ${show(snapshot)}`];
+}
+
+/** 0 — ответ получен; HTTP-код — API отказал (404: ruleset удалён); -1 — не дошёл до API. */
+interface LiveResponse {
+  status: number;
+  body: unknown;
+}
+
+/** gh api при HTTP-ошибке пишет тело в stdout, «gh: <message> (HTTP <код>)» — в stderr. */
+function httpStatus(stderr: string): number {
+  const code = /\(HTTP (\d{3})\)/.exec(stderr)?.[1];
+  return code === undefined ? -1 : Number(code);
+}
+
+function fetchLive(id: string, fixtureDir: string): LiveResponse {
   if (fixtureDir !== '') {
     const path = join(fixtureDir, `${id}.json`);
     if (!existsSync(path)) {
@@ -102,9 +181,10 @@ function fetchLive(id: string, fixtureDir: string): { status: number; body: unkn
       throw new Error(`fixture missing: ${path}`);
     }
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    // Фикстура {"__httpStatus__": 404} = «API ответил 404» (удалённый ruleset).
+    // Фикстура {"__httpStatus__": 404} = «API ответил 404» (удалённый ruleset),
+    // {"__httpStatus__": 403, "__body__": …} — отказ API с кодом и телом.
     if (isRecord(parsed) && typeof parsed['__httpStatus__'] === 'number') {
-      return { status: parsed['__httpStatus__'], body: null };
+      return { status: parsed['__httpStatus__'], body: parsed['__body__'] ?? null };
     }
     return { status: 0, body: parsed };
   }
@@ -112,10 +192,27 @@ function fetchLive(id: string, fixtureDir: string): { status: number; body: unkn
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
   });
-  if (run.status !== 0) {
-    return { status: run.status ?? -1, body: run.stderr };
+  if (run.status !== 0 || run.error !== undefined) {
+    const stderr = run.error === undefined ? run.stderr : String(run.error);
+    const status = httpStatus(stderr);
+    const body = status === -1 ? stderr.trim() : `${run.stdout.trim()}\n${stderr.trim()}`;
+    return { status, body };
   }
   return { status: 0, body: JSON.parse(run.stdout) };
+}
+
+function refusalReason(status: number): string {
+  if (status === -1) return 'gh api не дошёл до API (сеть или gh не установлен)';
+  if (status === 401 || status === 403) {
+    return 'у токена нет прав на rulesets — проверь permissions джобы';
+  }
+  if (status >= 500) return 'ошибка на стороне GitHub';
+  return 'неожиданный ответ API';
+}
+
+/** Текст в workflow-команду ::warning:: (экранирование %, CR, LF). */
+function commandText(text: string): string {
+  return text.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
 }
 
 function main(): void {
@@ -149,41 +246,87 @@ function main(): void {
   }
 
   const drifts: string[] = [];
+  const boundaries: string[] = [];
   for (const pair of pairs) {
     if (!existsSync(pair.snapshot)) {
       drifts.push(`снимок не найден: ${pair.snapshot} (ruleset ${pair.id})`);
       continue;
     }
     let live: unknown;
+    let snapshot: Record<string, unknown>;
     try {
       const fetched = fetchLive(pair.id, fixtureDir);
       if (fetched.status === 404) {
-        drifts.push(`живой ruleset ${pair.id} удалён, а снимок ${pair.snapshot} существует`);
+        drifts.push(
+          `живой ruleset ${pair.id} удалён (API ответил 404), а снимок ${pair.snapshot} существует`,
+        );
         continue;
       }
       if (fetched.status !== 0) {
+        // Отказ API — не дрейф (e35): сравнение не состоялось, и красный обязан
+        // назвать причину, а не приписывать живому правилу расхождение.
         console.error(
-          `ruleset-drift: gh api для ${pair.id} не ответил (exit ${fetched.status}) — fail-loud (З11): ` +
-            String(fetched.body).slice(-300),
+          `ruleset-drift: отказ API для ${pair.id} — это не дрейф, сравнение не состоялось. ` +
+            `${refusalReason(fetched.status)}; код ${fetched.status}; тело: ${show(fetched.body).slice(0, 500)}` +
+            ' — fail-loud (З11)',
         );
         process.exit(2);
       }
       live = fetched.body;
+      if (!isRecord(live)) {
+        throw new Error(`ответ API для ${pair.id} — не объект ruleset`);
+      }
+      const parsed: unknown = JSON.parse(readFileSync(pair.snapshot, 'utf8'));
+      if (!isRecord(parsed)) {
+        throw new Error(`снимок ${pair.snapshot} — не объект JSON`);
+      }
+      snapshot = parsed;
     } catch (error) {
       console.error(
-        `ruleset-drift: не удалось разобрать ответ для ${pair.id} — fail-loud (З11): ${String(error)}`,
+        `ruleset-drift: не удалось разобрать ответ или снимок для ${pair.id} — fail-loud (З11): ${String(error)}`,
       );
       process.exit(2);
     }
-    const snapshot: unknown = JSON.parse(readFileSync(pair.snapshot, 'utf8'));
-    const liveProjected = project(stripNonApi(snapshot), project(snapshot, live));
-    const snapshotProjected = stripNonApi(snapshot);
+
+    // Проба прав токена (e35): по списку ключей видно, что токен реально видит.
+    const liveKeys = Object.keys(live);
+    console.log(
+      `ruleset-drift: ${pair.id} — ключи живого ответа (${liveKeys.length}): ${liveKeys.join(', ')}`,
+    );
+
+    const stripped = stripRecord(snapshot);
+    const missing: string[] = [];
+    const liveProjected = project(stripped, live, '', missing);
+    const hidden = missing.filter((key) => TOKEN_HIDDEN_KEYS.has(key));
+    // Сравнивается всё, что токен видит: скрытый ключ исключается с обеих сторон.
+    const comparable: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(stripped)) {
+      if (!hidden.includes(key)) comparable[key] = value;
+    }
     if (
-      canonical(liveProjected) !== canonical(snapshotProjected) ||
-      !deepEqual(liveProjected, snapshotProjected)
+      canonical(liveProjected) !== canonical(comparable) ||
+      !deepEqual(liveProjected, comparable)
     ) {
+      const lost = missing.filter((key) => !TOKEN_HIDDEN_KEYS.has(key));
+      const paths = diffPaths(liveProjected, comparable);
+      const shown = paths.slice(0, MAX_DIFF_LINES);
+      if (paths.length > shown.length)
+        shown.push(`… ещё ${paths.length - shown.length} расхождений`);
+      if (lost.length > 0) {
+        shown.push(
+          `в живом ответе нет ключа(ей) снимка: ${lost.join(', ')} — вне TOKEN_HIDDEN_KEYS это дрейф`,
+        );
+      }
       drifts.push(
-        `дрейф: живой ruleset ${pair.id} ≠ снимок ${pair.snapshot}\n  живой: ${sortedJson(stripNonApi(live)).slice(0, 400)}\n  снимок: ${sortedJson(stripNonApi(snapshot)).slice(0, 400)}`,
+        `дрейф: живой ruleset ${pair.id} ≠ снимок ${pair.snapshot}\n  ${shown.join('\n  ')}`,
+      );
+      continue;
+    }
+    if (hidden.length > 0) {
+      boundaries.push(
+        `ruleset ${pair.id} (снимок ${pair.snapshot}): ${hidden
+          .map((key) => `${key} не возвращён API токену джобы (в снимке ${show(stripped[key])})`)
+          .join('; ')} — не проверено; ${LOCAL_CHECK}.`,
       );
     }
   }
@@ -242,7 +385,31 @@ function main(): void {
     }
     process.exit(1);
   }
-  console.log(`ruleset-drift: живые rulesets соответствуют снимкам (${pairs.length} пар)`);
+
+  // Граница проверки (e35): зелёный здесь означает «доступное токену совпадает»,
+  // а не «живое равно снимку». Непроверенное называется поимённо — в логе,
+  // аннотации прогона и сводке шага: тихоgreenеть монитор не имеет права.
+  if (boundaries.length > 0) {
+    const text = [
+      'ruleset-drift: ГРАНИЦА ПРОВЕРКИ — совпадает только доступная токену джобы часть; перечисленное НЕ проверено ночью:',
+      ...boundaries.map((line) => `- ${line}`),
+    ].join('\n');
+    console.warn(text);
+    console.log(`::warning title=ruleset-drift — граница проверки::${commandText(text)}`);
+    const stepSummary = process.env['GITHUB_STEP_SUMMARY'];
+    if (stepSummary !== undefined) {
+      appendFileSync(
+        stepSummary,
+        `## ⚠️ ruleset drift (a11): проверка неполная\n\n${boundaries.map((line) => `- ${line}`).join('\n')}\n\n`,
+      );
+    }
+  }
+  console.log(
+    `ruleset-drift: живые rulesets соответствуют снимкам (${pairs.length} пар)` +
+      (boundaries.length > 0
+        ? `; граница проверки — у ${boundaries.length} из них, см. предупреждение выше`
+        : ''),
+  );
 
   // Снимок текущего живого состояния — для ручной сверки человеком (d8.5-прецедент).
   const dump = flag('--dump-live');
