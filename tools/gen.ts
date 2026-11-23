@@ -6,11 +6,12 @@
  *   pnpm gen canary           — канарейка: временный worktree от HEAD,
  *                               генерация фичи, pnpm verify, уборка
  *
- * <name> — kebab-case (tasks, notes, todo-lists): каталоги и путь контракта
- * берутся как есть, символы кода — camelCase (todoLists), сущность — отрезанием
- * хвостовой 's' (notes → Note). Заготовка — вертикальный срез list+create с
- * политикой public, проходит pnpm verify без правок — это и проверяет
- * канарейка.
+ * <name> — kebab-case (tasks, notes, todo-lists): каталоги, путь контракта и
+ * имена файлов берутся как есть (todo-lists-page.tsx, create-todo-list-form.tsx —
+ * стандарт нейминга путей, docs/architecture.md 2.7), символы кода — camelCase
+ * (todoLists), сущность — отрезанием хвостовой 's' (todo-lists → TodoList).
+ * Заготовка — вертикальный срез list+create с политикой public, проходит
+ * pnpm verify без правок — это и проверяет канарейка.
  *
  * Чего заготовка сознательно не делает: не монтирует страницу в маршрут
  * (routeTree.gen.ts пишет vite при сборке — маршрут добавляет автор фичи,
@@ -353,7 +354,7 @@ function pageTemplate(f: FeatureNames): string {
 import { useState } from 'react';
 
 import { useHydrated } from '../../lib/use-hydrated.ts';
-import { Create${E}Form } from './Create${E}Form.tsx';
+import { Create${E}Form } from './create-${f.entity}-form.tsx';
 
 /**
  * Экран фичи ${f.name} — заготовка из \`pnpm gen feature ${f.name}\`. Состояния:
@@ -402,7 +403,7 @@ function pageTestTemplate(f: FeatureNames): string {
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
-import { ${f.pascal}Page } from './${f.pascal}Page.tsx';
+import { ${f.pascal}Page } from './${f.name}-page.tsx';
 
 const ${f.camel}: ${E}[] = [
   {
@@ -522,7 +523,7 @@ function formTestTemplate(f: FeatureNames): string {
   return `import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
-import { Create${E}Form } from './Create${E}Form.tsx';
+import { Create${E}Form } from './create-${f.entity}-form.tsx';
 
 describe('Create${E}Form', () => {
   it('submits the trimmed title and clears the field', async () => {
@@ -627,7 +628,7 @@ import { Suspense } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
-import { ${f.pascal}Page } from './${f.pascal}Page.tsx';
+import { ${f.pascal}Page } from './${f.name}-page.tsx';
 import { useCreate${E}, use${f.pascal} } from './use-${f.name}.ts';
 
 /**
@@ -877,24 +878,23 @@ interface FeaturePlan {
 }
 
 function plannedFiles(f: FeatureNames): PlannedFile[] {
-  const E = f.entityPascal;
   return [
     { path: `packages/contracts/src/${f.name}.ts`, content: contractTemplate(f) },
     { path: `packages/contracts/src/${f.name}.test.ts`, content: contractTestTemplate(f) },
     { path: `apps/api/src/${f.name}/repository.ts`, content: repositoryTemplate(f) },
     { path: `apps/api/src/${f.name}/repository.test.ts`, content: repositoryTestTemplate(f) },
     { path: `apps/api/src/${f.name}.test.ts`, content: apiTestTemplate(f) },
-    { path: `apps/web/src/features/${f.name}/${f.pascal}Page.tsx`, content: pageTemplate(f) },
+    { path: `apps/web/src/features/${f.name}/${f.name}-page.tsx`, content: pageTemplate(f) },
     {
-      path: `apps/web/src/features/${f.name}/${f.pascal}Page.test.tsx`,
+      path: `apps/web/src/features/${f.name}/${f.name}-page.test.tsx`,
       content: pageTestTemplate(f),
     },
     {
-      path: `apps/web/src/features/${f.name}/Create${E}Form.tsx`,
+      path: `apps/web/src/features/${f.name}/create-${f.entity}-form.tsx`,
       content: formTemplate(f),
     },
     {
-      path: `apps/web/src/features/${f.name}/Create${E}Form.test.tsx`,
+      path: `apps/web/src/features/${f.name}/create-${f.entity}-form.test.tsx`,
       content: formTestTemplate(f),
     },
     { path: `apps/web/src/features/${f.name}/use-${f.name}.ts`, content: hooksTemplate(f) },
