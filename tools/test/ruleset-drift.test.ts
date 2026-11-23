@@ -3,10 +3,20 @@
  * правка снимка в фикстуре; рост и убыль массивов по живому), удалённый ruleset
  * детектируется, недоступный API валит шаг громко (З11) с кодом и телом — и это
  * не «дрейф»; ключ, скрытый от токена без write-доступа (bypass_actors), —
- * граница проверки, а не дрейф; проводка nightly и реестра на месте.
+ * граница проверки, а не дрейф; проводка nightly и реестра на месте; права
+ * джобы — ровно contents: read и issues: write, области administration нет ни
+ * в одном permissions: воркфлоу (её нет у GITHUB_TOKEN).
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { afterAll, expect, it } from 'vitest';
@@ -300,12 +310,59 @@ it('проводка: nightly-джоб и реестр в template-state.md (a11
   expect(existsSync(join(repoDir, '.github', 'rulesets', 'main.json'))).toBe(true);
 });
 
-it('проводка: джобе ruleset-drift дан administration: read и не дан write (e35)', () => {
+/** Пары «область: доступ» каждого блока `permissions:` воркфлоу; комментарии пропущены. */
+function permissionEntries(workflow: string): [scope: string, access: string][] {
+  const lines = workflow.split('\n');
+  const entries: [string, string][] = [];
+  for (const [index, line] of lines.entries()) {
+    if (!/^\s*permissions:\s*$/.test(line)) {
+      continue;
+    }
+    const indent = line.length - line.trimStart().length;
+    for (const next of lines.slice(index + 1)) {
+      const text = next.trim();
+      if (text === '' || text.startsWith('#')) {
+        continue;
+      }
+      if (next.length - next.trimStart().length <= indent) {
+        break;
+      }
+      const colon = text.indexOf(':');
+      if (colon > 0) {
+        // `issues: write # причина` — доступ без комментария конца строки.
+        const access = text
+          .slice(colon + 1)
+          .replace(/\s*#.*$/, '')
+          .trim();
+        entries.push([text.slice(0, colon), access]);
+      }
+    }
+  }
+  return entries;
+}
+
+it('проводка: права джобы ruleset-drift — ровно contents: read и issues: write (e35)', () => {
+  // Области administration у GITHUB_TOKEN нет (workflow-syntax, permissions):
+  // право не выдать, список обходчиков ночью не проверяется — граница проверки.
   const nightly = readFileSync(join(repoDir, '.github', 'workflows', 'nightly.yml'), 'utf8');
   const job = nightly.slice(
     nightly.indexOf('  ruleset-drift:'),
     nightly.indexOf('  workflow-health:'),
   );
-  expect(job).toMatch(/^\s+administration: read$/m);
-  expect(job).not.toContain('administration: write');
+  expect(Object.fromEntries(permissionEntries(job))).toEqual({ contents: 'read', issues: 'write' });
+});
+
+it('проводка: области administration нет ни в одном permissions: воркфлоу (e35)', () => {
+  // Сторож по всем воркфлоу: та же ошибка не должна вернуться в другой джобе.
+  const dir = join(repoDir, '.github', 'workflows');
+  const workflows = readdirSync(dir)
+    .filter((name) => /\.ya?ml$/.test(name))
+    .toSorted();
+  expect(workflows.length).toBeGreaterThan(0);
+  const entries = workflows.flatMap((name) =>
+    permissionEntries(readFileSync(join(dir, name), 'utf8')).map(([scope]) => `${name}: ${scope}`),
+  );
+  // Блоки permissions: разобраны — сторож не пуст.
+  expect(entries.length).toBeGreaterThan(0);
+  expect(entries.filter((entry) => entry.endsWith(': administration'))).toEqual([]);
 });
