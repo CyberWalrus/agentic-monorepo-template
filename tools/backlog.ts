@@ -39,7 +39,6 @@ import {
   git,
   humanAge,
   loadBoard,
-  openPrHeads,
   runDoctor,
   tryGit,
   tryRun,
@@ -262,36 +261,36 @@ function commandNext(source: BoardSource, operator: boolean): void {
   );
 }
 
-/**
- * Ветки задач оператора этого клона без открытого PR — они занимают слот
- * «одна операторская задача за раз» (ADR 0009, «Очерёдность»). gh недоступен →
- * PR-состояние неизвестно, ветка считается ведущейся (fail-closed), причина
- * печатается здесь (З11).
- */
-function busyOperatorClaims(all: BoardFacts): string[] {
-  const byId = new Map(all.tasks.map((task) => [task.id, task]));
-  const claims = [...all.claimedIds].filter((id) => {
-    const task = byId.get(id);
-    return task !== undefined && !task.done && isOperatorTask(task);
-  });
-  if (claims.length === 0) {
-    return [];
-  }
-  const prHeads = openPrHeads();
-  if (prHeads === null) {
-    console.error(
-      'gh недоступен: открытые PR веток не проверены — считаю операторскую задачу ведущейся (ADR 0009).',
-    );
-  }
-  return claims.filter((id) => prHeads === null || !prHeads.has(`task/${id}`));
+/** Дорожка для сообщения оператору: ветка задачи и её touches. */
+function laneLabel(task: TaskFile): string {
+  const touches = task.touches.length > 0 ? task.touches.join(', ') : 'touches не заданы';
+  return `task/${task.id} [${touches}]`;
 }
 
+/** С чем пересекается задача: задачи в работе, чьи touches пересекаются с её. */
+function overlapList(task: TaskFile, inProgress: TaskFile[]): string {
+  return inProgress
+    .filter((other) => touchesOverlap(task, [other]))
+    .map((other) => `task/${other.id}`)
+    .join(', ');
+}
+
+/**
+ * Дорожки оператора (ADR 0009, «Очерёдность»; поправка 2026-11-23): операторских
+ * задач может идти несколько, если их touches попарно не пересекаются. Граница —
+ * не эта выдача, а D7: проверка под замком в commandStart отказывает при
+ * пересечении и откатывает ветку. Выдача лишь не предлагает то, что захват
+ * отвергнет, — поэтому кандидаты отсекаются по всем задачам в работе, а не
+ * только по операторским: commandStart не различает, кто ведёт пересекающуюся
+ * задачу (оператор или обычная сессия).
+ */
 function commandNextOperator(source: BoardSource, all: BoardFacts, open: TaskFile[]): void {
   const byId = new Map(all.tasks.map((task) => [task.id, task]));
-  const active = busyOperatorClaims(all);
-  if (active.length > 0) {
-    die(
-      `В клоне уже ведётся задача оператора без открытого PR: ${active.map((id) => `task/${id}`).join(', ')}.\nОдна операторская задача за раз (ADR 0009): открой PR по ней, либо человек освобождает: pnpm backlog release <id>.\nЕсли PR по ней уже открыт, а gh недоступен — захвати следующую напрямую: pnpm backlog start <id> --operator.`,
+  const inProgress = open.filter((task) => all.claimedIds.has(task.id));
+  const lanes = inProgress.filter(isOperatorTask);
+  if (lanes.length > 0) {
+    console.error(
+      `Ведутся задачи оператора (их дорожки заняты до мержа, D7): ${lanes.map((task) => laneLabel(task)).join('; ')}.`,
     );
   }
   const candidates = open
@@ -304,10 +303,18 @@ function commandNextOperator(source: BoardSource, all: BoardFacts, open: TaskFil
         openDependentsCount(b.id, all.tasks) - openDependentsCount(a.id, all.tasks) ||
         a.id.localeCompare(b.id),
     );
-  const chosen = candidates[0];
+  const overlapping = candidates.filter((task) => touchesOverlap(task, inProgress));
+  const chosen = candidates.find((task) => !touchesOverlap(task, inProgress));
   if (chosen === undefined) {
     die(
-      'Задач оператора нет: ни режима обслуживания, ни needs_human «оператор: …» со снятыми зависимостями.',
+      overlapping.length === 0
+        ? 'Задач оператора нет: ни режима обслуживания, ни needs_human «оператор: …» со снятыми зависимостями.'
+        : `Свободные задачи оператора есть, но все пересекаются по touches с задачами в работе (D7): ${overlapping.map((task) => `${task.id} — с ${overlapList(task, inProgress)}`).join('; ')}.\nДождись мержа пересекающихся задач или возьми работу по прямому поручению человека (ADR 0009, «Очерёдность»).`,
+    );
+  }
+  if (overlapping.length > 0) {
+    console.error(
+      `Пересекаются по touches с задачами в работе — не выдаются (D7): ${overlapping.map((task) => `${task.id} — с ${overlapList(task, inProgress)}`).join('; ')}.`,
     );
   }
   const dependents = openDependentsCount(chosen.id, all.tasks);
@@ -386,9 +393,11 @@ function commandStart(id: string, source: BoardSource, operator: boolean): void 
         `Задача ${id} — задача оператора (${status === 'maintenance' ? 'режим обслуживания: touches под защищёнными путями' : 'needs_human «оператор: …»'}). Обычная сессия её не начинает: захватывает оператор — pnpm backlog start ${id} --operator (ADR 0009).`,
       );
     }
-    // Слот «одна операторская задача за раз» проверяет next --operator; start
-    // с явным id его сознательно не проверяет: эскейп-хатч next при
-    // недоступном gh — «захвати следующую напрямую» (подсказка, не граница, З3).
+    // Слота «одна операторская задача за раз» нет (ADR 0009, «Очерёдность»,
+    // поправка 2026-11-23): операторские задачи идут одновременно, если их
+    // touches не пересекаются. Граница — проверка D7 под замком ниже;
+    // next --operator лишь не предлагает пересекающееся (подсказка, не
+    // граница, З3).
   } else if (kind === 'deferred' || kind === 'human') {
     die(
       `Задача ${id} заблокирована: ${kind === 'deferred' ? 'отложено' : 'нужно решение человека'}: ${task.needsHuman}.`,
