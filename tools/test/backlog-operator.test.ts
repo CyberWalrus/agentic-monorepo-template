@@ -75,6 +75,19 @@ function assertOk(result: RunResult, what: string): void {
   }
 }
 
+/** Захваченная задача = ветка task/<id>: claimedIds читает refs, worktree не нужен. */
+function claimBranches(ids: string[]): void {
+  for (const id of ids) {
+    assertOk(git(['branch', `task/${id}`]), `branch task/${id}`);
+  }
+}
+
+function releaseBranches(ids: string[]): void {
+  for (const id of ids) {
+    assertOk(git(['branch', '-D', `task/${id}`]), `delete task/${id}`);
+  }
+}
+
 beforeAll(() => {
   tmpBase = mkdtempSync(join(tmpdir(), 'backlog-operator-'));
   repo = join(tmpBase, 'clone');
@@ -91,6 +104,12 @@ beforeAll(() => {
     join(repo, 'backlog', 'm2.md'),
     taskFile('m2', { priority: 'high', touches: '.github/**' }),
   );
+  writeFileSync(
+    join(repo, 'backlog', 'e9.md'),
+    taskFile('e9', { priority: 'high', touches: 'tools/verify.ts' }),
+  );
+  writeFileSync(join(repo, 'backlog', 'c9.md'), taskFile('c9', { touches: 'docs/CODEOWNERS' }));
+  writeFileSync(join(repo, 'backlog', 'reg.md'), taskFile('reg', { touches: 'docs/**' }));
   writeFileSync(
     join(repo, 'backlog', 'o1.md'),
     taskFile('o1', { priority: 'medium', needs_human: 'оператор: настроить запись Claude Code' }),
@@ -143,13 +162,59 @@ describe('pnpm backlog next --operator', () => {
     expect(result.stderr).toContain('next --operator');
   });
 
-  it('ведущаяся задача оператора без открытого PR занимает слот (ADR 0009)', () => {
-    assertOk(git(['branch', 'task/e']), 'branch task/e');
+  it('ведущаяся задача оператора перечислена с touches; пересекающаяся не выдаётся, непересекающаяся — выдаётся (D7)', () => {
+    // e ведётся: e9 пересекается с ней по tools/verify.ts, m2 — нет.
+    claimBranches(['e']);
+    const result = run(backlogCli, ['next', '--operator']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('задача оператора: m2');
+    expect(result.stdout).not.toContain('start e9');
+    expect(result.stderr).toContain('Ведутся задачи оператора');
+    expect(result.stderr).toContain('task/e [tools/verify.ts]');
+    expect(result.stderr).toContain('e9');
+    releaseBranches(['e']);
+  }, 60_000);
+
+  it('несколько ведущихся — выдаётся кандидат без пересечения с каждой, и start его принимает (ADR 0009, «Очерёдность»)', () => {
+    claimBranches(['e', 'm2']);
+    const result = run(backlogCli, ['next', '--operator']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('задача оператора: o1');
+    expect(result.stderr).toContain('task/e [tools/verify.ts]');
+    expect(result.stderr).toContain('task/m2 [.github/**]');
+    expect(result.stderr).not.toContain('Одна операторская');
+    // Выданное не отвергается захватом под замком: выдача и D7 считают пересечение одинаково.
+    const start = run(backlogCli, ['start', 'o1', '--operator']);
+    expect(start.status).toBe(0);
+    expect(start.stderr).not.toContain('пересекается');
+    assertOk(git(['worktree', 'remove', '--force', join(tmpBase, 'clone-task-o1')]), 'remove o1');
+    releaseBranches(['o1', 'm2', 'e']);
+  }, 60_000);
+
+  it('все свободные задачи оператора пересекаются с ведущимися — отказ с перечнем, с чем именно (D7)', () => {
+    // Ведутся e, m2, o1 (оператор) и reg (обычная): свободны только e9 и c9, оба пересекаются.
+    claimBranches(['e', 'm2', 'o1', 'reg']);
     const result = run(backlogCli, ['next', '--operator']);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('уже ведётся задача оператора');
-    expect(git(['branch', '-D', 'task/e']).status).toBe(0);
-  }, 30_000);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('все пересекаются по touches с задачами в работе (D7)');
+    expect(result.stderr).toContain('e9 — с task/e');
+    expect(result.stderr).toContain('c9 — с task/reg');
+    expect(result.stderr).not.toContain('Одна операторская');
+    releaseBranches(['e', 'm2', 'o1', 'reg']);
+  }, 60_000);
+
+  it('кандидат оператора, пересекающийся с задачей обычной сессии, не выдаётся — start отклонил бы его (D7)', () => {
+    // reg ведётся обычной сессией: c9 (docs/CODEOWNERS) пересекается с ней по docs/**.
+    claimBranches(['reg']);
+    const result = run(backlogCli, ['next', '--operator']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('задача оператора: e');
+    expect(result.stdout).not.toContain('start c9');
+    expect(result.stderr).toContain('c9 — с task/reg');
+    expect(result.stderr).not.toContain('Ведутся задачи оператора');
+    releaseBranches(['reg']);
+  }, 60_000);
 });
 
 describe('pnpm backlog start --operator', () => {
