@@ -44,14 +44,18 @@ describe('таблица канареек гейтов', () => {
   });
 
   it('каждый блокирующий шаг verify покрыт канарейкой (кроме вайтлиста З6)', () => {
-    const canaried = new Set(CANARIES.flatMap((canary) => canary.steps.split(',')));
+    // b14: покрытие — ЧЕЙ-ТО failedStep, не членство в union steps. Build годами
+    // проходил формально через union соседей «build,bundle», хотя ни одна
+    // канарейка не требовала красный build: членство в union допускает только
+    // попутный прогон шага-пререквизита, красить обязан целевой шаг.
+    const failedTargets = new Set(CANARIES.map((canary) => canary.failedStep));
     const blocking = [...serialFast, ...fast, ...post, ...slow].map((step) => step.name);
     for (const step of blocking) {
       if (CANARY_EXEMPT_STEPS.has(step)) {
         continue;
       }
       expect(
-        canaried.has(step),
+        failedTargets.has(step),
         `блокирующий шаг ${step} без канарейки — добавь канарейку или задокументируй исключение в З6`,
       ).toBe(true);
     }

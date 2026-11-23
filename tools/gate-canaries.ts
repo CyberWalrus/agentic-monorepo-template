@@ -7,7 +7,7 @@
  * заканареченного правила делает шаг зелёным и роняет канарейку.
  *
  * Исключения (документированы в architecture.md З6): test-count — warning-only,
- * exit 0 по контракту; e2e-report/perf — тяжёлые, их время покрывают бюджеты.
+ * exit 0 по контракту; e2e-report — тяжёлый, его время покрывают бюджеты.
  * e2e канареечится начиная с ADR 0005 (прокси /rpc): удаление прокси —
  * детерминированный bad-change, уроняющий e2e. Изменение защищённого файла как
  * таковое ловят контуры L0 (хуки) и L3 (gate-integrity); локально канареечится
@@ -305,6 +305,29 @@ export const CANARIES: GateCanary[] = [
         throw new Error('canary anchor not found: contracts/src/tasks.ts has no closing brace');
       }
       writeFileSync(path, withEvilProcedure);
+    },
+  },
+  {
+    // b14: build до этой канарейки жил только в union соседей («build,bundle»):
+    // инвариант таблицы проходил формально, а красный сам build (fail-open дрейф
+    // шага — скрипт, раннер, тихий пропуск задачи) не детектировал никто:
+    // удаление шага ловит gates-canary.test, исчезновение turbo-задачи —
+    // required-tasks, прогон сломанной сборки — никто. Проба — битый ассет-импорт
+    // в клиентском модуле import-графа index-роута (orphan-модули tree-shaken,
+    // не годятся): резолвер Vite не находит файл ([UNRESOLVED_IMPORT]), сборка
+    // краснеет детерминированно и offline.
+    name: 'битый ассет в клиентском модуле',
+    steps: 'build',
+    full: true,
+    failedStep: 'build',
+    expect: /evil-build-probe/,
+    apply: (root) => {
+      const path = join(root, 'apps', 'web', 'src', 'features', 'tasks', 'use-tasks.ts');
+      const source = readFileSync(path, 'utf8');
+      if (!source.includes("from '../../lib/api-client.ts'")) {
+        throw new Error('canary anchor not found: use-tasks.ts has no lib import');
+      }
+      writeFileSync(path, `${source}\nimport './evil-build-probe.png';\n`);
     },
   },
   {
