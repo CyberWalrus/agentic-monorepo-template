@@ -38,20 +38,53 @@ const config = parseProtectedPaths(
   JSON.parse(readFileSync(new URL('protected-paths.json', import.meta.url), 'utf8')),
 );
 
-/**
- * Уровень защиты для пути относительно корня репозитория. Каталог, внутри
- * которого лежат защищённые файлы (например, `e2e/__screenshots__`), защищён так же.
- */
-export function protectionOf(relativePath: string): Protection {
-  const path = relativePath.replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/$/, '');
+/** Снимает ведущие точки с сегментов-каталогов: `.claude/.b/x.md` → `claude/b/x.md`. */
+function undotDirectories(value: string): string {
+  const segments = value.split('/');
+  const last = segments.length - 1;
+  return segments
+    .map((segment, index) => (index === last ? segment : segment.replace(/^\.+/, '')))
+    .join('/');
+}
+
+/** Сегмент-каталог, начинающийся с точки (точка в имени файла в конце — не в счёт). */
+const dotDirectory = /(^|\/)\.[^/]+\//;
+
+const undotted = {
+  deny: config.deny.map(undotDirectories),
+  review: config.review.map(undotDirectories),
+};
+
+function protectionFor(path: string, deny: string[], review: string[]): Protection {
   const candidates = [path, `${path}/__child__`];
   const matches = (patterns: string[]) =>
     patterns.some((pattern) => candidates.some((candidate) => matchesGlob(candidate, pattern)));
-  if (matches(config.deny)) {
+  if (matches(deny)) {
     return 'deny';
   }
-  if (matches(config.review)) {
+  if (matches(review)) {
     return 'review';
   }
   return null;
+}
+
+/**
+ * Уровень защиты для пути относительно корня репозитория. Каталог, внутри
+ * которого лежат защищённые файлы (например, `e2e/__screenshots__`), защищён так же.
+ *
+ * `**` и ведущий `*` в `path.matchesGlob` не пересекают сегменты-каталоги,
+ * начинающиеся с точки: шаблон «`**` + `/.gitignore`» не покрывает
+ * `.vite/.gitignore`, шаблон «`**` + `/.oxlintrc.json`» — `.claude/.oxlintrc.json`.
+ * Поэтому путь с таким каталогом сверяется второй раз — без точек у
+ * сегментов-каталогов, с обеих сторон (путь и паттерны). Путь без dot-каталога и
+ * путь, у которого первая сверка дала deny, второй раз не проверяются; класс
+ * второй сверки не бывает ниже первой.
+ */
+export function protectionOf(relativePath: string): Protection {
+  const path = relativePath.replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/$/, '');
+  const exact = protectionFor(path, config.deny, config.review);
+  if (exact === 'deny' || !dotDirectory.test(path)) {
+    return exact;
+  }
+  return protectionFor(undotDirectories(path), undotted.deny, undotted.review) ?? exact;
 }
