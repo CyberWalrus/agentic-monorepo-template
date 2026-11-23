@@ -3,7 +3,7 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
-import { TasksPage } from './TasksPage.tsx';
+import { TasksPage } from './tasks-page.tsx';
 
 const tasks: Task[] = [
   {

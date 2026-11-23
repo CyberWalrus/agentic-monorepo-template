@@ -901,9 +901,9 @@ export const CANARIES: GateCanary[] = [
       const path = join(root, 'packages', 'ui', 'src', 'index.ts');
       const source = readFileSync(path, 'utf8');
       const button =
-        "export { Button, type ButtonProps, type ButtonVariant } from './button/Button.tsx';";
+        "export { Button, type ButtonProps, type ButtonVariant } from './button/button.tsx';";
       const errorState =
-        "export { ErrorState, type ErrorStateProps } from './error-state/ErrorState.tsx';";
+        "export { ErrorState, type ErrorStateProps } from './error-state/error-state.tsx';";
       if (!source.includes(button) || !source.includes(errorState)) {
         throw new Error('canary anchor not found: ui registry exports');
       }

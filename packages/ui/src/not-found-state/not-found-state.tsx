@@ -1,4 +1,4 @@
-import styles from './NotFoundState.module.css';
+import styles from './not-found-state.module.css';
 
 export interface NotFoundStateProps {
   /** Заголовок, одна строка. */

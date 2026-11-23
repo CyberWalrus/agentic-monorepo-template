@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-react';
 
 import { Frame } from '../../testing/visual-frame.tsx';
-import { Button } from './Button.tsx';
+import { Button } from './button.tsx';
 
 describe('visual', () => {
   it('Button variants', async () => {

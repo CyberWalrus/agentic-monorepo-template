@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-react';
 
 import { collectA11yViolations } from '../../testing/a11y.ts';
-import { PendingState } from './PendingState.tsx';
+import { PendingState } from './pending-state.tsx';
 
 describe('PendingState', () => {
   it('announces loading to screen readers and shows a visible label', async () => {
