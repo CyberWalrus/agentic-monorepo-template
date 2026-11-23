@@ -16,9 +16,21 @@
 #   требует окончания ".git"); манифест и код плагина лежат в том же репо
 #   (source: ./plugins/code-review), поэтому пин SHA закрывает и то и другое.
 #   Обновление SHA — осознанная правка этого файла, её видит ревью;
+# - клон переименовывается в манифесте (sed в шаге пина): CLI резервирует
+#   официальные имена маркетплейсов (даже с суффиксами) за GitHub-источниками
+#   org anthropics — локальная копия с именем «claude-plugins-official» не
+#   добавляется (проверено прогоном CLI 2.1.267, e25-ревью: «name impersonates
+#   an official...»). Правка одного поля name — единственное отличие клона от
+#   запиненного дерева; квалификатор плагина — code-review@e25-pinned-marketplace;
+# - первый зелёный прогон этого workflow (workflow_dispatch на тестовом PR) —
+#   обязательный шаг приёмки ДО merge (критерий e25): рантайм-схема (клон + rename +
+#   локальный путь в plugin_marketplaces, permissions шага 1, интеракция с
+#   frontmatter плагина) проверена локальным CLI лишь частично — версии CLI на
+#   раннере и локально могут различаться;
 # - шаг 1 работает поверх плагина code-review, чья команда декларирует собственные
 #   allowed-tools во frontmatter (проверено на пине 73c8cf3e, commands/code-review.md):
-#   чтение gh (pr view/list/diff, issue view/list, search), постинг gh pr comment
+#   чтение gh (pr view/list/diff, issue view/list, search — голый грант
+#   Bash(gh search:*): repos/code/commits/issues), постинг gh pr comment
 #   и mcp__github_inline_comment__create_inline_comment — они действуют как allow
 #   поверх settings ниже. Постинг комментария — функция ревью: отразить недоверенный
 #   контент PR в тексте комментария (инъекция) полностью нельзя, не отключив ревью;
@@ -86,6 +98,14 @@ jobs:
             "${RUNNER_TEMP}/claude-plugins-official"
           git -C "${RUNNER_TEMP}/claude-plugins-official" checkout --quiet --detach \
             73c8cf3ea7e296057b467990f2f5d61b4c922260 # 2026-11-21, e25
+          # CLI резервирует официальные имена маркетплейсов (даже с суффиксами) за
+          # GitHub-источниками org anthropics: локальная копия с именем
+          # «claude-plugins-official» не добавляется (проверено прогоном CLI
+          # 2.1.267, раунд ревью e25: «name impersonates an official...»).
+          # Переименование одного поля name — единственное отличие клона от
+          # запиненного дерева; квалификатор ниже — code-review@e25-pinned-marketplace.
+          sed -i 's/"name": "claude-plugins-official"/"name": "e25-pinned-marketplace"/' \
+            "${RUNNER_TEMP}/claude-plugins-official/.claude-plugin/marketplace.json"
 
       # dispatch запускается с ref main: чекаутим head PR явно. На pull_request
       # checkout уже стоит на head — fetch той же SHA идемпотентен.
@@ -97,7 +117,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Локальная копия маркетплейса, запиненная по SHA шагом выше (e25).
           plugin_marketplaces: ${{ runner.temp }}/claude-plugins-official
-          plugins: code-review@claude-plugins-official
+          plugins: code-review@e25-pinned-marketplace
           # env.PR_NUMBER, а не сырой event: при workflow_dispatch поле
           # pull_request.number пусто (см. concurrency и env выше) — e25-ревью.
           prompt: /code-review:code-review --comment ${{ github.repository }}/pull/${{ env.PR_NUMBER }}
