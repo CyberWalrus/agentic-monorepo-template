@@ -180,6 +180,31 @@ describe('touchesOverlap', () => {
     expect(touchesOverlap(withTouches('t', ['AGENTS.md']), inProgress)).toBe(true);
     expect(touchesOverlap(withTouches('t', ['AGENTS.md.bak']), inProgress)).toBe(false);
   });
+
+  it('общий путь (SHARED_PATHS) пересечением не считается и не маскирует остальное', () => {
+    const registry = 'docs/escaped-defects.md';
+    const fixA = withTouches('fix-a', ['apps/api/src/tasks/repository.ts', registry]);
+    // Строку реестра обязан нести каждый PR-исправление (AGENTS.md) — только по
+    // ней две задачи-исправления параллельны (d7tail, З9).
+    expect(
+      touchesOverlap(withTouches('fix-b', [registry, 'apps/web/src/lib/api.ts']), [fixA]),
+    ).toBe(false);
+    expect(touchesOverlap(withTouches('fix-b', [registry]), [fixA])).toBe(false);
+    // По любому другому общему пути пересечение на месте.
+    expect(
+      touchesOverlap(withTouches('fix-b', [registry, 'apps/api/src/tasks/repository.ts']), [fixA]),
+    ).toBe(true);
+    // Общим считается буквальная запись: «каталог/**» пересечение создаёт.
+    expect(
+      touchesOverlap(withTouches('t', ['docs/**']), [
+        withTouches('u', ['docs/other.md', registry]),
+      ]),
+    ).toBe(true);
+    // Задача с одним общим путём в touches ни с кем не пересекается.
+    expect(touchesOverlap(withTouches('t', ['docs/**']), [withTouches('u', [registry])])).toBe(
+      false,
+    );
+  });
 });
 
 describe('doctorFindings', () => {

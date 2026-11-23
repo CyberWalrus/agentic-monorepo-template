@@ -259,11 +259,36 @@ function expandTouches(paths: string[]): string[] {
   return paths.map((path) => (path.endsWith('/**') ? path : `${path}/__literal__`));
 }
 
+/**
+ * Общие пути: файл считается лежащим в touches любой задачи и пересечения
+ * между задачами не создаёт. Список один и живёт здесь — обе стороны (захват
+ * через touchesOverlap и гейт branch-scope через fileInTouches) читают его.
+ *
+ * docs/escaped-defects.md — реестр пропущенных дефектов. Правило AGENTS.md
+ * («строку добавляет тот же PR, который чинит дефект») делает его файлом,
+ * который правит каждая задача-исправление; с запретом пересечения (D7) любые
+ * две такие задачи блокировали бы друг друга, хотя реестр append-only и
+ * конфликты в нём тривиальны. Файл, который правит каждая задача, — дефект
+ * структуры (З9), поэтому из режима touches изъят путь, а не правило реестра.
+ *
+ * Путь сравнивается буквально: «каталог/**», покрывающий общий путь, общим не
+ * считается — такой захват пересекается с задачами по остальным файлам каталога.
+ * Пополняется только через ADR: путь из списка разрешён любой задаче.
+ */
+export const SHARED_PATHS: readonly string[] = ['docs/escaped-defects.md'];
+
+const isSharedPath = (path: string): boolean => SHARED_PATHS.includes(path);
+
+/** expandTouches без общих путей (SHARED_PATHS): те пересечений не создают. */
+function expandOverlapping(paths: string[]): string[] {
+  return expandTouches(paths.filter((path) => !isSharedPath(path)));
+}
+
 /** Задачи, в работе на этом клоне, пересекающиеся по touches с данной (ADR 0007, D7 — запрет при захвате). */
 export function touchesOverlap(task: TaskFile, inProgress: TaskFile[]): boolean {
   return inProgress.some((other) =>
-    expandTouches(task.touches).some((mine) =>
-      expandTouches(other.touches).some(
+    expandOverlapping(task.touches).some((mine) =>
+      expandOverlapping(other.touches).some(
         (theirs) =>
           matchesGlob(mine, theirs.replace(/\/\*\*$/, '/**')) ||
           matchesGlob(theirs, mine.replace(/__literal__$/, '/__child__')),
@@ -277,11 +302,13 @@ export function touchesOverlap(task: TaskFile, inProgress: TaskFile[]): boolean 
  * Отличается от touchesOverlap: там пересечение двух множеств через
  * expandTouches, здесь одна сторона — сырой путь диффа. Литеральный путь —
  * точное равенство (bare-каталог без «/**» покрывает только сам себя,
- * грамматика invalidTouch шире не разрешает), «каталог/**» — glob.
+ * грамматика invalidTouch шире не разрешает), «каталог/**» — glob. Общий путь
+ * (SHARED_PATHS) — true независимо от touches.
  */
 export function fileInTouches(file: string, touches: string[]): boolean {
-  return touches.some(
-    (entry) => file === entry || (entry.endsWith('/**') && matchesGlob(file, entry)),
+  return (
+    isSharedPath(file) ||
+    touches.some((entry) => file === entry || (entry.endsWith('/**') && matchesGlob(file, entry)))
   );
 }
 
