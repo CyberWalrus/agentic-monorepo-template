@@ -128,6 +128,14 @@ describe('fileInTouches (матчинг «файл ⊆ touches»)', () => {
     expect(fileInTouches('solo/a.ts', ['solo/**'])).toBe(true);
     expect(fileInTouches('sololess/a.ts', ['solo/**'])).toBe(false);
   });
+
+  it('общий путь (SHARED_PATHS) — в touches любой задачи, даже пустых', () => {
+    expect(fileInTouches('docs/escaped-defects.md', [])).toBe(true);
+    expect(fileInTouches('docs/escaped-defects.md', ['tools/backlog.ts'])).toBe(true);
+    // Посторонний файл — нет: канарейка «дифф вне touches» остаётся красной.
+    expect(fileInTouches('docs/evil-touches-probe.md', [])).toBe(false);
+    expect(fileInTouches('docs/escaped-defects.md.bak', [])).toBe(false);
+  });
 });
 
 describe('check-branch-scope: интеграция на временном клоне', () => {
@@ -281,6 +289,32 @@ describe('check-branch-scope: интеграция на временном кл�
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('solo/sneaky.ts');
     assertOk(git(['switch', 'task/x']), 'back to task/x');
+  });
+
+  it('общий путь реестра — не «вне touches» задачи без него (рабочее дерево и коммит)', () => {
+    // Задача-исправление r: touches — только код исправления, реестра в них нет
+    // (SHARED_PATHS, d7tail). Заводится на main клона здесь: тест последний в
+    // describe, остальным фикстура main не нужна.
+    assertOk(git(['switch', 'main']), 'to main');
+    writeFileSync(join(repo, 'backlog', 'r.md'), taskFile('r', 'apps/api/src/fix.ts'));
+    commitAll('init: задача r без реестра в touches');
+    assertOk(git(['switch', '-c', 'task/r']), 'branch task/r');
+    mkdirSync(join(repo, 'docs'), { recursive: true });
+    writeFileSync(join(repo, 'docs', 'escaped-defects.md'), '# Реестр\n| новая строка |\n');
+    const unstaged = run([]);
+    expect(unstaged.status).toBe(0);
+    expect(unstaged.stdout).toContain('внутри touches — ok');
+    commitAll('r: строка в реестре тем же PR, что исправление');
+    const committed = run([]);
+    expect(committed.status).toBe(0);
+    expect(committed.stderr).not.toContain('вне touches');
+    // Посторонний файл рядом — по-прежнему красный, и ровно он назван нарушением.
+    writeFileSync(join(repo, 'docs', 'evil-touches-probe.md'), '# вне touches\n');
+    const red = run([]);
+    rmSync(join(repo, 'docs', 'evil-touches-probe.md'), { force: true });
+    expect(red.status).not.toBe(0);
+    expect(red.stderr).toContain('файлы вне touches задачи: docs/evil-touches-probe.md —');
+    expect(red.stderr).toContain('общие пути (docs/escaped-defects.md)');
   });
 });
 
