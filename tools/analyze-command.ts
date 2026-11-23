@@ -11,9 +11,11 @@ import { isAbsolute, relative, resolve } from 'node:path';
 /**
  * Интерпретаторы: heredoc, поданный им на stdin, — это команды, а не данные.
  * Оболочки и их синонимы, `eval`/`source`, JS/TS-рантаймы, python, perl.
+ * `.` — POSIX-синоним `source`: отдельным словом, за ним через пробел имя файла;
+ * `ls .`, `find . -name`, `./x`, `src/.` и `file.md` интерпретатором не считаются.
  */
 const INTERPRETER =
-  /(?:^|[^\w.-])(?:\/?[\w.@+-]+\/)*(?:bash|zsh|dash|ksh\d*|mksh|fish|csh|tcsh|sh|eval|source|node|nodejs|tsx|ts-node|deno|bun|python[\d.]*|perl)(?=$|[^\w./-])/i;
+  /(?:^|[^\w.-])(?:\/?[\w.@+-]+\/)*(?:bash|zsh|dash|ksh\d*|mksh|fish|csh|tcsh|sh|eval|source|node|nodejs|tsx|ts-node|deno|bun|python[\d.]*|perl)(?=$|[^\w./-])|(?:^|[^\w./-])\.(?=[ \t]+[^\s;|&(){}<>-])/i;
 
 interface Heredoc {
   delimiter: string;
@@ -72,23 +74,248 @@ function afterTerminator(command: string, from: number, delimiter: string): numb
   return -1;
 }
 
+/** Открытая конструкция; порядок в стеке — порядок вложенности. */
+type Frame =
+  /** `$( … )` — команды; текст подстановки оболочка читает внутри слова. */
+  | { kind: 'cmd' }
+  /** `( … )` — сабшелл, тело функции, массив, подстановка процесса. */
+  | { kind: 'sub' }
+  /** `{ … }` — группа команд. */
+  | { kind: 'group' }
+  /** `${ … }` — не команды: `<<` — часть слова. */
+  | { kind: 'param' }
+  /** `(( … ))` — арифметика: `<<` — сдвиг. `parens` — незакрытые скобки, у `((` их две. */
+  | { kind: 'arith'; parens: number; substitution: boolean }
+  /** `"…"` */
+  | { kind: 'dq' }
+  /** `'…'` */
+  | { kind: 'sq' }
+  /** `$'…'` */
+  | { kind: 'ansi' };
+
+/** Рамка со счётчиком открытий: так heredoc отличает свою рамку от открытой позже на её месте. */
+type Open = Frame & { epoch: number };
+
+/** Heredoc, оператор которого прочитан, а тело ещё не началось. `epoch` — сколько рамок открылось к нему. */
+type Waiting = Heredoc & { epoch: number };
+
 /**
- * Индекс после закрывающей скобки области, которую не разбираем (`(( … ))`, `${ … }`):
- * внутри неё `<<` — не оператор. Глубина учитывается; непарные скобки — до конца команды.
+ * Разбирает команду: где проходят тела heredoc'ов и какой текст остаётся вне их.
+ * null — разбор не уверен, и команда остаётся в разборе целиком.
+ *
+ * Оболочка начинает тело heredoc за первым переводом строки, который она видит как конец
+ * строки-оператора: не внутри кавычек, `$( … )`, обратных кавычек, `(( … ))`, `[[ … ]]`,
+ * `${ … }` и не после `\`. Сканер ведёт стек открытых рамок, и тело открывается на переводе
+ * строки, когда из рамок, открывшихся после оператора, не осталось ни одной. Открытые
+ * `$( … )` — норма: их текст оболочка читает внутри слова, и строки подстановки исполняет.
+ *
+ * Не моделируются (null): `[[ … ]]`, `case` с их `<<` и `)`, обратные кавычки, `(` и `` ` ``
+ * внутри `${…}`, `"$( … )"` — кавычки для разбора непрозрачны.
  */
-function afterBlock(
-  command: string,
-  from: number,
-  depth: number,
-  open: string,
-  close: string,
-): number {
-  for (let index = from; index < command.length; index++) {
-    const char = command[index];
-    if (char === open) depth++;
-    else if (char === close && --depth === 0) return index + 1;
+function scan(command: string): { outside: string; bodies: [number, number][] } | null {
+  const stack: Open[] = [];
+  let waiting: Waiting[] = [];
+  const bodies: [number, number][] = [];
+  const outside: string[] = [];
+  let copiedFrom = 0;
+  /** Начинает ли следующий символ новое слово: тогда `#` — комментарий, а `case` — ключевое слово. */
+  let boundary = true;
+  let index = 0;
+  let epoch = 0;
+  const push = (frame: Frame): void => {
+    stack.push({ ...frame, epoch: epoch++ });
+  };
+  /** `$(` и `$((` вне командного контекста. false — внутри `"…"`: не видно, где подстановка кончается. */
+  const pushSubstitution = (): boolean => {
+    if (stack.some((open) => open.kind === 'dq')) return false;
+    const arithmetic = command[index + 2] === '(';
+    if (arithmetic) push({ kind: 'arith', parens: 2, substitution: true });
+    else push({ kind: 'cmd' });
+    index += arithmetic ? 3 : 2;
+    return true;
+  };
+  while (index < command.length) {
+    const char = command[index] ?? '';
+    const next = command[index + 1];
+    const frame = stack.at(-1);
+    if (
+      frame === undefined ||
+      frame.kind === 'cmd' ||
+      frame.kind === 'sub' ||
+      frame.kind === 'group'
+    ) {
+      if (char === '\\') {
+        // экранированный символ, в том числе `\<перевод строки>` — продолжение строки: перевода строки нет
+        index += 2;
+        if (next !== '\n') boundary = false;
+      } else if (char === "'" || char === '"') {
+        push({ kind: char === "'" ? 'sq' : 'dq' });
+        index++;
+      } else if (char === '$' && next === "'") {
+        push({ kind: 'ansi' });
+        index += 2;
+      } else if (char === '$' && next === '{') {
+        push({ kind: 'param' });
+        index += 2;
+      } else if (char === '$' && next === '(') {
+        if (!pushSubstitution()) return null;
+      } else if (char === '(') {
+        // `((` — арифметическая команда. `$((cmd); (cmd))` оболочка читает как подстановку команд — скобки те же
+        if (next === '(') push({ kind: 'arith', parens: 2, substitution: false });
+        else push({ kind: 'sub' });
+        index += next === '(' ? 2 : 1;
+      } else if (char === ')') {
+        const popped = stack.pop();
+        if (popped === undefined || (popped.kind !== 'cmd' && popped.kind !== 'sub')) return null;
+        // heredoc внутри закрывшегося `$( … )`, в котором не было перевода строки: где его тело, неизвестно
+        if (popped.kind === 'cmd' && waiting.some((heredoc) => heredoc.epoch > popped.epoch))
+          return null;
+        // после `)` сабшелла слово начинается заново, после `)` подстановки — продолжается
+        boundary = popped.kind === 'sub';
+        index++;
+      } else if (char === '[' && next === '[') {
+        return null; // `[[ … ]]`: внутри `<<` — не оператор; разбор условия не моделируется
+      } else if (char === '#' && boundary) {
+        // комментарий до конца строки: `#` начинает слово, а не находится внутри (`a#b`, после `$( … )`)
+        const lineEnd = command.indexOf('\n', index);
+        index = lineEnd === -1 ? command.length : lineEnd;
+      } else if (char === '<') {
+        let run = 1;
+        while (command[index + run] === '<') run++;
+        const heredoc = run === 2 ? readDelimiter(command, index + 2) : null;
+        if (heredoc === null) {
+          if (run !== 2) {
+            index += run; // `<` — редирект, `<<<` — here-string
+            boundary = true;
+          } else return null; // слова нет либо разделитель раскрывается в рантайме: где тело, неизвестно
+        } else {
+          waiting.push({ ...heredoc, epoch });
+          index = heredoc.end;
+          boundary = false;
+        }
+      } else if (char === '\n') {
+        // После heredoc'а открылись `( … )` или `{ … }`: оболочка читает его тело уже здесь,
+        // а эти строки — данные. Не уверены — команда остаётся в разборе целиком.
+        const after = (heredoc: Waiting): Open[] =>
+          stack.filter((open) => open.epoch >= heredoc.epoch);
+        if (waiting.some((heredoc) => after(heredoc).some((open) => open.kind !== 'cmd')))
+          return null;
+        // Начинаются тела heredoc'ов, после которых не осталось открытых рамок, — в порядке операторов.
+        const due = waiting.filter((heredoc) => after(heredoc).length === 0);
+        const ranges: [number, number][] = [];
+        let bodyStart = index + 1;
+        for (const { delimiter } of due) {
+          const bodyEnd = afterTerminator(command, bodyStart, delimiter);
+          if (bodyEnd === -1) return null; // не закрыт: где кончается тело, неизвестно
+          ranges.push([bodyStart, bodyEnd]);
+          bodyStart = bodyEnd;
+        }
+        boundary = true;
+        if (due.length > 0) {
+          outside.push(command.slice(copiedFrom, index + 1));
+          bodies.push(...ranges);
+          copiedFrom = bodyStart;
+          index = bodyStart;
+          waiting = waiting.filter((heredoc) => after(heredoc).length > 0);
+        } else index++;
+      } else if (char === '`') {
+        return null; // обратные кавычки переносятся на следующие строки: разбор не моделируется
+      } else if (char === '{' && boundary && (next === undefined || /[\s(<>"'`$#;|&]/.test(next))) {
+        push({ kind: 'group' }); // слово `{`: внутри слова (`{a,b}`) — обычный символ
+        index++;
+      } else if (char === '}' && boundary && (next === undefined || /[\s;|&)]/.test(next))) {
+        if (stack.pop()?.kind !== 'group') return null; // `}` без своей группы: не уверены, что закрылось
+        boundary = false;
+        index++;
+      } else if (
+        char === 'c' &&
+        boundary &&
+        command.startsWith('case', index) &&
+        (command[index + 4] === undefined || /[\s;|&()]/.test(command[index + 4] ?? ''))
+      ) {
+        return null; // `case`: в шаблоне `)` и `<<` читаются не так, как в командах; разбор не моделируется
+      } else {
+        boundary = /[\s;|&>]/.test(char);
+        index++;
+      }
+    } else if (frame.kind === 'sq') {
+      if (char === "'") {
+        stack.pop();
+        boundary = false;
+      }
+      index++;
+    } else if (frame.kind === 'ansi') {
+      // в `$'…'` обратный слэш экранирует любой символ
+      if (char === '\\') index += 2;
+      else {
+        if (char === "'") {
+          stack.pop();
+          boundary = false;
+        }
+        index++;
+      }
+    } else if (frame.kind === 'dq') {
+      // В `"…"` обратный слэш экранирует только " \ $ ` и перевод строки.
+      if (char === '\\') index += 2;
+      else if (char === '"') {
+        stack.pop();
+        boundary = false;
+        index++;
+      } else if (char === '$' && next === '{') {
+        push({ kind: 'param' });
+        index += 2;
+      } else if (char === '$' && next === '(' && command[index + 2] === '(') {
+        push({ kind: 'arith', parens: 2, substitution: true });
+        index += 3;
+      } else if ((char === '$' && next === '(') || char === '`') return null; // `"$( … )"`: кавычки непрозрачны
+      else index++;
+    } else if (frame.kind === 'param') {
+      if (char === '\\') index += 2;
+      else if (char === "'" || char === '"') {
+        push({ kind: char === "'" ? 'sq' : 'dq' });
+        index++;
+      } else if (char === '$' && next === '{') {
+        push({ kind: 'param' });
+        index += 2;
+      } else if (char === '$' && next === '(') {
+        if (!pushSubstitution()) return null;
+      } else if (char === '{') {
+        push({ kind: 'param' }); // вложенная скобка: граница `${…}` — не раньше оболочечной
+        index++;
+      } else if (char === '}') {
+        stack.pop();
+        boundary = false;
+        index++;
+      } else if (char === '(' || char === '`') return null; // не видно, где кончается `${…}`
+      else index++;
+    } else {
+      if (char === '\\') index += 2;
+      else if (char === "'" || char === '"') {
+        push({ kind: char === "'" ? 'sq' : 'dq' });
+        index++;
+      } else if (char === '$' && next === '{') {
+        push({ kind: 'param' });
+        index += 2;
+      } else if (char === '$' && next === '(') {
+        if (!pushSubstitution()) return null;
+      } else if (char === '(') {
+        frame.parens++;
+        index++;
+      } else if (char === ')') {
+        frame.parens--;
+        if (frame.parens === 0) {
+          stack.pop();
+          boundary = !frame.substitution; // после `))` подстановки слово продолжается
+        }
+        index++;
+      } else if (char === '`') return null;
+      else index++;
+    }
   }
-  return command.length;
+  // конструкция или heredoc остался открытым до конца команды
+  if (stack.length > 0 || waiting.length > 0) return null;
+  outside.push(command.slice(copiedFrom));
+  return { outside: outside.join(''), bodies };
 }
 
 /**
@@ -99,100 +326,18 @@ function afterBlock(
  * `echo "<<END"` heredoc не открывает, следующие строки остаются командами (e45).
  * Тело остаётся в команде, если:
  * - в команде вне тел назван интерпретатор (INTERPRETER) — до него дойдут команды из тела;
- * - heredoc не закрыт или его разделитель раскрывается в рантайме — тело неизвестно;
+ * - разбор не уверен до конца (`scan`): всё или ничего — вырезаются только тела команды,
+ *   которую сканер прочитал без сомнений, иначе строка «тела» может оказаться командой;
  * - heredoc стоит внутри двойных кавычек (`"$(cat <<'EOF' …)"`) — кавычки для разбора непрозрачны.
- * Лишний текст в разборе даёт ложный отказ, но не пропуск. Разбор — подсказка (З3),
- * не синтаксис оболочки: `case`-шаблоны и `[[ ]]` с `<<` внутри не моделируются.
+ * Лишний текст в разборе даёт ложный отказ, но не пропуск. Разбор — подсказка (З3), не синтаксис оболочки.
  */
 export function stripHeredocs(command: string): string {
-  /** Тела закрытых heredoc'ов, [начало, конец). */
-  const bodies: [number, number][] = [];
-  /** Текст вне тел: по нему ищем интерпретатор. */
-  const outside: string[] = [];
-  let copiedFrom = 0;
-  let quote: "'" | '"' | "$'" | null = null;
-  /** Heredoc'ы текущей логической строки: их тела начинаются за её переводом строки. */
-  let opened: Heredoc[] = [];
-  let index = 0;
-  while (index < command.length) {
-    const char = command[index] ?? '';
-    const next = command[index + 1];
-    if (quote === "'") {
-      if (char === "'") quote = null;
-      index++;
-    } else if (quote !== null) {
-      // В `"…"` обратный слэш экранирует только " \ $ ` и перевод строки, в `$'…'` — любой символ.
-      const escaped = quote === "$'" || (next !== undefined && '"\\$`\n'.includes(next));
-      if (char === '\\' && escaped) {
-        index += 2;
-      } else {
-        if (char === (quote === '"' ? '"' : "'")) quote = null;
-        index++;
-      }
-    } else if (char === '\\') {
-      index += 2;
-    } else if (char === "'" || char === '"') {
-      quote = char;
-      index++;
-    } else if (char === '$' && next === "'") {
-      quote = "$'";
-      index += 2;
-    } else if (
-      // комментарий до конца строки: `#` начинает слово, а не находится внутри (`$#`, `a#b`)
-      char === '#' &&
-      (index === 0 || /[\s;|&()]/.test(command[index - 1] ?? ''))
-    ) {
-      const lineEnd = command.indexOf('\n', index);
-      index = lineEnd === -1 ? command.length : lineEnd;
-    } else if (char === '(' && next === '(') {
-      index = afterBlock(command, index + 2, 2, '(', ')'); // `(( … ))` — арифметика: `<<` здесь сдвиг
-    } else if (char === '$' && next === '{') {
-      index = afterBlock(command, index + 2, 1, '{', '}'); // `${…}`: `<<` — часть слова
-    } else if (
-      char === '<' &&
-      next === '<' &&
-      command[index - 1] !== '<' &&
-      command[index + 2] !== '<'
-    ) {
-      // `<<<` — here-string, не heredoc
-      const heredoc = readDelimiter(command, index + 2);
-      if (heredoc === null) index++; // не разобрать: `<<` остаётся текстом, тело — в разборе
-      else {
-        opened.push(heredoc);
-        index = heredoc.end;
-      }
-    } else if (char === '\n' && opened.length > 0) {
-      // Тела идут в порядке операторов строки, каждое — сразу за предыдущим.
-      const ranges: [number, number][] = [];
-      let bodyStart = index + 1;
-      for (const { delimiter } of opened) {
-        const bodyEnd = afterTerminator(command, bodyStart, delimiter);
-        if (bodyEnd === -1) {
-          // не закрыт: где кончается тело, неизвестно — остальное остаётся в разборе
-          outside.push(command.slice(copiedFrom));
-          index = command.length;
-          copiedFrom = command.length;
-          break;
-        }
-        ranges.push([bodyStart, bodyEnd]);
-        bodyStart = bodyEnd;
-      }
-      if (index < command.length) {
-        outside.push(command.slice(copiedFrom, index + 1));
-        bodies.push(...ranges);
-        copiedFrom = bodyStart;
-        index = bodyStart;
-      }
-      opened = [];
-    } else {
-      index++;
-    }
-  }
-  outside.push(command.slice(copiedFrom));
-  if (INTERPRETER.test(outside.join(''))) return command;
+  const parsed = scan(command);
+  // не разобрать или в команде вне тел назван интерпретатор — всё остаётся командами
+  if (parsed === null || INTERPRETER.test(parsed.outside)) return command;
   const kept: string[] = [];
   let cursor = 0;
-  for (const [start, end] of bodies) {
+  for (const [start, end] of parsed.bodies) {
     kept.push(command.slice(cursor, start));
     cursor = end;
   }

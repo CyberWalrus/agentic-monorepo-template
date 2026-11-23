@@ -91,6 +91,21 @@ const MUST_DENY: string[] = [
   'echo "<<END"\ngit commit --no-verify\nEND',
   '# cat <<EOF\ngit commit --no-verify\nEOF',
   'cat <<<EOF\ngit commit --no-verify\nEOF',
+  // e45 (ревью): `.` — синоним `source`
+  ". /dev/stdin <<'EOF'\ngit commit --no-verify\nEOF",
+  // e45 (ревью): `}` внутри `$( … )` — не граница `${…}`, `<<EOF` — часть слова
+  'echo ${u:-$(echo })<<EOF;}\ngit commit --no-verify\nEOF',
+  // e45 (ревью): строка-оператор продолжается на следующих строках — оболочка начинает тело позже
+  "cat <<'EOF' $(echo a;\ngit commit --no-verify)\nbody\nEOF",
+  "cat <<'EOF' $(echo a;\necho x > tools/protected-paths.json)\nbody\nEOF",
+  "cat <<'EOF' >/dev/null && { echo a;\ngit push --force origin main; }\nbody\nEOF",
+  // e45: обратные кавычки на строке-операторе; `#` после `$( … )` — не комментарий
+  "cat <<'EOF' `\ngit commit --no-verify`\nbody\nEOF",
+  "cat <<'EOF' $(echo a)#b$(\ngit commit --no-verify\n)\nbody\nEOF",
+  // e45: `<<` внутри `[[ ]]` и в шаблоне `case` — не оператор; разделитель раскрывается в рантайме
+  '[[ $a == x<<EOF ]]\ngit commit --no-verify\nEOF',
+  'case $x in a<<EOF)\ngit commit --no-verify\nEOF',
+  "D=EOF && cat <<$D\ncat <<'A'\nEOF\ngit commit --no-verify\nA",
 ];
 
 for (const command of MUST_DENY) {
@@ -120,6 +135,13 @@ const MUST_PASS: string[] = [
   "cat > README.md <<'EOF'\n# Title\nbody\nEOF",
   "cat <<'EOF' > docs/notes.md\nThe marker EOF ends the block\nEOF\necho done",
   'cat <<EOF > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF',
+  // e45 (ревью): строка-оператор кончилась там, где её видит оболочка — тело по-прежнему данные
+  "cat <<'EOF' $(echo a; echo b)\nLEFTHOOK=0 is forbidden\nEOF",
+  "{ cat <<'EOF' > /tmp/notes.md; }\nLEFTHOOK=0 is forbidden\nEOF",
+  "(cat <<'EOF' > /tmp/notes.md )\nLEFTHOOK=0 is forbidden\nEOF",
+  'echo "$((1 + 2))" && cat <<\'EOF\' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF',
+  'echo "${VAR:-x}" && cat <<\'EOF\' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF',
+  "git add . && cat <<'EOF' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF",
 ];
 
 for (const command of MUST_PASS) {
