@@ -259,6 +259,11 @@ jobs:
     permissions:
       contents: read
       issues: write
+      # e35: REST отдаёт bypass_actors только токену с write-доступом к ruleset.
+      # read дан, чтобы подтвердить это по логу («ключи живого ответа») и
+      # превратить фантомный дрейф в названную границу проверки
+      # (docs/architecture.md, 3.4). write на administration джобе не давать.
+      administration: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { persist-credentials: false }
