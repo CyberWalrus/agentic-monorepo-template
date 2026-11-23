@@ -5,14 +5,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
 import { orpc } from '../../lib/api-client.ts';
-import { TasksPage } from './TasksPage.tsx';
+import { TasksPage } from './tasks-page.tsx';
 import { useCreateTask, useToggleTask, useTasks } from './use-tasks.ts';
 
 /**
  * use-tasks.ts — конкурентность оптимистики: guard refetchAfterLastMutation,
  * cancelQueries перед мутацией, откат при ошибке. Транспорт подменяется на
  * deferred-промисы, которыми тест управляет вручную (паттерн deferred из
- * TasksPage.test.tsx), а ключи и options строит настоящий
+ * tasks-page.test.tsx), а ключи и options строит настоящий
  * @orpc/tanstack-query — проверяется реальная логика хуков над query-кэшем.
  */
 const transport = vi.hoisted(() => {

@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 
-import { TasksPage } from '../features/tasks/TasksPage.tsx';
+import { TasksPage } from '../features/tasks/tasks-page.tsx';
 import {
   tasksListQuery,
   useCreateTask,

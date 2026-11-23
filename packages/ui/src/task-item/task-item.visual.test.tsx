@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-react';
 
 import { Frame } from '../../testing/visual-frame.tsx';
-import { TaskItem } from './TaskItem.tsx';
+import { TaskItem } from './task-item.tsx';
 
 describe('visual', () => {
   it('TaskItem states', async () => {
