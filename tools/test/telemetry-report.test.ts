@@ -4,9 +4,13 @@
  * секрета ≠ ноль, маркер агентного PR, парсер реестра escaped-defects (только
  * основная таблица — «Копия из шаблона» не считается), формула mutation score
  * (mutation-testing-metrics), propagate проблем и summary без текстов PR
- * (untrusted-входы). CLI-смок: --local в фикстурном git-репо пишет отчёт,
- * находит конфликт пары task-веток и честно красится на недоступных
- * источниках (З4/З11) — без сети и gh.
+ * (untrusted-входы). Пустой/частичный набор входов — «нет данных» без
+ * исключений и без ложных «сломано» (e34). Барьер gh-argv (e34, ночь
+ * 45013082390): параметры `-f` без явного `-X GET` переводят gh api в POST —
+ * GET-only эндпоинт отвечает 404, все источники «не собраны», CLI красный.
+ * CLI-смок: --local в фикстурном git-репо пишет отчёт, находит конфликт пары
+ * task-веток и честно красится на недоступных источниках (З4/З11); на пустой
+ * машине (все источники на месте, данных нет) — отчёт «нет данных» и exit 0.
  */
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -19,8 +23,11 @@ import {
   buildTrendsReport,
   countEscapedDefects,
   evalsMissingArtifactPolicy,
+  ghRunArtifactsArgs,
+  ghWorkflowRunsArgs,
   isAgentPr,
   mutationScoreFromMutants,
+  parsePerfPoint,
   percentile,
   renderSummary,
   type TelemetryInputs,
@@ -305,6 +312,102 @@ it('absent-vs-zero: все if:always-артефакты на месте — пр
   expect(report.problems).toHaveLength(0);
 });
 
+it('пустой набор входов: все тренд-метрики «нет данных», проблем нет — отчёт, а не исключение (e34)', () => {
+  const report = buildTrendsReport(baseInputs());
+  expect(report.problems).toHaveLength(0);
+  const m = report.metrics;
+  const trendStatuses = {
+    ciTime: m.ciTime.status,
+    flakyRate: m.flakyRate.status,
+    verifyTime: m.verifyTime.status,
+    perf: m.perf.status,
+    mutationScore: m.mutationScore.status,
+    agentPrs: m.agentPrs.status,
+    evals: m.evals.status,
+  };
+  for (const status of Object.values(trendStatuses)) {
+    expect(status).toBe('no-data');
+  }
+  // Сводка рендерится без исключения; отсутствующие значения — «—», не нули.
+  const summary = renderSummary(report);
+  expect(summary).toContain('Тренды обвязки');
+  expect(summary).toContain('—/—');
+});
+
+it('частичный набор: один источник есть — он ok, остальные «нет данных», ложного «сломано» нет (e34)', () => {
+  // В окне нет ни одного прогона с flaky-rate артефактом — absence читается
+  // «нет данных», а не «источник сломан» (правило ALWAYS_ARTIFACTS);
+  // verify-durations есть только у свежайшего прогона окна — проблем нет.
+  const report = buildTrendsReport(
+    baseInputs({
+      nightlyArtifactRuns: [
+        { runId: 1, date: CUR, flakyRate: false, verifyDurations: false, mutationFull: false },
+        { runId: 2, date: CUR2, flakyRate: false, verifyDurations: true, mutationFull: false },
+      ],
+      verifyPoints: [{ runId: 2, date: CUR2, totalSec: 500 }],
+      // Прогон с артефактом, но без числа (частичный flake.json): не ноль.
+      flakyPoints: [{ runId: 2, date: CUR2, ratePct: null, flaky: 0, total: 0 }],
+    }),
+  );
+  expect(report.problems).toHaveLength(0);
+  expect(report.metrics.verifyTime.status).toBe('ok');
+  expect(report.metrics.verifyTime.current).toEqual({ runs: 1, p50Sec: 500, p95Sec: 500 });
+  expect(report.metrics.ciTime.status).toBe('no-data');
+  expect(report.metrics.flakyRate.status).toBe('ok');
+  expect(report.metrics.flakyRate.current).toEqual({ runs: 1, measured: 0, meanPct: null });
+  expect(report.metrics.mutationScore.status).toBe('no-data');
+  expect(report.metrics.evals.status).toBe('no-data');
+});
+
+it('gh api argv: `-f` несёт явный `-X GET` — без метода gh шлёт POST и GET-only эндпоинт 404 (ночь 45013082390, e34)', () => {
+  const runs = ghWorkflowRunsArgs('owner/repo', 'ci.yml', '2026-09-23T10:34:34.395Z', 1);
+  expect(runs).toContain('-X');
+  expect(runs[runs.indexOf('-X') + 1]).toBe('GET');
+  expect(runs).toContain('-f');
+  expect(runs).toContain('per_page=100');
+  expect(runs).toContain('page=1');
+  expect(runs).toContain('created=>=2026-09-23T10:34:34.395Z');
+  expect(runs.some((arg) => arg.startsWith('repos/owner/repo/actions/workflows/'))).toBe(true);
+  // Фильтр ветки — только когда задан (ci.yml без branch, nightly с branch=main).
+  expect(runs).not.toContain('branch=main');
+  const runsBranch = ghWorkflowRunsArgs(
+    'owner/repo',
+    'nightly.yml',
+    '2026-09-23T10:34:34.395Z',
+    2,
+    'main',
+  );
+  expect(runsBranch).toContain('branch=main');
+  expect(runsBranch[runsBranch.indexOf('-X') + 1]).toBe('GET');
+
+  const artifacts = ghRunArtifactsArgs('owner/repo', 45013082390);
+  expect(artifacts).toContain('-X');
+  expect(artifacts[artifacts.indexOf('-X') + 1]).toBe('GET');
+  expect(artifacts).toContain('-f');
+  expect(artifacts).toContain('per_page=100');
+  expect(
+    artifacts.some((arg) => arg.startsWith('repos/owner/repo/actions/runs/45013082390/')),
+  ).toBe(true);
+});
+
+it('perf.json артефакта ночи: legacy-форма — точка вне тренда без problem, битый JSON — problem, свежая форма — точка (e34)', () => {
+  // Форма до A6 PR-1 (артефакт ночи 43408771806, 2026-11-13): без обязательных
+  // lcpNetMs/requests/apiRequests/jsWireKb/cssWireKb — точка «нет данных».
+  const legacy =
+    '{"page:/": {"ttfbMs": 8.2, "lcpMs": 60, "cls": 0}, "scenario:create-task": {"ms": 98.07}, "scenario:toggle-task": {"ms": 77.21}}';
+  const legacyParsed = parsePerfPoint(legacy, 43408771806, '2026-11-13T10:24:00Z');
+  expect(legacyParsed.point).toBeNull();
+  expect(legacyParsed.problem).toBeNull();
+
+  const corrupt = parsePerfPoint('не JSON{', 1, CUR);
+  expect(corrupt.point).toBeNull();
+  expect(corrupt.problem).toContain('не разбирается');
+
+  const fresh = parsePerfPoint(JSON.stringify(mkPerfReport(110)), 2, CUR);
+  expect(fresh.problem).toBeNull();
+  expect(fresh.point).toEqual({ runId: 2, date: CUR, report: mkPerfReport(110) });
+});
+
 it('denials: счётчик по гейтам отсортирован, дельта окон; ноль без записей — не проблема', () => {
   const report = buildTrendsReport(
     baseInputs({
@@ -551,6 +654,63 @@ it('CLI-смок (--local, фикстурный git-репо): отчёт нап
   ]);
   expect(report.metrics.verifyTime.status).toBe('no-data');
   expect(report.problems.length).toBeGreaterThan(0);
+});
+
+it('CLI --local на пустой машине: источники на месте, данных нет — отчёт «нет данных» и exit 0, не исключение (e34)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'telemetry-cli-empty-'));
+  dirs.push(dir);
+  const git = (args: string[]): string => {
+    const result = spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    if (result.status !== 0) throw new Error(`git ${args.join(' ')} упал: ${result.stderr}`);
+    return result.stdout;
+  };
+  // Источники, которые --local читает с диска: все на месте, данных в них нет.
+  mkdirSync(join(dir, 'docs'), { recursive: true });
+  writeFileSync(join(dir, 'docs/escaped-defects.md'), DEFECTS_MD);
+  mkdirSync(join(dir, 'apps/api'), { recursive: true });
+  writeFileSync(join(dir, 'apps/api/stryker.config.json'), '{"thresholds": {"break": 75}}');
+  writeFileSync(
+    join(dir, 'verify-budgets.json'),
+    '{"totalFast": 60, "totalSlow": 720, "fast": {}, "slow": {}}',
+  );
+  mkdirSync(join(dir, 'backlog'), { recursive: true }); // открытых задач нет
+  git(['init', '-q', '-b', 'main']);
+  git(['config', 'user.email', 't@example.invalid']);
+  git(['config', 'user.name', 't']);
+  git(['add', '-A']);
+  git(['commit', '-qm', 'base']);
+  // origin (пустой bare): git fetch task/* должен удаться, конфликтов нет.
+  const bare = join(dir, 'origin.git');
+  spawnSync('git', ['init', '--bare', '-q', bare]);
+  git(['remote', 'add', 'origin', bare]);
+
+  const out = join(dir, 'reports', 'trends.json');
+  const result = spawnSync(
+    process.execPath,
+    [cli, '--local', '--period-days', '30', '--out', out],
+    { cwd: dir, encoding: 'utf8' },
+  );
+  expect(result.stderr).toBe('');
+  expect(result.status).toBe(0);
+  const EmptyReportSchema = z.object({
+    schema: z.literal('trends-report/1'),
+    problems: z.array(z.string()),
+    metrics: z.object({
+      ciTime: z.object({ status: z.enum(['ok', 'no-data']) }),
+      flakyRate: z.object({ status: z.enum(['ok', 'no-data']) }),
+      verifyTime: z.object({ status: z.enum(['ok', 'no-data']) }),
+      perf: z.object({ status: z.enum(['ok', 'no-data']) }),
+      mutationScore: z.object({ status: z.enum(['ok', 'no-data']) }),
+      agentPrs: z.object({ status: z.enum(['ok', 'no-data']) }),
+      evals: z.object({ status: z.enum(['ok', 'no-data']) }),
+    }),
+  });
+  const report = EmptyReportSchema.parse(JSON.parse(readFileSync(out, 'utf8')));
+  expect(report.schema).toBe('trends-report/1');
+  expect(report.problems).toEqual([]);
+  for (const metric of Object.values(report.metrics)) {
+    expect(metric.status).toBe('no-data');
+  }
 });
 
 afterAll(() => {
