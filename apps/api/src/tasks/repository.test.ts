@@ -39,4 +39,20 @@ describe('InMemoryTaskRepository', () => {
 
     expect(titles).toEqual(['third', 'second', 'first']);
   });
+
+  // e52: комбинация дефекта — задача с владельцем в одном рабочем
+  // пространстве, remove из другого. Домен задачу не трогает и отвечает
+  // undefined (отказ из этого делает роутер), владелец остаётся на месте.
+  it('keeps an owned task in place when remove comes from another workspace', async () => {
+    const repo = createRepository();
+    const owned = await repo.create('Write tests', 'owner-1', 'ws-a');
+
+    await expect(repo.remove(owned.id, 'ws-b')).resolves.toBeUndefined();
+
+    expect(await repo.list('ws-a')).toEqual([owned]);
+    expect(await repo.ownerOf(owned.id)).toBe('owner-1');
+    // Контроль: из своего рабочего пространства та же задача удаляется.
+    await expect(repo.remove(owned.id, 'ws-a')).resolves.toEqual(owned);
+    expect(await repo.list('ws-a')).toEqual([]);
+  });
 });
