@@ -116,7 +116,11 @@ module.exports = {
     doNotFollow: { path: 'node_modules' },
     exclude: {
       // playwright-report: html-отчёт Playwright — артефакт с чужими бандлами (локальные прогоны).
-      path: '^e2e/perf/k6/|(^|/)(\\.playwright-cli|dist|\\.output|coverage|reports|test-results|playwright-report)/|routeTree\\.gen\\.ts$',
+      // Артефакты сборки — только вне node_modules (e44):^(?:(?!node_modules/).)* требует,
+      // чтобы путь до каталога-артефакта не проходил через node_modules/. Без этого
+      // условия исключение резало и entry сторонних пакетов (node_modules/hono/dist/…):
+      // рёбра к ним выпадали из графа, правила с путями node_modules/… молчали.
+      path: '^e2e/perf/k6/|^(?:(?!node_modules/).)*(^|/)(\\.playwright-cli|dist|\\.output|coverage|reports|test-results|playwright-report)/|routeTree\\.gen\\.ts$',
     },
     tsPreCompilationDeps: true,
     combinedDependencies: false,

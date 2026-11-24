@@ -98,6 +98,31 @@ function commitAll(message: string): void {
   assertOk(git(['commit', '-m', message]), `git commit ${message}`);
 }
 
+// e71: первая запись «git status --porcelain -z» начинается с ведущего пробела
+// (« M» — правка только в рабочем дереве). Обёртка git() делала trim() всего
+// вывода, срезала этот пробел, и slice(3) отрезал первый символ пути: гейт
+// звал «вне touches» свой файл под искажённым именем (olo/inner.ts,
+// acklog/done/b8.md). Якорь доказывает, что запись единственная (значит,
+// первая) и начинается с пробела — иначе тест проверял бы не тот случай.
+function onlyStatusEntryIs(expected: string): void {
+  const status = git(['status', '--porcelain', '-z', '--untracked-files=all']);
+  expect(status.stdout.split('\0').filter(Boolean)).toEqual([expected]);
+}
+
+// Правит файл клона, сверяет якорь, гоняет чекер; файл возвращается в finally —
+// упавший якорь не оставляет правку следующим тестам.
+function runWithEdited(file: string, append: string, entry: string): RunResult {
+  const target = join(repo, file);
+  const original = readFileSync(target, 'utf8');
+  try {
+    writeFileSync(target, `${original}${append}`);
+    onlyStatusEntryIs(entry);
+    return run([]);
+  } finally {
+    writeFileSync(target, original);
+  }
+}
+
 beforeAll(() => {
   tmp = mkdtempSync(join(tmpdir(), 'branch-scope-'));
   repo = join(tmp, 'clone');
@@ -170,6 +195,73 @@ describe('check-branch-scope: интеграция на временном кл�
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('other/evil.ts');
     expect(result.stderr).toContain('вне touches задачи');
+  });
+
+  for (const [file, append, what] of [
+    ['solo/inner.ts', 'export const edited = 1;\n', 'файл внутри touches'],
+    ['backlog/done/x.md', '- запись журнала\n', 'собственный файл задачи (журнал)'],
+  ] as const) {
+    it(`e71: незакоммиченная правка первой записью статуса (« M») — ${what} — не «вне touches»`, () => {
+      const result = runWithEdited(file, append, ` M ${file}`);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('внутри touches — ok');
+      expect(result.stderr).not.toContain('вне touches');
+    });
+  }
+
+  it('e71: незакоммиченная правка постороннего файла первой записью (« M») — красный с точным именем', () => {
+    // Посторонний закоммичённый файл в ветке не задержится (тот же гейт красит
+    // дифф) — берём файл main вне touches задачи x и вне её собственных путей.
+    const result = runWithEdited('backlog/s.md', '- правка вне touches\n', ' M backlog/s.md');
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('файлы вне touches задачи: backlog/s.md —');
+  });
+
+  it('e71: записи в индексе («A », «M » первой записью) — своя правка зелёная', () => {
+    // Записи индекса начинаются с буквы — trim() их не касался; поведение
+    // прежнее и после правки.
+    const inner = join(repo, 'solo', 'inner.ts');
+    const staged = join(repo, 'solo', 'staged.ts');
+    const original = readFileSync(inner, 'utf8');
+    let added: RunResult;
+    let modified: RunResult;
+    try {
+      writeFileSync(staged, 'export const staged = 1;\n');
+      git(['add', 'solo/staged.ts']);
+      onlyStatusEntryIs('A  solo/staged.ts');
+      added = run([]);
+      git(['reset', '-q', '--', 'solo/staged.ts']);
+      rmSync(staged, { force: true });
+      writeFileSync(inner, `${original}export const edited = 1;\n`);
+      git(['add', 'solo/inner.ts']);
+      onlyStatusEntryIs('M  solo/inner.ts');
+      modified = run([]);
+    } finally {
+      // Чистка до expect: снять с индекса и вернуть файл — коммиты следующих тестов чисты.
+      git(['reset', '-q', '--', 'solo/inner.ts', 'solo/staged.ts']);
+      rmSync(staged, { force: true });
+      writeFileSync(inner, original);
+    }
+    expect(added.status).toBe(0);
+    expect(added.stdout).toContain('внутри touches — ok');
+    expect(modified.status).toBe(0);
+    expect(modified.stdout).toContain('внутри touches — ok');
+  });
+
+  it('e71: запись в индексе («A » первой записью) для постороннего файла — красный с точным именем', () => {
+    mkdirSync(join(repo, 'other'), { recursive: true });
+    writeFileSync(join(repo, 'other', 'staged.ts'), 'export const staged = 1;\n');
+    let result: RunResult;
+    try {
+      git(['add', 'other/staged.ts']);
+      onlyStatusEntryIs('A  other/staged.ts');
+      result = run([]);
+    } finally {
+      git(['reset', '-q', '--', 'other/staged.ts']); // чистка до expect
+      rmSync(join(repo, 'other'), { recursive: true, force: true });
+    }
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('файлы вне touches задачи: other/staged.ts —');
   });
 
   it('bare-каталог в touches покрывает только точный путь', () => {
