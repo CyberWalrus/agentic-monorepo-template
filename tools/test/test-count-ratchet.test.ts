@@ -184,8 +184,8 @@ it('проводка: nightly-джоб храповика и правило в a
 });
 
 it('проводка e40: hooks-отчёт гоняется до update; красная джоба храповика доходит до issue', () => {
-  // Корневая //#test:hooks не входит в `turbo run test`: без своего шага
-  // отчёта в job нет, и update молча не трогал запись reports/vitest-hooks.json
+  // Корневая //#test:hooks не входит в `turbo run test`: без своего шага отчёта
+  // в job нет, и update молча не трогал запись reports/vitest-hooks.json
   // (296 в базлайне при 718 тестах).
   // Комментарии job в проверку не входят: слово в комментарии — не шаг и не needs.
   const job = jobCodeLines('test-count-ratchet').join('\n');
