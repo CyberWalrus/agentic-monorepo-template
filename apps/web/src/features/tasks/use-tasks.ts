@@ -45,26 +45,29 @@ export function useToggleTask() {
   const queryClient = useQueryClient();
   const mutation = useMutation(
     orpc.tasks.toggle.mutationOptions({
+      onMutate: async ({ id }) => {
+        // Оптимистичное обновление синхронно в обработчике клика: управляемый чекбокс
+        // не откатывается ни на кадр. Кэш — единственный источник правды, без оверлеев.
+        // onMutate идёт в стеке mutateAsync, и до первого await ничего не ждёт.
+        // Логика над данными кэша — в task-cache.ts, здесь только применение к query-кэшу.
+        const previous = queryClient.getQueryData<Task[]>(listKey);
+        queryClient.setQueryData<Task[]>(listKey, (tasks) => applyTaskToggle(tasks, id));
+        // Устаревший refetch в полёте не должен затереть оптимистичные данные.
+        await queryClient.cancelQueries({ queryKey: listKey }, { revert: false });
+        return { previous };
+      },
+      onError: (_error, { id }, context) => {
+        // Снимок до клика верен только в мгновение клика: пока мутация летела, в кэш
+        // могли прийти свежие данные, — откат точечный, от текущего состояния.
+        queryClient.setQueryData<Task[]>(listKey, (tasks) =>
+          rollbackTaskToggle(tasks, id, context?.previous),
+        );
+      },
       onSettled: () => refetchAfterLastMutation(queryClient),
     }),
   );
 
   return async (id: string) => {
-    // Оптимистичное обновление синхронно в обработчике клика: управляемый чекбокс
-    // не откатывается ни на кадр. Кэш — единственный источник правды, без оверлеев.
-    // Логика над данными кэша — в task-cache.ts, здесь только применение к query-кэшу.
-    const previous = queryClient.getQueryData<Task[]>(listKey);
-    queryClient.setQueryData<Task[]>(listKey, (tasks) => applyTaskToggle(tasks, id));
-    // Устаревший refetch в полёте не должен затереть оптимистичные данные.
-    await queryClient.cancelQueries({ queryKey: listKey }, { revert: false });
-    try {
-      await mutation.mutateAsync({ id });
-    } catch (error) {
-      const restored = rollbackTaskToggle(previous);
-      if (restored) {
-        queryClient.setQueryData(listKey, restored);
-      }
-      throw error;
-    }
+    await mutation.mutateAsync({ id });
   };
 }
