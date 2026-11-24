@@ -1249,6 +1249,12 @@ export const CANARIES: GateCanary[] = [
     // «evilOwnerProbe» вместо «tasks.evilOwnerProbe»). Вторая правка
     // обязательна: роутер содержит только объявленные handler'ы, контрактный
     // зонд без handler'а до перебора не доходит и шаг остаётся зелёным.
+    // Третья правка (e57, 2026-11-25): errors.test.ts держит сторожевой список
+    // процедур tasks с проверкой доступа — `toEqual(['tasks.remove'])`. Зонд —
+    // новая такая процедура: без правки шаг test падал на контракте раньше,
+    // чем на таблице, turbo не доходил до отчёта api, и ожидаемого сообщения
+    // не было в доказательствах — «test НЕ УПАЛ» на каждом PR после мержа e57.
+    // Зонд дописывается и в список: тогда падает ровно таблица доступа.
     name: 'owner-процедура без строки сценария таблицы',
     steps: 'test',
     failedStep: 'test',
@@ -1279,6 +1285,18 @@ export const CANARIES: GateCanary[] = [
         throw new Error('canary anchor not found: apps/api/src/router.ts has no tasks closing');
       }
       writeFileSync(routerPath, withHandler);
+      const tripwirePath = join(root, 'packages', 'contracts', 'src', 'errors.test.ts');
+      const tripwire = readFileSync(tripwirePath, 'utf8');
+      const withListed = tripwire.replace(
+        "toEqual(['tasks.remove'])",
+        "toEqual(['tasks.remove', 'tasks.evilOwnerProbe'])",
+      );
+      if (withListed === tripwire) {
+        throw new Error(
+          'canary anchor not found: contracts/src/errors.test.ts has no list of tasks procedures that check access',
+        );
+      }
+      writeFileSync(tripwirePath, withListed);
     },
   },
 ];
