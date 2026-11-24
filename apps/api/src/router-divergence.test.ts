@@ -9,6 +9,9 @@ import {
   proceduresWithoutAuthorization,
   type AppContext,
 } from './authorization.ts';
+// e56: признак «вход валидируется» — тот же, по которому спека решает, каким
+// операциям обещать 400 (packages/contracts/scripts/openapi-spec.ts).
+import { hasValidatedInput } from '../../../packages/contracts/scripts/openapi-spec.ts';
 import { router } from './router.ts';
 import { InMemoryTaskRepository } from './tasks/repository.ts';
 
@@ -58,6 +61,42 @@ describe('router divergence from contract', () => {
 
   it('every procedure runs the authorization middleware — no bypass', () => {
     expect(proceduresWithoutAuthorization(router)).toEqual([]);
+  });
+
+  // e56: спека обещает 400 валидации ровно public-процедурам с валидируемым
+  // входом (operationsWithInputValidation в openapi-spec.ts). Это его
+  // рантайм-доказательство на настоящем роутере: актор — владелец, поэтому
+  // отказ может дать только форма входа. Public → валидация отвечает первой;
+  // политика с проверкой доступа → FORBIDDEN до неё (fail-closed, C2.3).
+  it('answers an invalid input with BAD_REQUEST only on public procedures', async () => {
+    const tasks = new InMemoryTaskRepository();
+    await tasks.create('Owned', OWNER_ID, 'ws-a');
+    const context: AppContext = {
+      tasks,
+      actor: { id: OWNER_ID },
+      ownerOf: async (input) => {
+        const parsed = TaskIdInputSchema.safeParse(input);
+        return parsed.success ? tasks.ownerOf(parsed.data.id) : null;
+      },
+      workspaceId: 'ws-a',
+    };
+
+    // list без валидируемого входа не проверяется; ответ остальных предсказан
+    const checked = await Promise.all(
+      [...collectProcedures(router)]
+        .filter(({ procedure }) => hasValidatedInput(procedure))
+        .map(async ({ path, procedure }) => {
+          const call = createProcedureClient(procedure, { context });
+          return [path.join('.'), await answerOf(call(undefined))] as const;
+        }),
+    );
+    const answered = Object.fromEntries(checked);
+
+    expect(answered).toEqual({
+      'tasks.create': { code: 'BAD_REQUEST', status: 400, message: 'Input validation failed' },
+      'tasks.remove': { code: 'FORBIDDEN', status: 403, message: ERROR_MESSAGES.FORBIDDEN },
+      'tasks.toggle': { code: 'BAD_REQUEST', status: 400, message: 'Input validation failed' },
+    });
   });
 
   // e52: проверка владельца сквозная между рабочими пространствами (ADR 0020),

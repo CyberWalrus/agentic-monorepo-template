@@ -111,6 +111,25 @@
                 }
               }
             }
+          },
+          "504": {
+            "description": "504: request exceeded the time limit; answered by the HTTP layer, not the procedure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "const": "Request timed out"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       },
@@ -174,65 +193,116 @@
             }
           },
           "400": {
-            "description": "400",
+            "description": "400: input validation failed or the request body is malformed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "defined": {
+                          "const": false
+                        },
+                        "code": {
+                          "const": "BAD_REQUEST"
+                        },
+                        "status": {
+                          "const": 400
+                        },
+                        "message": {
+                          "type": "string",
+                          "default": "Input validation failed"
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "issues": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "path": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": [
+                                        "string",
+                                        "number"
+                                      ]
+                                    }
+                                  },
+                                  "message": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "path",
+                                  "message"
+                                ]
+                              }
+                            }
+                          },
+                          "required": [
+                            "issues"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "defined",
+                        "code",
+                        "status",
+                        "message",
+                        "data"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "defined": {
+                          "const": false
+                        },
+                        "code": {
+                          "const": "BAD_REQUEST"
+                        },
+                        "status": {
+                          "const": 400
+                        },
+                        "message": {
+                          "const": "Malformed request. Ensure the request body is properly formatted and the 'Content-Type' header is set correctly."
+                        }
+                      },
+                      "required": [
+                        "defined",
+                        "code",
+                        "status",
+                        "message"
+                      ],
+                      "not": {
+                        "required": [
+                          "data"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "413: request body over the limit; answered by the HTTP layer, not the procedure",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "defined": {
-                      "const": false
-                    },
-                    "code": {
-                      "const": "BAD_REQUEST"
-                    },
-                    "status": {
-                      "const": 400
-                    },
-                    "message": {
-                      "type": "string",
-                      "default": "Input validation failed"
-                    },
-                    "data": {
-                      "type": "object",
-                      "properties": {
-                        "issues": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "path": {
-                                "type": "array",
-                                "items": {
-                                  "type": [
-                                    "string",
-                                    "number"
-                                  ]
-                                }
-                              },
-                              "message": {
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "path",
-                              "message"
-                            ]
-                          }
-                        }
-                      },
-                      "required": [
-                        "issues"
-                      ]
+                    "error": {
+                      "const": "Payload too large"
                     }
                   },
                   "required": [
-                    "defined",
-                    "code",
-                    "status",
-                    "message",
-                    "data"
-                  ]
+                    "error"
+                  ],
+                  "additionalProperties": false
                 }
               }
             }
@@ -296,6 +366,25 @@
                 }
               }
             }
+          },
+          "504": {
+            "description": "504: request exceeded the time limit; answered by the HTTP layer, not the procedure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "const": "Request timed out"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -351,64 +440,96 @@
             }
           },
           "400": {
-            "description": "400",
+            "description": "400: input validation failed or the request body is malformed",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "defined": {
-                      "const": false
-                    },
-                    "code": {
-                      "const": "BAD_REQUEST"
-                    },
-                    "status": {
-                      "const": 400
-                    },
-                    "message": {
-                      "type": "string",
-                      "default": "Input validation failed"
-                    },
-                    "data": {
+                  "oneOf": [
+                    {
                       "type": "object",
                       "properties": {
-                        "issues": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "path": {
-                                "type": "array",
-                                "items": {
-                                  "type": [
-                                    "string",
-                                    "number"
-                                  ]
-                                }
-                              },
-                              "message": {
-                                "type": "string"
+                        "defined": {
+                          "const": false
+                        },
+                        "code": {
+                          "const": "BAD_REQUEST"
+                        },
+                        "status": {
+                          "const": 400
+                        },
+                        "message": {
+                          "type": "string",
+                          "default": "Input validation failed"
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "issues": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "path": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": [
+                                        "string",
+                                        "number"
+                                      ]
+                                    }
+                                  },
+                                  "message": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "path",
+                                  "message"
+                                ]
                               }
-                            },
-                            "required": [
-                              "path",
-                              "message"
-                            ]
-                          }
+                            }
+                          },
+                          "required": [
+                            "issues"
+                          ]
                         }
                       },
                       "required": [
-                        "issues"
+                        "defined",
+                        "code",
+                        "status",
+                        "message",
+                        "data"
                       ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "defined": {
+                          "const": false
+                        },
+                        "code": {
+                          "const": "BAD_REQUEST"
+                        },
+                        "status": {
+                          "const": 400
+                        },
+                        "message": {
+                          "const": "Malformed request. Ensure the request body is properly formatted and the 'Content-Type' header is set correctly."
+                        }
+                      },
+                      "required": [
+                        "defined",
+                        "code",
+                        "status",
+                        "message"
+                      ],
+                      "not": {
+                        "required": [
+                          "data"
+                        ]
+                      }
                     }
-                  },
-                  "required": [
-                    "defined",
-                    "code",
-                    "status",
-                    "message",
-                    "data"
                   ]
                 }
               }
@@ -530,6 +651,25 @@
                       ]
                     }
                   ]
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "504: request exceeded the time limit; answered by the HTTP layer, not the procedure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "const": "Request timed out"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
                 }
               }
             }
@@ -673,6 +813,25 @@
                       ]
                     }
                   ]
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "504: request exceeded the time limit; answered by the HTTP layer, not the procedure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "const": "Request timed out"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
                 }
               }
             }

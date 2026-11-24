@@ -11,6 +11,12 @@ import { ocAccess, type Contract } from '@repo/contracts';
 import * as z from 'zod';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+// e56: фикстуры провода, из которых строится спека. Скрипт контрактов, а не
+// публичный экспорт: фикстуры описывают HTTP-слой, в контракт процедур не входят.
+import {
+  errorResponses,
+  type WireResponse,
+} from '../../../packages/contracts/scripts/openapi-spec.ts';
 import { createApp, REQUEST_BODY_LIMIT_BYTES, REQUEST_TIMEOUT_MS } from './app.ts';
 import { authorizationMiddleware, type Actor, type AppContext } from './authorization.ts';
 import type { LogRecord, LogSink } from './observability.ts';
@@ -641,6 +647,80 @@ describe('request guards', () => {
     } finally {
       stalled.release();
     }
+  });
+});
+
+// e56: формы ответов на проводе — дословно. Из этих же фикстур строится спека
+// (packages/contracts/scripts/openapi-spec.ts): расходится рантайм — красный
+// здесь, расходится спека — красный в openapi-spec.test.ts. Операция — та, что
+// документирована: POST /api/tasks.
+describe('error responses on the wire', () => {
+  const JSON_HEADERS = { 'content-type': 'application/json' };
+  const WIRE_CASES: readonly {
+    name: string;
+    expected: WireResponse;
+    send: () => RequestInit;
+  }[] = [
+    {
+      name: 'a malformed JSON body',
+      expected: errorResponses.malformedBody,
+      send: () => ({ method: 'POST', headers: JSON_HEADERS, body: '{"title": ' }),
+    },
+    {
+      name: 'a body over the limit',
+      expected: errorResponses.payloadTooLarge,
+      send: () => ({
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ title: 'x'.repeat(2048) }),
+      }),
+    },
+  ];
+
+  for (const { name, expected, send } of WIRE_CASES) {
+    it(`answers ${name} with the status and body the spec is built from`, async () => {
+      const { app } = setup({ bodyLimitBytes: 1024 });
+
+      const response = await app.request('/api/tasks', send());
+
+      expect(response.headers.get('content-type')).toMatch(/^application\/json/);
+      expect({ status: response.status, body: await response.json() }).toEqual(expected);
+    });
+  }
+
+  it('answers a stalled body with the status and body the spec is built from', async () => {
+    const { app } = setup({ bodyLimitBytes: 1024, requestTimeoutMs: 50 });
+    const stalled = stalledBody();
+
+    try {
+      const response = await app.request('/api/tasks', {
+        method: 'POST',
+        body: stalled.stream,
+        duplex: 'half',
+      });
+
+      expect(response.headers.get('content-type')).toMatch(/^application\/json/);
+      expect({ status: response.status, body: await response.json() }).toEqual(
+        errorResponses.requestTimedOut,
+      );
+    } finally {
+      // Проигравшая ветка отпущена: висящих промисов тест не оставляет.
+      stalled.release();
+    }
+  });
+
+  it('answers an invalid body with the zod issues the spec documents', async () => {
+    const { app } = setup();
+
+    const response = await app.request('/api/tasks', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ title: '   ' }),
+    });
+
+    // В issue на проводе есть и другие поля (code, origin…) — спека описывает минимум
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject(errorResponses.validationFailed.body);
   });
 });
 
