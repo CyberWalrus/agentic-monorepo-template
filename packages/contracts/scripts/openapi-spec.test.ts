@@ -136,6 +136,26 @@ describe('generateSpec on the real contract', () => {
     expect(spec.paths?.['/tasks/{id}']?.delete?.responses?.['400']).toBeUndefined();
   });
 
+  // e57: контракт описывает только достижимое. 403 отвечает проверка доступа,
+  // поэтому он описан у remove (owner) и отсутствует у public-процедур.
+  it('documents 403 only for the procedure that checks access', async () => {
+    const spec = await generateSpec(contract);
+
+    expect(spec.paths?.['/tasks/{id}']?.delete?.responses?.['403']).toMatchObject({
+      description: '403',
+    });
+    for (const [path, method] of [
+      ['/tasks', 'get'],
+      ['/tasks', 'post'],
+      ['/tasks/{id}/toggle', 'post'],
+    ] as const) {
+      expect(
+        spec.paths?.[path]?.[method]?.responses?.['403'],
+        `${method.toUpperCase()} ${path} must not promise 403`,
+      ).toBeUndefined();
+    }
+  });
+
   it('keeps generation deterministic across runs', async () => {
     const first = await generateSpec(contract);
     const second = await generateSpec(contract);

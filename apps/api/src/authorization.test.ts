@@ -1,6 +1,6 @@
 import { ORPCError } from '@orpc/client';
 import { createProcedureClient, implement } from '@orpc/server';
-import { ocAccess } from '@repo/contracts';
+import { ocAccess, ocPublic } from '@repo/contracts';
 import * as z from 'zod';
 import { describe, expect, it } from 'vitest';
 
@@ -36,7 +36,9 @@ function setup(context: Pick<AppContext, 'actor' | 'ownerOf'>) {
       .route({ method: 'GET', path: '/fixture/admin', summary: 'Admin echo' })
       .meta({ access: { type: 'admin' } })
       .output(z.string()),
-    noPolicyEcho: ocAccess
+    // Без политики — на строителе public-процедур, который FORBIDDEN не
+    // объявляет (e57): отказ мидлвари не зависит от деклараций процедуры.
+    noPolicyEcho: ocPublic
       .route({ method: 'GET', path: '/fixture/no-policy', summary: 'Echo without a policy' })
       .output(z.string()),
   };
@@ -111,9 +113,13 @@ describe('authorization middleware', () => {
     const { denyErrorOf } = setup({ actor: null, ownerOf: async () => OWNER_ACTOR.id });
 
     await expect(denyErrorOf('ownerEcho')).resolves.toBeInstanceOf(ORPCError);
+    // Ошибка объявлена процедуре контрактом: код, статус и текст те же, что у
+    // двойника без объявления (ниже), отличается только честный defined.
     await expect(denyErrorOf('ownerEcho')).resolves.toMatchObject({
       code: 'FORBIDDEN',
+      status: 403,
       message: 'Access denied',
+      defined: true,
     });
   });
 
@@ -161,9 +167,14 @@ describe('authorization middleware', () => {
     const { denyErrorOf } = setup({ actor: OWNER_ACTOR, ownerOf: async () => OWNER_ACTOR.id });
 
     await expect(denyErrorOf('noPolicyEcho')).resolves.toBeInstanceOf(ORPCError);
+    // Отказ не зависит от деклараций процедуры (e57): у двойника нет ни
+    // политики, ни объявленного FORBIDDEN — тот же код, статус и текст каталога.
     await expect(denyErrorOf('noPolicyEcho')).resolves.toMatchObject({
       code: 'FORBIDDEN',
+      status: 403,
       message: 'Access denied',
+      // defined честен: эту ошибку процедуре контракт не объявлял
+      defined: false,
     });
   });
 });
