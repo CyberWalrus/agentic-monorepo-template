@@ -125,6 +125,69 @@ export const CANARIES: GateCanary[] = [
       ),
   },
   {
+    // e44: devDependency с entry в dist/ (vitest) из production-кода пакета.
+    // Пока exclude резал любой dist/ — и node_modules/*/dist — ребро к такому
+    // пакету выпадало из графа, и not-to-dev-dep его не видел.
+    name: 'dev-dep с entry в dist',
+    steps: 'boundaries',
+    failedStep: 'boundaries',
+    expect: /not-to-dev-dep/,
+    apply: (root) =>
+      write(
+        root,
+        'packages/contracts/src/evil-vitest-probe.ts',
+        "import { describe } from 'vitest';\n\nexport const evil = describe;\n",
+      ),
+  },
+  {
+    // e44: контракты тянут транспорт (@orpc/server, entry в dist/) как
+    // production-зависимость. Пакет переносится из devDependencies в
+    // dependencies: иначе импорт ловит not-to-dev-dep, а не contracts-are-pure
+    // (правило смотрит только на npm- и core-зависимости).
+    name: 'контракты тянут @orpc/server',
+    steps: 'boundaries',
+    failedStep: 'boundaries',
+    expect: /contracts-are-pure/,
+    apply: (root) => {
+      const path = join(root, 'packages', 'contracts', 'package.json');
+      const pkg: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      if (
+        !isRecord(pkg) ||
+        !isRecord(pkg['dependencies']) ||
+        !isRecord(pkg['devDependencies']) ||
+        typeof pkg['devDependencies']['@orpc/server'] !== 'string'
+      ) {
+        throw new Error(
+          'canary anchor not found: @orpc/server в devDependencies packages/contracts/package.json',
+        );
+      }
+      pkg['dependencies']['@orpc/server'] = pkg['devDependencies']['@orpc/server'];
+      delete pkg['devDependencies']['@orpc/server'];
+      writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
+      write(
+        root,
+        'packages/contracts/src/evil-orpc-server-probe.ts',
+        "import { ORPCError } from '@orpc/server';\n\nexport const evil = ORPCError;\n",
+      );
+    },
+  },
+  {
+    // e44: ui тянет транспорт (hono, entry в dist/). Из packages/ui hono не
+    // резолвится по bare-спецификатору (изолированные node_modules pnpm), а
+    // канарейка не делает install — зонд идёт относительным путём в хоист-каталог
+    // pnpm: тот же realpath, что получил бы резолвер после добавления зависимости.
+    name: 'ui тянет hono из dist',
+    steps: 'boundaries',
+    failedStep: 'boundaries',
+    expect: /ui-is-presentational/,
+    apply: (root) =>
+      write(
+        root,
+        'packages/ui/src/evil-hono-probe.ts',
+        "import { Hono } from '../../../node_modules/.pnpm/node_modules/hono/dist/index.js';\n\nexport const evil = () => new Hono();\n",
+      ),
+  },
+  {
     name: 'нарушение форматирования',
     steps: 'format',
     failedStep: 'format',
