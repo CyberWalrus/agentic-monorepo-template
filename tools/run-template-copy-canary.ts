@@ -152,12 +152,22 @@ try {
     throw new CanaryFailure(`pnpm install в копии failed:\n${installed.output.slice(-3000)}`);
   }
   console.log('pnpm verify в копии…');
+  // Копия — репозиторий без origin (git init одним коммитом выше): базе сравнения
+  // контракта взяться неоткуда. Гейт не делает базой HEAD сам (e48: так молча
+  // зеленеет любой клон без origin/main) — только по явному разрешению, и его
+  // ставит одна эта канарейка, лишь запуску verify в копии: отрицательные
+  // канарейки run-gate-canaries его не наследуют.
   const verifyInCopy = (): { status: number | null; output: string } => {
     const attempt = spawnSync('pnpm', ['verify'], {
       encoding: 'utf8',
       cwd: copyDir,
       timeout: 600_000,
-      env: { ...process.env, CI: '1', TURBO_TELEMETRY_DISABLED: '1' },
+      env: {
+        ...process.env,
+        CI: '1',
+        TURBO_TELEMETRY_DISABLED: '1',
+        OPENAPI_COMPAT_ALLOW_HEAD_BASE: '1',
+      },
     });
     return {
       status: attempt.error !== undefined ? -1 : attempt.status,
