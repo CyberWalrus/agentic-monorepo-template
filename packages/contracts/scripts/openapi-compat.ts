@@ -32,8 +32,13 @@
  *
  * База: --base <ref> → TURBO_SCM_BASE (CI, ci.yml) → git merge-base HEAD
  * origin/main (локально). openapi.json на базе отсутствует → база пустая,
- * все изменения — добавления. Нет merge-base или битая спека — красный
- * с причиной (fail-closed, как tools/check-bundle-delta.ts).
+ * все изменения — добавления. Базы нет или битая спека — красный с причиной
+ * (fail-closed, как tools/check-bundle-delta.ts). Без origin/main (чистый
+ * клон с одной веткой, worktree без remote-ссылки, shallow clone) гейт HEAD
+ * базой не делает: сравнение HEAD с самим собой печатает зелёное на любом
+ * breaking change (e48). Базу HEAD называет только тот, кто создал это
+ * состояние намеренно, — явным OPENAPI_COMPAT_ALLOW_HEAD_BASE=1; ставит его
+ * одна канарейка копии шаблона (tools/run-template-copy-canary.ts).
  *
  *   node scripts/openapi-compat.ts [--base <ref>]
  */
@@ -673,8 +678,11 @@ function main(): void {
   }
 
   // База: флаг → TURBO_SCM_BASE (CI передаёт base.sha PR) → merge-base с main.
+  // Базы нет — красный: откат к HEAD сравнивал бы HEAD с самим собой, и любой
+  // прогон без origin/main получал зелёное на breaking change (e48).
   const envBase = process.env['TURBO_SCM_BASE'];
   let baseRef = flagBase ?? (envBase !== undefined && envBase !== '' ? envBase : undefined);
+  let headBaseAllowed = false;
   if (baseRef !== undefined) {
     const verified = git(['rev-parse', '--verify', `${baseRef}^{commit}`]);
     if (verified.status !== 0) {
@@ -687,19 +695,31 @@ function main(): void {
     const mergeBase = git(['merge-base', 'HEAD', 'origin/main']);
     if (mergeBase.status === 0) {
       baseRef = mergeBase.output.trim().split('\n').at(-1) ?? '';
-    } else {
-      // Копия шаблона (канарейка d8.3) — git без origin: сравнить не с чем,
-      // вся спека из истории копии. База = HEAD: несовместимые изменения
-      // внутри копии невозможны по построению (копия стартует с зелёного).
+    } else if (process.env['OPENAPI_COMPAT_ALLOW_HEAD_BASE'] === '1') {
+      // Явное разрешение — только копия шаблона (канарейка d8.3): репозиторий
+      // без origin, вся спека из его истории, несовместимые изменения внутри
+      // копии невозможны по построению (копия стартует с зелёного).
       const head = git(['rev-parse', '--verify', 'HEAD^{commit}']);
       if (head.status !== 0) {
         fail([
-          'openapi-compat: база не определена: ни merge-base с origin/main, ни HEAD.',
-          '  Выполни git fetch origin main или передай --base <ref> (в CI base приходит в TURBO_SCM_BASE).',
+          'openapi-compat: база не определена: разрешена база HEAD (OPENAPI_COMPAT_ALLOW_HEAD_BASE=1), но HEAD нет — в репозитории нет коммитов.',
+          '  Сделай первый коммит или передай --base <ref>.',
         ]);
       }
       baseRef = head.output.trim().split('\n').at(-1) ?? '';
+      headBaseAllowed = true;
+    } else {
+      fail([
+        'openapi-compat: база не определена: нет ни --base <ref>, ни TURBO_SCM_BASE, ни merge-base с origin/main.',
+        '  Выполни git fetch origin main или передай --base <ref> (в CI база приходит в TURBO_SCM_BASE).',
+        '  HEAD базой гейт не делает: сравнение HEAD с самим собой печатает зелёное на любом breaking change.',
+      ]);
     }
+  }
+  if (headBaseAllowed) {
+    console.log(
+      `openapi-compat: база — HEAD по явному разрешению (OPENAPI_COMPAT_ALLOW_HEAD_BASE=1): контракт сравнивается с самим собой, breaking changes не проверяются`,
+    );
   }
 
   const shown = git(['show', `${baseRef}:${specRelative}`]);
