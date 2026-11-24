@@ -113,10 +113,12 @@ export const CANARIES: GateCanary[] = [
       ),
   },
   {
+    // e47: expect — имя правила, а не зонда: паттерн /evil/ матчил путь пробного
+    // файла и не отличал no-cross-feature-imports от любого другого падения на нём.
     name: 'межфичевый импорт',
     steps: 'boundaries',
     failedStep: 'boundaries',
-    expect: /evil/,
+    expect: /no-cross-feature-imports/,
     apply: (root) =>
       write(
         root,
@@ -185,6 +187,96 @@ export const CANARIES: GateCanary[] = [
         root,
         'packages/ui/src/evil-hono-probe.ts',
         "import { Hono } from '../../../node_modules/.pnpm/node_modules/hono/dist/index.js';\n\nexport const evil = () => new Hono();\n",
+      ),
+  },
+  // e47: канарейки остальных правил границ — покрытие по правилам, а не по шагу
+  // (инвариант «правило → канарейка» — в tools/test/gates-canary.test.ts).
+  {
+    // Оба модуля лежат в корне apps/api/src: правило
+    // api-domain-independent-of-transport смотрит только на подкаталоги src/.
+    name: 'цикл импортов',
+    steps: 'boundaries',
+    failedStep: 'boundaries',
+    expect: /no-circular/,
+    apply: (root) => {
+      write(
+        root,
+        'apps/api/src/evil-cycle-a.ts',
+        "import { evilB } from './evil-cycle-b.ts';\n\nexport const evilA = (): number => evilB;\n",
+      );
+      write(
+        root,
+        'apps/api/src/evil-cycle-b.ts',
+        "import { evilA } from './evil-cycle-a.ts';\n\nexport const evilB = (): number => evilA;\n",
+      );
+    },
+  },
+  {
+    name: 'пакет импортирует приложение',
+    steps: 'boundaries',
+    failedStep: 'boundaries',
+    expect: /packages-not-to-apps/,
+    apply: (root) =>
+      write(
+        root,
+        'packages/ui/src/evil-apps-probe.ts',
+        "import { apiBaseUrl } from '../../../apps/web/src/lib/env.ts';\n\nexport const evil = apiBaseUrl;\n",
+      ),
+  },
+  {
+    // Приложения общаются только через @repo/contracts.
+    name: 'приложение импортирует приложение',
+    steps: 'boundaries',
+    failedStep: 'boundaries',
+    expect: /no-app-to-app/,
+    apply: (root) =>
+      write(
+        root,
+        'apps/api/src/evil-app-probe.ts',
+        "import { apiBaseUrl } from '../../web/src/lib/env.ts';\n\nexport const evil = apiBaseUrl;\n",
+      ),
+  },
+  {
+    name: 'e2e импортирует код приложения',
+    steps: 'boundaries',
+    failedStep: 'boundaries',
+    expect: /e2e-black-box/,
+    apply: (root) =>
+      write(
+        root,
+        'e2e/evil-black-box-probe.spec.ts',
+        "import { apiBaseUrl } from '../apps/web/src/lib/env.ts';\n\nexport const evil = apiBaseUrl;\n",
+      ),
+  },
+  {
+    // Опечатка в пути, переименованный или удалённый файл.
+    name: 'неразрешимый импорт',
+    steps: 'boundaries',
+    failedStep: 'boundaries',
+    expect: /not-to-unresolvable/,
+    apply: (root) =>
+      write(
+        root,
+        'apps/api/src/evil-unresolvable-probe.ts',
+        "import { evil } from './evil-does-not-exist.ts';\n\nexport const probe = evil;\n",
+      ),
+  },
+  {
+    // Пакет импортируется в обход exports (architecture.md, 2.1). Ожидание —
+    // not-to-unresolvable, а не no-deep-package-imports: то правило на текущем
+    // дереве недостижимо (причина — BOUNDARIES_RULE_CANARY_EXEMPT в
+    // gates-canary.test) — подпуть вне exports-карты не разрешается. Канарейка
+    // страхует закон: открой в exports подстановку подпутей — импорт разрешится,
+    // шаг останется зелёным, и канарейка скажет «НЕ УПАЛ».
+    name: 'глубокий импорт пакета',
+    steps: 'boundaries',
+    failedStep: 'boundaries',
+    expect: /not-to-unresolvable/,
+    apply: (root) =>
+      write(
+        root,
+        'apps/api/src/evil-deep-probe.ts',
+        "import { taskSchema } from '@repo/contracts/src/evil-deep-target';\n\nexport const evil = taskSchema;\n",
       ),
   },
   {
