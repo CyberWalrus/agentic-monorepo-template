@@ -31,9 +31,7 @@ export function TasksPage({ tasks, onCreate, onToggle }: TasksPageProps) {
     <main className={styles['page']} aria-disabled={interactive ? undefined : true}>
       <header className={styles['header']}>
         <h1 className={styles['title']}>Tasks</h1>
-        <p className={styles['summary']} data-testid="tasks-summary">
-          {formatSummary(summarizeTasks(tasks))}
-        </p>
+        <p className={styles['summary']}>{formatSummary(summarizeTasks(tasks))}</p>
       </header>
       <CreateTaskForm onCreate={onCreate} disabled={!interactive} />
       {interactive ? null : (

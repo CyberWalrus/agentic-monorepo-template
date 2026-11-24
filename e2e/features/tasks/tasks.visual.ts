@@ -20,7 +20,7 @@ test.describe('tasks page', () => {
   test('tasks page with seeded data', async ({ page, seedTasks, workspace }) => {
     await seedTasks(makeTasks(5, workspace));
     await openHydrated(page);
-    await expect(page.getByTestId('task-item')).toHaveCount(5);
+    await expect(page.getByRole('list', { name: 'Tasks' }).getByRole('listitem')).toHaveCount(5);
 
     await expect(page).toHaveScreenshot('tasks-page.webp', { fullPage: true });
   });
