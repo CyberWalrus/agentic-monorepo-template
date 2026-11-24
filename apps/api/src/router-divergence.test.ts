@@ -98,4 +98,46 @@ describe('router divergence from contract', () => {
       expect(anotherWorkspace).toEqual(unknownId);
     });
   });
+
+  // e57: у public-процедур 403 не возникает — проверять владельца некому,
+  // мидлварь их пропускает. FORBIDDEN в роутере объявлен ровно у remove.
+  describe('public procedures never answer FORBIDDEN', () => {
+    it('declares FORBIDDEN exactly on the procedures that check access', () => {
+      const mismatched: string[] = [];
+
+      for (const { path, procedure } of collectProcedures(router)) {
+        const checksAccess = accessPolicyFromMeta(procedure['~orpc'].meta)?.type !== 'public';
+        const declaresForbidden = procedure['~orpc'].errorMap?.['FORBIDDEN'] !== undefined;
+        if (checksAccess !== declaresForbidden) {
+          mismatched.push(
+            `${path.join('.')}: ${checksAccess ? 'checks access, FORBIDDEN not declared' : 'public procedure declares FORBIDDEN'}`,
+          );
+        }
+      }
+
+      expect(
+        mismatched,
+        'FORBIDDEN must be declared exactly by procedures that check access',
+      ).toEqual([]);
+    });
+
+    it('serves an anonymous actor on list, create and toggle', async () => {
+      const context: AppContext = {
+        tasks: new InMemoryTaskRepository(),
+        actor: null,
+        ownerOf: async () => null,
+        workspaceId: null,
+      };
+      const list = createProcedureClient(router.tasks.list, { context });
+      const create = createProcedureClient(router.tasks.create, { context });
+      const toggle = createProcedureClient(router.tasks.toggle, { context });
+
+      await expect(list(undefined)).resolves.toEqual([]);
+      const created = await create({ title: 'Anonymous task' });
+      await expect(toggle({ id: created.id })).resolves.toMatchObject({
+        id: created.id,
+        completed: true,
+      });
+    });
+  });
 });

@@ -1,7 +1,7 @@
 import { oc } from '@orpc/contract';
 import * as z from 'zod';
 
-import { commonErrors } from './errors.ts';
+import { accessErrors, commonErrors } from './errors.ts';
 
 const PublicAccessPolicySchema = z.strictObject({ type: z.literal('public') });
 const OwnerAccessPolicySchema = z.strictObject({ type: z.literal('owner') });
@@ -24,10 +24,27 @@ export const AccessPolicySchema = z.discriminatedUnion('type', [
 type AccessPolicy = z.infer<typeof AccessPolicySchema>;
 
 /**
- * Строитель контракта с типизированной политикой доступа: каждая процедура
+ * Основа контракта с типизированной политикой доступа: каждая процедура
  * объявляет `.meta({ access })`, присутствие проверяет access-policy.test.ts.
- * Общие ошибки таксономии (C4.1) наследуются всеми процедурами из каталога
- * errors.ts — единственного источника текстов: FORBIDDEN бросает мидлварь
- * авторизации, INTERNAL_SERVER_ERROR — механизм oRPC для непойманного.
+ * Общие ошибки таксономии (C4.1) наследуются из каталога errors.ts —
+ * единственного источника текстов: INTERNAL_SERVER_ERROR бросает механизм
+ * oRPC для непойманного.
  */
-export const ocAccess = oc.$meta<{ access?: AccessPolicy }>({}).errors(commonErrors);
+const ocProcedure = oc.$meta<{ access?: AccessPolicy }>({});
+
+/**
+ * Public-процедуры: проверку доступа мидлварь не выполняет, FORBIDDEN бросать
+ * некому, поэтому контракт его не объявляет — описывается только достижимое
+ * (e57, ADR 0024). Обработчик public-процедуры не бросит FORBIDDEN через
+ * `errors`: конструктор процедуры строится из объявленных ей ошибок.
+ */
+export const ocPublic = ocProcedure.errors(commonErrors);
+
+/**
+ * Процедуры с проверкой доступа (owner, admin): мидлварь авторизации
+ * отказывает FORBIDDEN до доменной логики, поэтому ошибка объявлена и
+ * типизирована — обработчик бросает её через `errors.FORBIDDEN()`.
+ * Строитель выбирается по политике процедуры: тест errors.test.ts красит
+ * public-процедуру с FORBIDDEN и процедуру с проверкой доступа без него.
+ */
+export const ocAccess = ocProcedure.errors(accessErrors);
