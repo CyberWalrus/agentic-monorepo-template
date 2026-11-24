@@ -594,6 +594,47 @@ it('git rm на побочной ветке, возврат и merge --ff-only �
   }
 });
 
+/**
+ * Граница правила — публикация (решение оркестратора от 24.11): коммит, состоящий хотя бы в одной
+ * remote-tracking ссылке, — удалённая история. Изменение защищённого пути уходит на удалённый
+ * отдельным видимым действием (`git push`) — его видят ревью и CI. Тем же путём проходит и
+ * отмытый commit сессии: в копии это не различимое событие, ограничение принято сознательно.
+ */
+it('публикация — граница правила: запушенная побочная ветка с изменением защищённого файла, влитая локально, — удалённая история: снимок перебазируется', () => {
+  const sessionId = uniqueSession();
+  const startHead = headSha();
+  startup(sessionId);
+  try {
+    agentRuns(
+      `git checkout -q -b side && perl -pi -e 's/100/200/' pin.json && ` +
+        'git commit -qam "gate change from a labeled PR" && git push -q origin side && ' +
+        'git checkout -q main && git merge -q --ff-only side',
+    );
+    expect(headSha(), 'the merge did move HEAD').not.toBe(startHead);
+    expect(reflogAction(), 'reflog explains the movement as a branch movement').toMatch(
+      /^merge side: Fast-forward$/,
+    );
+    const result = postToolUse(sessionId);
+    expectOk(result, 'protect-result');
+    expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'published change stays').toBe(
+      '{"budget": 200}\n',
+    );
+    expect(snapshottedHash(sessionId, 'pin.json'), 'snapshot rebased to the new content').toBe(
+      contentSha('{"budget": 200}\n'),
+    );
+    expect(result.stdout, 'rebase is reported').toMatch(/rebas/i);
+  } finally {
+    git(['reset', '-q', '--hard', startHead]);
+    for (const args of [
+      ['branch', '-D', 'side'],
+      ['update-ref', '-d', 'refs/remotes/origin/side'],
+    ]) {
+      spawnSync('git', args, { cwd: fixture });
+    }
+    spawnSync('git', ['branch', '-D', 'side'], { cwd: remoteDir });
+  }
+});
+
 it.each(['fast-forward', 'merge-коммит'])(
   'честный pull (%s) с изменением защищённого файла после commit-а открытых путей — перебазирует снимок',
   (kind) => {
@@ -617,6 +658,39 @@ it.each(['fast-forward', 'merge-коммит'])(
       } else {
         agentRuns('git pull -q --no-rebase --no-edit origin main');
       }
+      const result = postToolUse(sessionId);
+      expectOk(result, 'protect-result');
+      expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'legit change stays').toBe(
+        '{"budget": 300}\n',
+      );
+      expect(snapshottedHash(sessionId, 'pin.json'), 'snapshot rebased to the new content').toBe(
+        contentSha('{"budget": 300}\n'),
+      );
+      expect(result.stdout, 'rebase is reported').toMatch(/rebas/i);
+    } finally {
+      git(['reset', '-q', '--hard', startHead]);
+    }
+  },
+);
+
+it.each([
+  { name: 'merge-коммит', pull: 'git pull -q --no-rebase --no-edit origin main' },
+  { name: 'rebase', pull: 'git pull -q --rebase origin main' },
+])(
+  'честный pull ($name) с изменением защищённого файла в одной команде с commit-ом открытых путей — перебазирует снимок',
+  ({ pull }) => {
+    const sessionId = uniqueSession();
+    const startHead = headSha();
+    startup(sessionId);
+    try {
+      // origin уходит вперёд, пока в фикстуре работают: fast-forward невозможен
+      gitIn(remoteDir, ['fetch', '--quiet', 'origin', 'main']);
+      gitIn(remoteDir, ['reset', '--quiet', '--hard', 'FETCH_HEAD']);
+      writeFileSync(join(remoteDir, 'pin.json'), '{"budget": 300}\n');
+      gitIn(remoteDir, ['commit', '--quiet', '-am', 'legitimate gate change from a labeled PR']);
+      // commit и pull — один вызов инструмента: проверки между ними нет
+      agentRuns(`git commit -q --allow-empty -m "work on open paths" && ${pull}`);
+      expect(headSha(), 'the pull did move HEAD').not.toBe(startHead);
       const result = postToolUse(sessionId);
       expectOk(result, 'protect-result');
       expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'legit change stays').toBe(

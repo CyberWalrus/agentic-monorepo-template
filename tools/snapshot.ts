@@ -277,46 +277,18 @@ function isBlobList(value: unknown): value is string[] {
 }
 
 /**
- * Движение HEAD с `recordedHead` — ветку двигали (pull, merge, rebase, switch), а не
- * commit, созданный в этом worktree. Обязательное условие перебазировки: совпадение
- * содержимого с blob HEAD можно создать командой — записать файл и закоммитить одним
- * вызовом, — а источник движения показывает только reflog HEAD. Записи от новейшей до
- * той, что привела на `recordedHead`, обязаны объяснять движение и не быть действием
- * `commit` (включая amend и merge-commit после конфликта). Нет reflog, нет записи о
- * `recordedHead`, действие пусто (`git update-ref` без сообщения) или это commit —
- * движение не доказано, значит это не pull: откат.
+ * HEAD двигался с прошлой проверки — обязательное условие перебазировки: без движения
+ * ветки совпадение содержимого с blob HEAD создала команда (записать файл и закоммитить
+ * одним вызовом). Само по себе движение ничего не доказывает: commit двигает HEAD так же,
+ * как pull. Происхождение содержимого решает `writtenLocally`.
  *
- * Действие записи — не доказательство происхождения содержимого: его задаёт та же команда
- * (`GIT_REFLOG_ACTION=pull git commit` пишет «pull: Fast-forward»), а окно до `recordedHead`
- * закрывает возврат HEAD на побочной ветке. Поэтому решает `writtenLocally`.
+ * По reflog HEAD движение не классифицируется: действие записи задаёт та же команда
+ * (`GIT_REFLOG_ACTION=pull git commit` пишет «pull: Fast-forward»), а честный pull
+ * в одной команде с локальным commit-ом открытых путей — merge-коммит или rebase —
+ * оставляет в окне с прошлой проверки действие `commit` и отклонялся как подмена.
  */
-export function isLegitMovement(
-  projectDir: string,
-  recordedHead: string,
-  currentHead: string,
-): boolean {
-  if (recordedHead === '' || currentHead === '' || currentHead === recordedHead) {
-    return false;
-  }
-  const result = spawnSync('git', ['reflog', 'show', 'HEAD', '--format=%H %gs'], {
-    cwd: projectDir,
-    encoding: 'utf8',
-  });
-  if (result.status !== 0) {
-    return false;
-  }
-  for (const line of result.stdout.split('\n')) {
-    const separator = line.indexOf(' ');
-    const sha = separator === -1 ? line : line.slice(0, separator);
-    const action = separator === -1 ? '' : line.slice(separator + 1);
-    if (sha === recordedHead) {
-      return true;
-    }
-    if (action === '' || /^commit\b/.test(action)) {
-      return false;
-    }
-  }
-  return false;
+function headMoved(recordedHead: string, currentHead: string): boolean {
+  return recordedHead !== '' && currentHead !== '' && currentHead !== recordedHead;
 }
 
 /**
@@ -415,8 +387,9 @@ function writtenLocally(projectDir: string, head: string, path: string, state: s
 /**
  * Открытый путь (режим обслуживания по областям, ADR 0009) не откатывается. Изменение,
  * уже попавшее в HEAD — оператор закоммитил его при включённом режиме, — принимается в
- * снимок сразу: после выключения режима движение HEAD уже не отличить от commit-а командой.
- * Незакоммиченное изменение снимок не принимает — после выключения режима оно откатится.
+ * снимок сразу: после выключения режима локальный commit — не удалённая история, и проверка
+ * откатит изменение в рабочем дереве. Незакоммиченное изменение снимок не принимает — после
+ * выключения режима оно откатится.
  */
 function adoptCommitted(
   projectDir: string,
@@ -505,10 +478,7 @@ export function reconcile(projectDir: string, sessionId: string): ReconcileOutco
     }
   }
 
-  // Движение HEAD считается один раз и только когда найден дрейф.
-  let movement: boolean | undefined;
-  const legitMovement = (): boolean =>
-    (movement ??= isLegitMovement(projectDir, manifest.head, currentHead));
+  const branchMoved = headMoved(manifest.head, currentHead);
   /** Откат одного файла; строка — сбой окружения, проверка закрывается громко. */
   const rollback = (path: string, entry: SnapshotEntry): string | null => {
     try {
@@ -532,9 +502,9 @@ export function reconcile(projectDir: string, sessionId: string): ReconcileOutco
     }
     const absolute = join(projectDir, path);
     if (!existsSync(absolute)) {
-      // «Исчез вместе с HEAD» — только если HEAD двигался веткой, а удаление принёс коммит из
+      // «Исчез вместе с HEAD» — только если HEAD двигался, а удаление принёс коммит из
       // удалённой истории: `git rm` с commit-ом на побочной ветке убирает файл из HEAD так же.
-      if (tree.has(path) || !legitMovement() || writtenLocally(projectDir, currentHead, path, '')) {
+      if (tree.has(path) || !branchMoved || writtenLocally(projectDir, currentHead, path, '')) {
         const failure = rollback(path, entry);
         if (failure !== null) {
           return { kind: 'broken', detail: failure };
@@ -551,17 +521,16 @@ export function reconcile(projectDir: string, sessionId: string): ReconcileOutco
       continue;
     }
     // Снимок перебазируется только на содержимое, которое принесло движение ветки:
-    // HEAD двигался с прошлой проверки не commit-ом этого worktree, файл равен blob HEAD,
-    // это не тот blob, что проверка уже отвергла, и записал его коммит из удалённой истории
-    // (не локальный — writtenLocally). Иначе изменение сделано командой — отменяется
-    // возвратом к снимку.
+    // HEAD двигался с прошлой проверки, файл равен blob HEAD, это не тот blob, что проверка
+    // уже отвергла, и записал его коммит из удалённой истории (не локальный — writtenLocally).
+    // Иначе изменение сделано командой — отменяется возвратом к снимку.
     const blob = git(projectDir, ['hash-object', '--', path]).trim();
     const committed = blob !== '' && blob === tree.get(path);
     const rejected = (entry.rejected ?? []).includes(blob);
     if (
       committed &&
       !rejected &&
-      legitMovement() &&
+      branchMoved &&
       !writtenLocally(projectDir, currentHead, path, blob)
     ) {
       entry.hash = hash;
