@@ -3,15 +3,25 @@
  * стартовал» (синтетическая фикстура escaped-defect 2026-11-21), красный
  * прогон на head SHA, устаревший schedule и не даёт ложных красных на
  * paths-фильтрах и молодых workflow; fail-loud без данных API (З11); проводка
- * nightly-джобы, deny/KNOWN_GATES и ссылки реестра escaped-defects на месте.
+ * хост-воркфлоу, deny/KNOWN_GATES и ссылки реестра escaped-defects на месте.
+ *
+ * Канарейка e39 (самоссылка): чекер не судит о собственном хосте — красный
+ * прошлый прогон хоста не нарушение, красный прогон любого иного workflow —
+ * нарушение, как прежде; хост — ровно один workflow, и это SELF_HOST_WORKFLOW
+ * (иначе петля «красная ночь красит ночи» возвращается на новом месте).
  */
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, expect, it, vi } from 'vitest';
 
-import { parseWorkflowTriggers, scopeOfWork } from '../check-workflow-health.ts';
+import {
+  SELF_HOST_WORKFLOW,
+  loadScope,
+  parseWorkflowTriggers,
+  scopeOfWork,
+} from '../check-workflow-health.ts';
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -128,6 +138,25 @@ const SCHEDULE_WF = [
   '  job1:',
   '    runs-on: ubuntu-latest',
 ].join('\n');
+/** Собственный хост чекера (e39): push на main, schedule и dispatch. */
+const HEALTH_WF = [
+  'name: Workflow health',
+  'on:',
+  '  push:',
+  '    branches: [main]',
+  '  schedule:',
+  "    - cron: '40 4 * * *'",
+  '  workflow_dispatch:',
+  '',
+  'jobs:',
+  '  workflow-health:',
+  '    runs-on: ubuntu-latest',
+].join('\n');
+/**
+ * Путь хоста литералом: фикстура остаётся валидной и на чекере без константы —
+ * до правки тест красный по причине самоссылки, а не fail-loud фикстуры.
+ */
+const HOST_PATH = '.github/workflows/workflow-health.yml';
 const PR_ONLY = [
   'name: Preview',
   'on:',
@@ -392,6 +421,93 @@ it('fail-loud (З11): фикстуры API нет — exit 2, а не зелён
   expect(run.stderr).toContain('fail-loud');
 });
 
+// --- Самоссылка (e39) -----------------------------------------------------------
+
+it('самоссылка (e39): красный прошлый schedule-прогон собственного хоста — не нарушение (критерий приёмки e39)', () => {
+  // Ночь N чекер красил сам себя; с тех пор остальные workflow зелёные. Прошлая
+  // ночь хоста красна только поэтому — для хоста это след собственного
+  // вердикта, а не «персистентно красный schedule». Хост вне области сверки.
+  const tree = setupTree('self-host-red-past', {
+    workflows: { 'nightly.yml': SCHEDULE_WF, 'workflow-health.yml': HEALTH_WF },
+    apiWorkflows: [
+      { id: 2, path: '.github/workflows/nightly.yml', created_at: iso(30) },
+      { id: 3, path: HOST_PATH, created_at: iso(30) },
+    ],
+    headRuns: [runOf(3)],
+    scheduleRuns: [
+      runOf(2, { event: 'schedule', created_at: iso(1), run_started_at: iso(1) }),
+      runOf(3, {
+        event: 'schedule',
+        conclusion: 'failure',
+        created_at: iso(1),
+        run_started_at: iso(1),
+      }),
+    ],
+  });
+  const run = runChecker(tree.api);
+  expect(run.status).toBe(0);
+  expect(run.stderr).not.toContain(SELF_HOST_WORKFLOW);
+  expect(run.stdout).toContain(SELF_HOST_WORKFLOW);
+  expect(run.stdout).toContain('собственный хост');
+});
+
+it('самоссылка (e39): красный schedule-прогон любого иного workflow — нарушение, как прежде', () => {
+  const tree = setupTree('self-host-other-red', {
+    workflows: { 'nightly.yml': SCHEDULE_WF, 'workflow-health.yml': HEALTH_WF },
+    apiWorkflows: [
+      { id: 2, path: '.github/workflows/nightly.yml', created_at: iso(30) },
+      { id: 3, path: HOST_PATH, created_at: iso(30) },
+    ],
+    headRuns: [runOf(3)],
+    scheduleRuns: [
+      runOf(2, {
+        event: 'schedule',
+        conclusion: 'failure',
+        created_at: iso(1),
+        run_started_at: iso(1),
+      }),
+      runOf(3, { event: 'schedule', created_at: iso(1), run_started_at: iso(1) }),
+    ],
+  });
+  const run = runChecker(tree.api);
+  expect(run.status).toBe(1);
+  expect(run.stderr).toContain('.github/workflows/nightly.yml: красный schedule-прогон');
+  expect(run.stderr).not.toContain(SELF_HOST_WORKFLOW);
+});
+
+it('push-прогон чекера (--own-event push): сосед на head SHA ещё не создан — «в процессе», не «не стартовал» (e39)', () => {
+  // Все прогоны на head SHA создаёт тот же push, что и прогон чекера: в момент
+  // проверки сосед может быть ещё не создан. Красить это — ложный шум на каждом
+  // мерже. В schedule- и dispatch-прогоне соседей создаёт не то же событие:
+  // отсутствие прогонов — класс «не стартовал» (escaped-defect 2026-11-21).
+  const tree = setupTree('push-race', {
+    workflows: { 'ci.yml': CI_PUSH },
+    apiWorkflows: [{ id: 1, path: '.github/workflows/ci.yml', created_at: iso(30) }],
+    headRuns: [],
+  });
+  const pushRun = runChecker(tree.api, ['--own-event', 'push']);
+  expect(pushRun.status).toBe(0);
+  expect(pushRun.stdout).toContain('ci.yml — в области, прогон ещё не создан (push-прогон чекера)');
+  for (const ownEvent of ['schedule', 'workflow_dispatch', '']) {
+    const run = runChecker(tree.api, ['--own-event', ownEvent]);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('не стартовал на head SHA');
+  }
+});
+
+it('push-прогон чекера: мгновенно красный сосед на head SHA (startup_failure) — нарушение', () => {
+  // Отступление только для «прогонов нет»; завершённый красный прогон чекер
+  // видит и на push — сигнал о сломанном main приходит в день поломки.
+  const tree = setupTree('push-startup-failure', {
+    workflows: { 'ci.yml': CI_PUSH },
+    apiWorkflows: [{ id: 1, path: '.github/workflows/ci.yml', created_at: iso(30) }],
+    headRuns: [runOf(1, { conclusion: 'startup_failure' })],
+  });
+  const run = runChecker(tree.api, ['--own-event', 'push']);
+  expect(run.status).toBe(1);
+  expect(run.stderr).toContain('conclusion=startup_failure');
+});
+
 it('парсер триггеров и область на реальных workflow репозитория', () => {
   const wfDir = join(repoDir, '.github', 'workflows');
   const scopeOf = (name: string) => {
@@ -412,6 +528,10 @@ it('парсер триггеров и область на реальных work
   const security = scopeOf('security.yml');
   expect(security?.pushHeadSha).toBe(true);
   expect(security?.schedule).toBe(true);
+  // Хост чекера (e39): push на main + schedule.
+  const health = scopeOf('workflow-health.yml');
+  expect(health?.pushHeadSha).toBe(true);
+  expect(health?.schedule).toBe(true);
   // Только schedule.
   const nightly = scopeOf('nightly.yml');
   expect(nightly?.schedule).toBe(true);
@@ -424,14 +544,40 @@ it('парсер триггеров и область на реальных work
   expect(scopeOf('visual-approve.yml')).toBeNull();
 });
 
-it('проводка: nightly-джоба, deny/KNOWN_GATES и ссылка escaped-defects на e26', () => {
-  const nightly = readFileSync(join(repoDir, '.github', 'workflows', 'nightly.yml'), 'utf8');
-  expect(nightly).toContain('workflow-health');
-  expect(nightly).toContain('node tools/check-workflow-health.ts');
-  expect(nightly).toContain('GH_TOKEN');
-  // Красный прогон заводит issue через общий job report.
-  const needsBlock = nightly.slice(nightly.indexOf('name: report failure'));
-  expect(needsBlock).toContain('workflow-health');
+it('область на реальных workflow: собственный хост вне области сверки (e39)', () => {
+  const wfDir = join(repoDir, '.github', 'workflows');
+  const { scope, selfHosted } = loadScope(wfDir);
+  expect(selfHosted).toEqual([SELF_HOST_WORKFLOW]);
+  const files = scope.map((entry) => entry.file);
+  expect(files).not.toContain(SELF_HOST_WORKFLOW);
+  expect(files).toContain('.github/workflows/nightly.yml');
+});
+
+it('проводка (e39): хост чекера — ровно workflow-health.yml, nightly его больше не содержит', () => {
+  // Шаг переедет в другой файл, а SELF_HOST_WORKFLOW останется прежним — петля
+  // «красная ночь красит ночи» вернётся на новом месте.
+  const wfDir = join(repoDir, '.github', 'workflows');
+  const hosts = readdirSync(wfDir)
+    .filter((name) =>
+      readFileSync(join(wfDir, name), 'utf8').includes('node tools/check-workflow-health.ts'),
+    )
+    .toSorted();
+  expect(hosts).toEqual([SELF_HOST_WORKFLOW.slice('.github/workflows/'.length)]);
+
+  const nightly = readFileSync(join(wfDir, 'nightly.yml'), 'utf8');
+  expect(nightly).not.toContain('node tools/check-workflow-health.ts');
+  const nightlyReport = nightly.slice(nightly.indexOf('name: report failure'));
+  expect(nightlyReport).not.toContain('workflow-health');
+
+  const health = readFileSync(join(repoDir, SELF_HOST_WORKFLOW), 'utf8');
+  expect(health).toContain('GH_TOKEN');
+  expect(health).toContain('OWN_EVENT: ${{ github.event_name }}');
+  expect(health).toContain('--own-event "$OWN_EVENT"');
+  // Красный прогон заводит issue собственным job report: вне required checks
+  // молчаливый красный — тот же класс escaped-defect, что закрыл e26.
+  const needsBlock = health.slice(health.indexOf('name: report failure'));
+  expect(needsBlock).toContain('gh issue create');
+  expect(health).toContain('needs: [workflow-health]');
 
   const protectedRaw: unknown = JSON.parse(
     readFileSync(join(repoDir, 'tools', 'protected-paths.json'), 'utf8'),
@@ -450,6 +596,9 @@ it('проводка: nightly-джоба, deny/KNOWN_GATES и ссылка escap
     }
     return deny.filter((entry): entry is string => typeof entry === 'string');
   };
+  // Новый файл гейт-контура закрыт blanket-записью `.github/**` — отдельной
+  // записи не нужно; чекер в deny, как и прежде.
+  expect(denyList().includes('.github/**')).toBe(true);
   expect(denyList().includes('tools/check-workflow-health.ts')).toBe(true);
 
   const toolClass = readFileSync(join(repoDir, 'tools', 'check-tool-class.ts'), 'utf8');
@@ -457,4 +606,5 @@ it('проводка: nightly-джоба, deny/KNOWN_GATES и ссылка escap
 
   const escaped = readFileSync(join(repoDir, 'docs', 'escaped-defects.md'), 'utf8');
   expect(escaped).toMatch(/2026-11-21.*e26/);
+  expect(escaped).toMatch(/2026-11-24.*e39/);
 });
