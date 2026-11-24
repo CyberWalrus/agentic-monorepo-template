@@ -115,6 +115,15 @@ function headSha(): string {
   return result.stdout.trim();
 }
 
+/** Действие новейшей записи reflog HEAD — так его называет сам git, без догадок о формате. */
+function reflogAction(): string {
+  const result = spawnSync('git', ['reflog', '-1', '--format=%gs'], {
+    cwd: fixture,
+    encoding: 'utf8',
+  });
+  return (result.stdout ?? '').trim();
+}
+
 function uniqueSession(): string {
   sessionCounter += 1;
   return `sess-${sessionCounter}`;
@@ -501,6 +510,127 @@ it('merge над отвергнутым commit-ом не выдаёт его с�
     spawnSync('git', ['branch', '-D', 'carrier'], { cwd: fixture });
   }
 });
+
+/**
+ * Подмена на побочной ветке: к возврату на main HEAD снова равен HEAD на старте сессии, окно
+ * reflog с прошлой проверки закрывается записью возврата, а коммит с подменой остаётся старше её.
+ */
+const SIDE_BRANCH_TAMPER =
+  "git checkout -q -b side && perl -pi -e 's/100/0/' pin.json && " +
+  'git commit -qam "weaken the gate" && git checkout -q main && ';
+
+it.each([
+  {
+    name: 'merge --ff-only',
+    action: `${SIDE_BRANCH_TAMPER}git merge -q --ff-only side`,
+    movement: /^merge side: Fast-forward$/,
+  },
+  {
+    name: 'cherry-pick',
+    action: `${SIDE_BRANCH_TAMPER}git cherry-pick side`,
+    movement: /^cherry-pick: /,
+  },
+  {
+    name: 'reset --hard',
+    action: `${SIDE_BRANCH_TAMPER}git reset -q --hard side`,
+    movement: /^reset: moving to side$/,
+  },
+  {
+    // Сообщение записи reflog задаёт переменная окружения: «pull» пишет обычный git commit
+    name: 'commit с записью reflog «pull» через GIT_REFLOG_ACTION',
+    action:
+      'perl -pi -e \'s/100/0/\' pin.json && GIT_REFLOG_ACTION=pull git commit -qam "Fast-forward"',
+    movement: /^pull: Fast-forward$/,
+  },
+])(
+  'коммит сессии с подменой, доставленный движением ветки ($name) — не pull: файл восстановлен, отказ журналируется',
+  ({ action, movement }) => {
+    const sessionId = uniqueSession();
+    const startHead = headSha();
+    const journal = join(fixture, '..', `${basename(fixture)}-denials-${uniqueSession()}.jsonl`);
+    startup(sessionId);
+    try {
+      agentRuns(action);
+      expect(headSha(), 'the command did commit: HEAD moved').not.toBe(startHead);
+      expect(reflogAction(), 'reflog explains the movement as a branch movement').toMatch(movement);
+      const result = postToolUse(sessionId, { DENIAL_JOURNAL_PATH: journal });
+      expectOk(result, 'protect-result');
+      expect(result.stdout, 'the agent is told what happened').toContain('pin.json');
+      expect(result.stdout, 'the cancellation is explained, not a rebase').toMatch(/CANCELLED/);
+      expect(result.stdout, 'not reported as a rebase').not.toMatch(/rebas/i);
+      expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'file is restored').toBe(PIN);
+      expect(denials(journal).at(-1), 'the denial is journaled').toMatchObject({
+        gate: 'protect-result',
+        reason: 'protected-file-restored',
+      });
+    } finally {
+      git(['reset', '-q', '--hard', startHead]);
+      spawnSync('git', ['branch', '-D', 'side'], { cwd: fixture });
+    }
+  },
+);
+
+it('git rm на побочной ветке, возврат и merge --ff-only — не «исчез вместе с HEAD»: файл восстановлен', () => {
+  const sessionId = uniqueSession();
+  const startHead = headSha();
+  startup(sessionId);
+  try {
+    agentRuns(
+      'git checkout -q -b side && git rm -q gates/keep.json && git commit -qm "drop the gate" && ' +
+        'git checkout -q main && git merge -q --ff-only side',
+    );
+    expect(reflogAction(), 'reflog explains the movement as a branch movement').toMatch(
+      /^merge side: Fast-forward$/,
+    );
+    const result = postToolUse(sessionId);
+    expectOk(result, 'protect-result');
+    expect(readFileSync(join(fixture, 'gates', 'keep.json'), 'utf8'), 'file is restored').toBe(
+      KEEP,
+    );
+    expect(result.stdout, 'the cancellation is explained').toMatch(/CANCELLED/);
+  } finally {
+    git(['reset', '-q', '--hard', startHead]);
+    spawnSync('git', ['branch', '-D', 'side'], { cwd: fixture });
+  }
+});
+
+it.each(['fast-forward', 'merge-коммит'])(
+  'честный pull (%s) с изменением защищённого файла после commit-а открытых путей — перебазирует снимок',
+  (kind) => {
+    const sessionId = uniqueSession();
+    const startHead = headSha();
+    startup(sessionId);
+    try {
+      if (kind === 'merge-коммит') {
+        // origin уходит вперёд, пока в фикстуре работают: pull закончится merge-коммитом
+        gitIn(remoteDir, ['fetch', '--quiet', 'origin', 'main']);
+        gitIn(remoteDir, ['reset', '--quiet', '--hard', 'FETCH_HEAD']);
+        writeFileSync(join(remoteDir, 'pin.json'), '{"budget": 300}\n');
+        gitIn(remoteDir, ['commit', '--quiet', '-am', 'legitimate gate change from a labeled PR']);
+      }
+      // обычная работа сессии: локальный commit открытых путей, проверка, затем pull —
+      // другой вызов инструмента
+      agentRuns('git commit -q --allow-empty -m "work on open paths"');
+      expectOk(postToolUse(sessionId), 'protect-result after the local commit');
+      if (kind === 'fast-forward') {
+        pullChange(() => writeFileSync(join(remoteDir, 'pin.json'), '{"budget": 300}\n'));
+      } else {
+        agentRuns('git pull -q --no-rebase --no-edit origin main');
+      }
+      const result = postToolUse(sessionId);
+      expectOk(result, 'protect-result');
+      expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'legit change stays').toBe(
+        '{"budget": 300}\n',
+      );
+      expect(snapshottedHash(sessionId, 'pin.json'), 'snapshot rebased to the new content').toBe(
+        contentSha('{"budget": 300}\n'),
+      );
+      expect(result.stdout, 'rebase is reported').toMatch(/rebas/i);
+    } finally {
+      git(['reset', '-q', '--hard', startHead]);
+    }
+  },
+);
 
 it('файл, исчезнувший вместе с HEAD (честный pull), убирается из снимка, а не воскрешается', () => {
   const sessionId = uniqueSession();

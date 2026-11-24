@@ -285,6 +285,10 @@ function isBlobList(value: unknown): value is string[] {
  * `commit` (включая amend и merge-commit после конфликта). Нет reflog, нет записи о
  * `recordedHead`, действие пусто (`git update-ref` без сообщения) или это commit —
  * движение не доказано, значит это не pull: откат.
+ *
+ * Действие записи — не доказательство происхождения содержимого: его задаёт та же команда
+ * (`GIT_REFLOG_ACTION=pull git commit` пишет «pull: Fast-forward»), а окно до `recordedHead`
+ * закрывает возврат HEAD на побочной ветке. Поэтому решает `writtenLocally`.
  */
 export function isLegitMovement(
   projectDir: string,
@@ -310,6 +314,99 @@ export function isLegitMovement(
     }
     if (action === '' || /^commit\b/.test(action)) {
       return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Состояние `state` (blob или «пути нет») защищённого пути в HEAD записано в этой копии
+ * репозитория, а не принесено из удалённой истории. Вслед за HEAD идём по истории, пока путь
+ * не менялся, до первых коммитов, записавших это состояние относительно всех родителей, и
+ * спрашиваем, состоит ли такой коммит хотя бы в одной remote-tracking ссылке (`refs/remotes`).
+ * Не состоит — состояние создано командой: commit на побочной ветке с возвратом и
+ * `merge --ff-only`, `cherry-pick`, `reset --hard`, commit с записью reflog «pull». Состояние
+ * из удалённой истории записано её коммитом: честный pull, merge или rebase ветки задачи над
+ * ним перебазируются, даже когда в истории есть локальные commit-ы.
+ *
+ * Граница: коммит, отправленный на удалённый (`git push`), — уже удалённая история.
+ */
+function writtenLocally(projectDir: string, head: string, path: string, state: string): boolean {
+  if (path.includes('\n')) {
+    // путь нельзя спросить построчно у cat-file: происхождение не доказано
+    return true;
+  }
+  // Коммиты вне удалённой истории: коммит → его родители. Коммита нет в карте — он из неё.
+  const parents = new Map<string, string[]>();
+  const outside = git(projectDir, ['rev-list', '--parents', 'HEAD', '--not', '--remotes']);
+  for (const line of outside.split('\n')) {
+    const [commit, ...list] = line.split(' ');
+    if (commit !== undefined && commit !== '') {
+      parents.set(commit, list);
+    }
+  }
+  // Состояние пути в каждом коммите карты и его родителях — одним вызовом. О каждом коммите
+  // спрошено дважды: он сам (объект на месте?) и путь в нём. cat-file отвечает по строке на
+  // вопрос и в том же порядке: `<sha> <тип> <размер>` (без повтора вопроса) либо
+  // `<вопрос> missing`.
+  const asked = [head];
+  for (const [commit, list] of parents) {
+    asked.push(commit, ...list);
+  }
+  const result = spawnSync('git', ['cat-file', '--batch-check'], {
+    cwd: projectDir,
+    encoding: 'utf8',
+    input: asked.map((commit) => `${commit}\n${commit}:${path}\n`).join(''),
+  });
+  if (result.error !== undefined || result.status !== 0) {
+    throw new Error(`git cat-file failed: ${result.stderr ?? String(result.error)}`);
+  }
+  const states = new Map<string, string>();
+  const answers = result.stdout.split('\n');
+  asked.forEach((commit, index) => {
+    if (!/^[0-9a-f]{40} commit [0-9]+$/.test(answers[2 * index] ?? '')) {
+      // объекта нет (битый репозиторий) — состояние неизвестно, ниже это отказ
+      return;
+    }
+    const answer = answers[2 * index + 1] ?? '';
+    const entry = /^[0-9a-f]{40} (blob|tree|commit|tag) [0-9]+$/.exec(answer);
+    // файла с содержимым на пути нет: путь удалён, в коммите его нет вовсе или он не файл
+    states.set(commit, entry !== null && entry[1] === 'blob' ? answer.slice(0, 40) : '');
+  });
+  const stateOf = (commit: string): string | undefined => states.get(commit);
+  const pending = [head];
+  const seen = new Set<string>(pending);
+  while (pending.length > 0) {
+    const commit = pending.pop();
+    if (commit === undefined) {
+      break;
+    }
+    const current = stateOf(commit);
+    if (current === undefined) {
+      return true;
+    }
+    const list = parents.get(commit);
+    if (list === undefined) {
+      // коммит вне карты — из удалённой истории: состояние пришло оттуда
+      return false;
+    }
+    let inherited = false;
+    for (const parent of list) {
+      if (stateOf(parent) === current) {
+        if (!parents.has(parent)) {
+          // состояние унаследовано от коммита из удалённой истории
+          return false;
+        }
+        inherited = true;
+        if (!seen.has(parent)) {
+          seen.add(parent);
+          pending.push(parent);
+        }
+      }
+    }
+    if (!inherited && current === state) {
+      // первый по пути коммит, записавший текущее состояние, — вне удалённой истории
+      return true;
     }
   }
   return false;
@@ -435,9 +532,9 @@ export function reconcile(projectDir: string, sessionId: string): ReconcileOutco
     }
     const absolute = join(projectDir, path);
     if (!existsSync(absolute)) {
-      // «Исчез вместе с HEAD» — только если HEAD действительно двигался веткой: commit
-      // после `git rm` убирает файл из HEAD так же, а pull-ом не является.
-      if (tree.has(path) || !legitMovement()) {
+      // «Исчез вместе с HEAD» — только если HEAD двигался веткой, а удаление принёс коммит из
+      // удалённой истории: `git rm` с commit-ом на побочной ветке убирает файл из HEAD так же.
+      if (tree.has(path) || !legitMovement() || writtenLocally(projectDir, currentHead, path, '')) {
         const failure = rollback(path, entry);
         if (failure !== null) {
           return { kind: 'broken', detail: failure };
@@ -454,13 +551,19 @@ export function reconcile(projectDir: string, sessionId: string): ReconcileOutco
       continue;
     }
     // Снимок перебазируется только на содержимое, которое принесло движение ветки:
-    // HEAD двигался с прошлой проверки не commit-ом этого worktree, файл равен blob HEAD
-    // и это не тот blob, что проверка уже отвергла. Иначе изменение сделано командой —
-    // отменяется возвратом к снимку.
+    // HEAD двигался с прошлой проверки не commit-ом этого worktree, файл равен blob HEAD,
+    // это не тот blob, что проверка уже отвергла, и записал его коммит из удалённой истории
+    // (не локальный — writtenLocally). Иначе изменение сделано командой — отменяется
+    // возвратом к снимку.
     const blob = git(projectDir, ['hash-object', '--', path]).trim();
     const committed = blob !== '' && blob === tree.get(path);
     const rejected = (entry.rejected ?? []).includes(blob);
-    if (committed && !rejected && legitMovement()) {
+    if (
+      committed &&
+      !rejected &&
+      legitMovement() &&
+      !writtenLocally(projectDir, currentHead, path, blob)
+    ) {
       entry.hash = hash;
       result.rebased.push(path);
     } else {
