@@ -42,6 +42,16 @@
  * (fast-forward) — если main менял базлайн после её основания, конфликт
  * покажет сам PR, шаг об этом не знает.
  *
+ * Второй остаточный риск (находка ревью e40): push делает github.token, а
+ * события от него не рождают workflow run (как у базлайнов visual, ADR 0015) —
+ * CI (ci.yml) и gate-integrity на новом коммите сами не запустятся,
+ * обязательные checks не появятся, и PR не смержить. Шаг остаётся зелёным:
+ * поднятие опубликовано, повторять его не нужно, — но зелёный вывод обязан
+ * назвать это и действие человека (CI_NOTE): один synchronize от человека
+ * (пустой push, Update branch) либо закрыть и снова открыть PR. То же названо
+ * у PR, созданного github.token. Сам шаг этого не проверяет: вывод следует из
+ * документации платформы, на GitHub не воспроизводился.
+ *
  * Остаточные риски: гейт вызывается через скрипт в package.json, который не
  * защищён — агент может перепривязать `test:count` или подсунуть --baseline
  * на собственный файл без предупреждений (против этого — ревью правок
@@ -231,6 +241,18 @@ const COMMIT_MESSAGE = 'chore: поднятие храповика числа т
 const PR_TITLE = 'chore: поднятие храповика числа тестов (nightly)';
 const PR_BODY =
   'Автоматическое поднятие test-count-baseline.json после зелёного nightly (a10): числовой храповик поднимает автоматика, а не автор PR. Update понижать отказывается — дифф только вверх.';
+// Push делает github.token, а события от него не рождают workflow run (как у
+// базлайнов visual, ADR 0015): на новом коммите обязательные checks (gate,
+// gate-integrity) сами не появятся, и PR не смержить. Поднятие при этом
+// опубликовано — шаг зелёный, но вывод обязан назвать это и действие человека.
+const CI_NOTE = [
+  'CI на новый коммит не запустится: push сделал github.token,',
+  'события от него workflow не рождают, а обязательные checks (gate, gate-integrity)',
+  'ждут результаты на новом head SHA.',
+  'Перед merge человеку одно из: пустой коммит от себя, Update branch',
+  'или закрыть и снова открыть PR — synchronize/reopened запускают',
+  'ci.yml и gate-integrity.yml на новом коммите.',
+].join('\n');
 
 interface CommandResult {
   status: number | null;
@@ -467,6 +489,7 @@ function publishRaisedBaseline(): number {
     console.log(
       `PR #${open.number} уже открыт — ${branchState} (commit ${commit.slice(0, 12)}): ${clean(open.url)}`,
     );
+    console.log(CI_NOTE);
     return 0;
   }
 
@@ -486,6 +509,7 @@ function publishRaisedBaseline(): number {
   ]);
   if (created.status === 0) {
     console.log(`PR храповика создан: ${clean(created.stdout.trim())}`);
+    console.log(CI_NOTE);
     return 0;
   }
   // PR могли открыть между list и create — перепроверяем, а не гадаем.

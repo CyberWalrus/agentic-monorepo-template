@@ -140,6 +140,41 @@ function jobLines(jobName: string): string[] {
   return lines.slice(start, end === -1 ? lines.length : end);
 }
 
+/** Блок джобы без строк-комментариев: комментарий — не шаг и не needs. */
+function jobCodeLines(jobName: string): string[] {
+  return jobLines(jobName).filter((line) => !line.trimStart().startsWith('#'));
+}
+
+/**
+ * `needs` джобы — только записи массива (в квадратных скобках или списком
+ * `- …`), без комментариев. Комментарий job со словом из needs (в report над
+ * needs лежит «# test-count-ratchet (e40): …») проводкой не считается: поиск
+ * слова по тексту блока оставлял мутант «убрать джобу из needs» зелёным.
+ */
+function jobNeeds(jobName: string): string[] {
+  const lines = jobCodeLines(jobName);
+  const start = lines.findIndex((line) => /^\s+needs:/.test(line));
+  if (start === -1) {
+    return [];
+  }
+  const needIndent = indentOf(lines[start] ?? '');
+  const body: string[] = [];
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    // Комментарий в конце строки («needs: [a]  # …») — тоже не запись.
+    const code = line.replace(/\s+#.*$/, '').trim();
+    if (index > start && code !== '' && indentOf(line) <= needIndent) {
+      break;
+    }
+    body.push(code);
+  }
+  const text = body.join(' ').replace(/^needs:\s*/, '');
+  const items = text.includes('[')
+    ? text.slice(text.indexOf('[') + 1, text.lastIndexOf(']')).split(',')
+    : body.slice(1).map((item) => item.replace(/^-\s*/, ''));
+  return items.map((item) => item.trim().replace(/^['"]|['"]$/g, '')).filter((item) => item !== '');
+}
+
 it('проводка: nightly-джоб храповика и правило в architecture.md (a10)', () => {
   const nightly = readFileSync(join(repoDir, '.github', 'workflows', 'nightly.yml'), 'utf8');
   expect(nightly).toContain('test count ratchet');
@@ -149,15 +184,18 @@ it('проводка: nightly-джоб храповика и правило в a
 });
 
 it('проводка e40: hooks-отчёт гоняется до update; красная джоба храповика доходит до issue', () => {
-  // Корневая //#test:hooks не входит в `turbo run test`: без своего шага отчёта
-  // в job нет, и update молча не трогал запись reports/vitest-hooks.json
+  // Корневая //#test:hooks не входит в `turbo run test`: без своего шага
+  // отчёта в job нет, и update молча не трогал запись reports/vitest-hooks.json
   // (296 в базлайне при 718 тестах).
-  const job = jobLines('test-count-ratchet').join('\n');
+  // Комментарии job в проверку не входят: слово в комментарии — не шаг и не needs.
+  const job = jobCodeLines('test-count-ratchet').join('\n');
   const hooks = job.indexOf('turbo run test:hooks');
   expect(hooks).toBeGreaterThanOrEqual(0);
   expect(hooks).toBeLessThan(job.indexOf('test:count:update'));
   // report заводит issue только по джобам из needs — иначе красный шаг молчит.
-  expect(jobLines('report').join('\n')).toContain('test-count-ratchet');
+  // Сверяются записи массива needs, а не текст блока: над needs лежит комментарий
+  // со словом test-count-ratchet, и поиск по блоку не замечал, что джобы в needs нет.
+  expect(jobNeeds('report')).toContain('test-count-ratchet');
 });
 
 const BRANCH = 'chore/test-count-ratchet';
@@ -330,6 +368,8 @@ it('create отказал, и это не «уже открыт» (настро�
   expect(run.output).not.toContain('уже открыт');
   // Сообщение говорит правду: ветка и правда обновлена.
   expect(repo.remoteBaseline()).toEqual({ 'reports/vitest-hooks.json': 718 });
+  // PR откроет человек — событие opened запустит CI: предупреждения про CI нет.
+  expect(run.output).not.toContain('CI на новый коммит не запустится');
 }, 30_000);
 
 it('PR уже открыт — ветка обновлена без удаления, create не вызывается, шаг зелёный', () => {
@@ -354,6 +394,11 @@ it('PR уже открыт — ветка обновлена без удален
   expect(run.status).toBe(0);
   expect(run.output).toContain('PR #7 уже открыт');
   expect(run.output).toContain('https://github.com/org/repo/pull/7');
+  // Сообщение говорит правду (находка ревью): push сделал github.token — CI на
+  // новый коммит не запустится, обязательные checks не появятся; шаг называет
+  // это и действие человека, а не молчит за зелёным exit 0.
+  expect(run.output).toContain('CI на новый коммит не запустится');
+  expect(run.output).toContain('закрыть и снова открыть PR');
   // Журнал вызовов накопительный: смотрим только на ночь 2.
   expect(repo.ghCalls().slice(callsAfterNightOne).join('\n')).not.toContain('pr create');
   expect(gitText(repo.dir, ['rev-parse', '--verify', `${repo.remoteTip()}^`])).toBe(nightOne);
@@ -368,6 +413,8 @@ it('create удался — PR создан, шаг зелёный', () => {
 
   expect(run.status).toBe(0);
   expect(run.output).toContain('https://github.com/org/repo/pull/42');
+  // PR создан github.token — CI на нём тоже не запустится сам: вывод называет.
+  expect(run.output).toContain('CI на новый коммит не запустится');
   expect(repo.ghCalls().join('\n')).toContain('pr create');
 }, 30_000);
 
