@@ -40,6 +40,13 @@ describe('protectionOf: текущий список защищённых пут�
     ['tools/check-bundle.ts', 'deny'],
     ['.claude/hooks/guard-bash.ts', 'deny'],
     ['.claude/settings.json', 'deny'],
+    // e49: проводка плагина agent-harness — deny по роли, тот же контур защиты (c10.1)
+    ['.claude/.claude-plugin/hooks.json', 'deny'],
+    ['.claude/.claude-plugin/plugin.json', 'deny'],
+    ['.claude/.claude-plugin/skills/skill-hooks.json', 'deny'],
+    ['.claude/.claude-plugin', 'deny'],
+    // запись точная: похожий каталог класса не наследует
+    ['.claude/.claude-plugin-x/hooks.json', null],
     ['perf-budgets.json', 'deny'],
     ['.oxlintrc.json', 'deny'],
     ['e2e/playwright.config.ts', 'deny'],
