@@ -76,6 +76,58 @@ const MUST_DENY: string[] = [
   'rm tools/protected-paths.json',
   'cp /tmp/evil.json tools/protected-paths.json',
   'mv tools/protected-paths.json /tmp/stolen.json',
+  // e45: heredoc, поданный интерпретатору, — команды; тело проверяется правилами
+  "bash <<'EOF'\ngit commit --no-verify\nEOF",
+  'sh <<EOF\ngit push --force origin main\nEOF',
+  "zsh -s <<'EOF'\npnpm exec playwright test -u\nEOF",
+  "node <<'EOF'\nexecSync('git commit --no-verify')\nEOF",
+  "python3 - <<'EOF'\nsubprocess.run('git push --force', shell=True)\nEOF",
+  "eval $(cat <<'EOF'\ngit commit --no-verify\nEOF\n)",
+  // конвейер: cat печатает тело, bash исполняет
+  "cat <<'EOF' | bash\ngit commit --no-verify\nEOF",
+  // запись в защищённый файл из тела, которое исполняет bash
+  "bash <<'EOF'\necho x > tools/protected-paths.json\nEOF",
+  // e45: фальшивый фрейм — `<<` в кавычках, в комментарии и here-string оператором не считается
+  'echo "<<END"\ngit commit --no-verify\nEND',
+  '# cat <<EOF\ngit commit --no-verify\nEOF',
+  'cat <<<EOF\ngit commit --no-verify\nEOF',
+  // e45 (ревью): `.` — синоним `source`
+  ". /dev/stdin <<'EOF'\ngit commit --no-verify\nEOF",
+  // e45 (ревью): `}` внутри `$( … )` — не граница `${…}`, `<<EOF` — часть слова
+  'echo ${u:-$(echo })<<EOF;}\ngit commit --no-verify\nEOF',
+  // e45 (ревью): строка-оператор продолжается на следующих строках — оболочка начинает тело позже
+  "cat <<'EOF' $(echo a;\ngit commit --no-verify)\nbody\nEOF",
+  "cat <<'EOF' $(echo a;\necho x > tools/protected-paths.json)\nbody\nEOF",
+  "cat <<'EOF' >/dev/null && { echo a;\ngit push --force origin main; }\nbody\nEOF",
+  // e45: обратные кавычки на строке-операторе; `#` после `$( … )` — не комментарий
+  "cat <<'EOF' `\ngit commit --no-verify`\nbody\nEOF",
+  "cat <<'EOF' $(echo a)#b$(\ngit commit --no-verify\n)\nbody\nEOF",
+  // e45 (ревью): внутри прилипшей `$( … )` слово начинается заново — `#` там комментарий, `case` — ключевое слово
+  "cat <<'EOF' a=$(# )\ngit commit --no-verify)\nbody\nEOF",
+  "cat <<'EOF' a=$(# )\necho x > tools/protected-paths.json)\nbody\nEOF",
+  "cat <<'EOF' a=$(case x in x)\ngit push --force origin main;; esac)\nbody\nEOF",
+  // e45: `<<` внутри арифметики `$[ … ]`, в индексе и в присваивании массива — не оператор
+  'echo $[1<<2]\ngit commit --no-verify\n2]',
+  'a[1<<2]=3\ngit commit --no-verify\n2]=3',
+  'a=(1<<2)\ngit commit --no-verify\n2',
+  // e45: `<<` внутри `[[ ]]` и в шаблоне `case` — не оператор; разделитель раскрывается в рантайме
+  '[[ $a == x<<EOF ]]\ngit commit --no-verify\nEOF',
+  'case $x in a<<EOF)\ngit commit --no-verify\nEOF',
+  "D=EOF && cat <<$D\ncat <<'A'\nEOF\ngit commit --no-verify\nA",
+  // e45 (ревью, раунд 3): heredoc внутри подстановки процесса, закрытой на той же строке —
+  // bash 3.2 и zsh читают следующие строки как команды, а не как тело
+  "cat <(cat <<'EOF')\ngit commit --no-verify\nEOF",
+  "cat > >(cat <<'EOF')\ngit push --force origin main\nEOF",
+  "diff <(cat <<'EOF') /dev/null\npnpm exec playwright test -u\nEOF",
+  "cat <(cat <<'EOF')\necho x > tools/protected-paths.json\nEOF",
+  // e45 (ревью, раунд 3): интерпретатор под ссылкой — командное слово не буквально, его имени в тексте нет
+  "$SHELL <<'EOF'\ngit commit --no-verify\nEOF",
+  "$0 <<'EOF'\ngit push --force origin main\nEOF",
+  '"b"ash <<\'EOF\'\ngit commit --no-verify\nEOF',
+  "${SHELL} <<'EOF'\necho x > tools/protected-paths.json\nEOF",
+  "cat <<'EOF' | $SHELL\ngit commit --no-verify\nEOF",
+  // e45 (ревью, раунд 3): обёртке передана оболочка по ссылке
+  "sudo $SHELL <<'EOF'\ngit commit --no-verify\nEOF",
 ];
 
 for (const command of MUST_DENY) {
@@ -101,6 +153,27 @@ const MUST_PASS: string[] = [
   'pnpm verify --full',
   'echo x > README.md',
   'cd apps/web && echo x > package.json',
+  // e45: запись файла через heredoc — тело-данные правила не читают
+  "cat > README.md <<'EOF'\n# Title\nbody\nEOF",
+  "cat <<'EOF' > docs/notes.md\nThe marker EOF ends the block\nEOF\necho done",
+  'cat <<EOF > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF',
+  // e45 (ревью): строка-оператор кончилась там, где её видит оболочка — тело по-прежнему данные
+  "cat <<'EOF' $(echo a; echo b)\nLEFTHOOK=0 is forbidden\nEOF",
+  "{ cat <<'EOF' > /tmp/notes.md; }\nLEFTHOOK=0 is forbidden\nEOF",
+  "(cat <<'EOF' > /tmp/notes.md )\nLEFTHOOK=0 is forbidden\nEOF",
+  'echo "$((1 + 2))" && cat <<\'EOF\' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF',
+  'echo "${VAR:-x}" && cat <<\'EOF\' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF',
+  "git add . && cat <<'EOF' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF",
+  // e45 (ревью): комментарий сразу за `$(` — подстановка закрыта на строке-операторе, тело — данные
+  "cat <<'EOF' a=$(# comment\necho b)\nLEFTHOOK=0 is forbidden\nEOF",
+  "cat <<'EOF' x=$(echo a)\nLEFTHOOK=0 is forbidden\nEOF",
+  // e45: определение функции и `[` в начале слова — легитимны, прилипшей скобки и индекса там нет
+  "f() { :; }\ncat <<'EOF' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF",
+  "if [ -f x ]; then cat <<'EOF' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF\nfi",
+  // e45 (ревью, раунд 3): командное слово буквальное — аргументы и цели редиректа раскрываться могут
+  'cat <<\'EOF\' | grep "$PATTERN"\nLEFTHOOK=0 is forbidden\nEOF',
+  'cat <<\'EOF\' > "$OUT"\nLEFTHOOK=0 is forbidden\nEOF',
+  "cat <<'EOF' $(pwd) *.md\nLEFTHOOK=0 is forbidden\nEOF",
 ];
 
 for (const command of MUST_PASS) {
@@ -119,6 +192,17 @@ for (const command of MUST_PASS) {
 it('blocks an oversized command instead of analyzing it', () => {
   const result = runGuard(`echo ${'x'.repeat(70_000)} > tools/protected-paths.json`);
   expect(deniedIn(result)).toBe(true);
+});
+
+/**
+ * e45 (ревью, раунд 3): разбор растёт не быстрее длины команды. До правки вход меньше лимита выше
+ * заставлял хук молчать дольше своего таймаута (10 с, `.claude/settings.json`), а таймаут пропускает команду.
+ */
+it('answers a near-maximal command instead of timing out on it', () => {
+  const piled = `cat${'<<EOF '.repeat(2_000)}${'$('.repeat(8_000)}${'\n'.repeat(35_900)}git commit --no-verify`;
+  expect(piled.length).toBeGreaterThan(60_000);
+  expect(piled.length).toBeLessThanOrEqual(64_000);
+  expect(deniedIn(runGuard(piled))).toBe(true);
 });
 
 /** Битый stdin закрывает хук (exit 2): код 1 Claude Code считает неблокирующим. */
