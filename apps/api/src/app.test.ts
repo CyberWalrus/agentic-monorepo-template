@@ -434,6 +434,41 @@ describe('test API', () => {
     expect(await client.tasks.list()).toEqual([existing]);
   });
 
+  // e53: роутер валидирует только форму задачи. Дубликат id в наборе и id
+  // чужого рабочего пространства проходят схему — сбой видит хранилище, и
+  // такой reset обязан закончиться 500 с данными на месте.
+  it('answers 500 and keeps existing tasks when the repository rejects the seed', async () => {
+    const app = createApp({ tasks: new InMemoryTaskRepository(), enableTestApi: true });
+    const clientFor = (workspace: string): ContractRouterClient<Contract> =>
+      createORPCClient(
+        new RPCLink({
+          url: 'http://api.test/rpc',
+          fetch: async (request) => app.fetch(request),
+          headers: { 'x-workspace-id': workspace },
+        }),
+      );
+    const reset = async (tasks: (typeof seeded)[]): Promise<Response> =>
+      app.request('/__test__/reset', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-workspace-id': 'ws-a' },
+        body: JSON.stringify({ tasks }),
+      });
+    const neighbour = await clientFor('ws-b').tasks.create({ title: 'Neighbour' });
+    const existing = await clientFor('ws-a').tasks.create({ title: 'Keep me' });
+
+    const duplicate = await reset([seeded, { ...seeded, title: 'Twin' }]);
+
+    expect(duplicate.status).toBe(500);
+    expect(await duplicate.json()).toEqual({ error: 'Internal server error' });
+    expect(await clientFor('ws-a').tasks.list()).toEqual([existing]);
+
+    const foreign = await reset([{ ...neighbour, title: 'Imposter' }]);
+
+    expect(foreign.status).toBe(500);
+    expect(await clientFor('ws-a').tasks.list()).toEqual([existing]);
+    expect(await clientFor('ws-b').tasks.list()).toEqual([neighbour]);
+  });
+
   it('rejects an unknown top-level field loudly instead of silently stripping it', async () => {
     const { app, client } = setup({ enableTestApi: true });
     const existing = await client.tasks.create({ title: 'Keep me' });

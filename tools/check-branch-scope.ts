@@ -135,6 +135,9 @@ collectFromTokens((tryGit('diff', '--name-status', '-z', `${mergeBase}..HEAD`) ?
 // --untracked-files=all: untracked-каталог разворачивается до файлов, иначе
 // красным назывался бы каталог, а не нарушающий путь. Формат porcelain -z:
 // «XY путь» в одном токене, rename несёт старый путь следующим токеном.
+// Ведущий пробел записи « M» значим: вывод приходит необрезанным (git() не
+// делает trim() для `-z`), поэтому slice(3) первой записи не срезает символ
+// пути (e71: «acklog/done/b8.md» вместо backlog/done/b8.md).
 const porcelain = (tryGit('status', '--porcelain', '-z', '--untracked-files=all') ?? '')
   .split('\0')
   .filter(Boolean);
