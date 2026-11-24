@@ -1235,8 +1235,9 @@ export const CANARIES: GateCanary[] = [
     // целостность генерации красит набор. Плохое изменение — owner-процедура
     // с валидной meta, добавленная в копии контракта и роутера: перебор C2.0 её
     // пропускает (политика объявлена), router-divergence зелёный (контракт ≡
-    // роутер) — её замечает только генерация таблицы (тест «no empty rows» и
-    // ячейки it.each через scenarioOf). Красит гейт зонд, а не сужение: тихое
+    // роутер) — после e57 её замечает и сторожевой список errors.test.ts (его
+    // снимает третья правка ниже), а без него только генерация таблицы (тест
+    // «no empty rows» и ячейки it.each через scenarioOf). Красит гейт зонд, а не сужение: тихое
     // сужение генерации (фильтр перебора, хардкод списка) сделало бы зонд
     // невидимым и шаг зелёным — тогда канарейка красная, и обезвреживание
     // таблицы становится громким (З6). Граница: держится проводка генерации
@@ -1249,6 +1250,20 @@ export const CANARIES: GateCanary[] = [
     // «evilOwnerProbe» вместо «tasks.evilOwnerProbe»). Вторая правка
     // обязательна: роутер содержит только объявленные handler'ы, контрактный
     // зонд без handler'а до перебора не доходит и шаг остаётся зелёным.
+    // Третья правка (2026-11-25, последствие e57): errors.test.ts держит сторожевой
+    // список процедур tasks с проверкой доступа — `toEqual(['tasks.remove'])`.
+    // Зонд — новая такая процедура: без правки шаг test падал на контракте раньше,
+    // чем на таблице, turbo не доходил до отчёта api, и ожидаемого сообщения
+    // не было в доказательствах — «test НЕ УПАЛ» на каждом PR после мержа e57.
+    // Зонд дописывается и в список: тогда падает ровно таблица доступа. Правила
+    // для того, кто правит якорь: (1) мутация моделирует разработчика, который
+    // зарегистрировал процедуру в списке, но забыл строку таблицы, — гейт в
+    // репозитории не тронут, а цепочку «незарегистрированная процедура — красный
+    // контракт» канарейка больше не доказывает: её держит сам errors.test.ts;
+    // (2) зонд в списке обязан стоять последним: toEqual чувствителен к порядку,
+    // а зонд вставлен перед закрывающей скобкой контракта и перебирается последним;
+    // (3) якорь — содержимое списка: вторая owner-процедура в tasks сломает его
+    // громко («canary anchor not found» в тесте живости того же PR) — обнови якорь.
     name: 'owner-процедура без строки сценария таблицы',
     steps: 'test',
     failedStep: 'test',
@@ -1279,6 +1294,18 @@ export const CANARIES: GateCanary[] = [
         throw new Error('canary anchor not found: apps/api/src/router.ts has no tasks closing');
       }
       writeFileSync(routerPath, withHandler);
+      const tripwirePath = join(root, 'packages', 'contracts', 'src', 'errors.test.ts');
+      const tripwire = readFileSync(tripwirePath, 'utf8');
+      const withListed = tripwire.replace(
+        "toEqual(['tasks.remove'])",
+        "toEqual(['tasks.remove', 'tasks.evilOwnerProbe'])",
+      );
+      if (withListed === tripwire) {
+        throw new Error(
+          'canary anchor not found: contracts/src/errors.test.ts has no list of tasks procedures that check access',
+        );
+      }
+      writeFileSync(tripwirePath, withListed);
     },
   },
 ];
