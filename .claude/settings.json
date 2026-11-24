@@ -83,6 +83,7 @@
         "**/.gitignore",
         ".claude/**/.gitignore",
         ".claude-plugin/.gitignore",
+        ".claude-plugin/marketplace.json",
         ".github/**/.gitignore",
         ".nvmrc",
         ".secretlintrc.cjs",

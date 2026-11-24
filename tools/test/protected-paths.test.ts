@@ -47,6 +47,8 @@ describe('protectionOf: текущий список защищённых пут�
     ['.claude/.claude-plugin', 'deny'],
     // запись точная: похожий каталог класса не наследует
     ['.claude/.claude-plugin-x/hooks.json', null],
+    // e49: маркетплейс-манифест — source решает, какую проводку получит потребитель; запись точечная
+    ['.claude-plugin/marketplace.json', 'deny'],
     ['perf-budgets.json', 'deny'],
     ['.oxlintrc.json', 'deny'],
     ['e2e/playwright.config.ts', 'deny'],

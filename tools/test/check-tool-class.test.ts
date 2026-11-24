@@ -275,11 +275,27 @@ describe('проводка: шаг tool-class в verify', () => {
 // обёрнуты `|| exit 2` (в шаблоне fail-closed дают адаптеры `.claude/hooks/`, в
 // плагине адаптеров нет — З4). До e49 равенство держал только ручной
 // `pnpm probe:plugin`; здесь — на каждом test:hooks, на настоящих файлах.
+// Потребитель приходит к проводке через маркетплейс: `.claude-plugin/marketplace.json`
+// отдаёт `source` плагина — каталог с манифестом; он сверен с защищённым манифестом.
 
 const SETTINGS_HOOKS = '.claude/settings.json';
-const PLUGIN_HOOKS = '.claude/.claude-plugin/hooks.json';
-const PLUGIN_MANIFEST = '.claude/.claude-plugin/plugin.json';
+/** Корень плагина в шаблоне: здесь лежат манифест и hooks.json. */
+const PLUGIN_ROOT = '.claude';
+const PLUGIN_HOOKS = `${PLUGIN_ROOT}/.claude-plugin/hooks.json`;
+const PLUGIN_MANIFEST = `${PLUGIN_ROOT}/.claude-plugin/plugin.json`;
+const MARKETPLACE_MANIFEST = '.claude-plugin/marketplace.json';
 const PLUGIN_PROBE = 'tools/probe-claude-plugin.ts';
+
+/**
+ * Ключи, которые сверяет тест, — корень hooks.json, группа, хук. Прочее — не «не
+ * читается», а ошибка разбора (fail-closed): `if` с неисполняющимся шаблоном и
+ * `async: true` оставляют тип, команду и таймаут на месте, но защитный хук не
+ * запускается либо не блокирует. Новый ключ проводки сначала расширяет сверку.
+ * Корень сверяется только у hooks.json: у settings.json ключи корня свои.
+ */
+const FILE_KEYS = ['hooks'];
+const GROUP_KEYS = ['hooks', 'matcher'];
+const HOOK_KEYS = ['command', 'timeout', 'type'];
 
 /** Защитные хуки: в плагине обязаны идти с `|| exit 2`. Список сверен с пробником. */
 const PROTECTIVE_PLUGIN_HOOKS = [
@@ -309,23 +325,53 @@ function wiringArray(value: unknown, source: string): unknown[] {
   return value;
 }
 
-/** События → группы → хуки файла проводки; поля вне сравнения не читаются. */
-function readHookEvents(path: string): WiringEventMap {
-  const file = asRecord(JSON.parse(readFileSync(join(repoRoot, path), 'utf8')));
+/** Объект по ссылке: asRecord делает копию, для правки на месте не годится. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Ключ вне сверяемого набора — ошибка с адресом: поле, которым хук отключают. */
+function assertComparedKeys(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+  at: string,
+): void {
+  const extra = Object.keys(record).filter((key) => !keys.includes(key));
+  if (extra.length > 0) {
+    throw new Error(`${at}: ключи вне сверки — ${extra.join(', ')}; сверяются ${keys.join(', ')}`);
+  }
+}
+
+/** Сырой файл проводки из репозитория. */
+function readWiringFile(path: string): Record<string, unknown> {
+  return asRecord(JSON.parse(readFileSync(join(repoRoot, path), 'utf8')));
+}
+
+/**
+ * События → группы → хуки файла проводки. Ключ вне сверяемого набора — ошибка
+ * разбора, а не «не читается»: `if` и `async` не меняют тип, команду и таймаут.
+ */
+function parseHookEvents(file: Record<string, unknown>, path: string): WiringEventMap {
+  if (path === PLUGIN_HOOKS) {
+    assertComparedKeys(file, FILE_KEYS, path);
+  }
   const events: WiringEventMap = {};
   for (const [event, rawGroups] of Object.entries(asRecord(file['hooks']))) {
     const groups: WiringGroup[] = [];
     for (const rawGroup of wiringArray(rawGroups, `${path}: ${event}`)) {
+      const at = `${path}: ${event}[${groups.length}]`;
       const record = asRecord(rawGroup);
+      assertComparedKeys(record, GROUP_KEYS, at);
       const group: WiringGroup = { hooks: [] };
       if (typeof record['matcher'] === 'string') {
         group.matcher = record['matcher'];
       }
-      for (const rawHook of wiringArray(record['hooks'], `${path}: ${event}`)) {
+      for (const rawHook of wiringArray(record['hooks'], at)) {
         const hook = asRecord(rawHook);
         if (typeof hook['command'] !== 'string') {
-          throw new Error(`${path}: ${event} — хук без command`);
+          throw new Error(`${at} — хук без command`);
         }
+        assertComparedKeys(hook, HOOK_KEYS, `${at}.hooks[${group.hooks.length}]`);
         const wiring: WiringHook = {
           type: typeof hook['type'] === 'string' ? hook['type'] : 'command',
           command: hook['command'],
@@ -340,6 +386,11 @@ function readHookEvents(path: string): WiringEventMap {
     events[event] = groups;
   }
   return events;
+}
+
+/** События → группы → хуки настоящего файла репозитория. */
+function readHookEvents(path: string): WiringEventMap {
+  return parseHookEvents(readWiringFile(path), path);
 }
 
 /** Ожидаемое зеркало settings.json: CLI потребителя и `|| exit 2` у защитных. */
@@ -508,10 +559,103 @@ const SABOTAGES: [string, Sabotage][] = [
   ],
 ];
 
+/** Группа события в сыром файле — по ссылке; нет группы — саботаж нечего проверять. */
+function rawGroupAt(
+  file: Record<string, unknown>,
+  event: string,
+  index: number,
+): Record<string, unknown> {
+  const group = wiringArray(asRecord(file['hooks'])[event], `hooks.${event}`)[index];
+  if (!isRecord(group)) {
+    throw new Error(`в файле проводки нет группы ${event}[${index}]`);
+  }
+  return group;
+}
+
+/** Хук группы в сыром файле — по ссылке; нет хука — саботаж нечего проверять. */
+function rawHookAt(
+  file: Record<string, unknown>,
+  event: string,
+  group: number,
+  index: number,
+): Record<string, unknown> {
+  const hook = wiringArray(rawGroupAt(file, event, group)['hooks'], `hooks.${event}[${group}]`)[
+    index
+  ];
+  if (!isRecord(hook)) {
+    throw new Error(`в файле проводки нет хука ${event}[${group}].hooks[${index}]`);
+  }
+  return hook;
+}
+
+/**
+ * Ключи вне сверки — на сыром JSON, до parseHookEvents: отличия по сверяемым полям
+ * тут нет (тип, команда и таймаут на месте), тест требует ошибки разбора. Оба файла:
+ * settings.json — зеркало, поле только в нём тоже рассинхрон. Если саботаж ничего
+ * не меняет (нет такого события, группы, хука) или ключ попал в сверку — тест красный.
+ */
+const UNCOMPARED_KEY_SABOTAGES: [string, string, (file: Record<string, unknown>) => void][] = [
+  [
+    '`if` у protect-paths — условие запуска (PreToolUse[0].hooks[0])',
+    PLUGIN_HOOKS,
+    (file) => {
+      rawHookAt(file, 'PreToolUse', 0, 0)['if'] = 'false';
+    },
+  ],
+  [
+    '`async: true` у guard-bash — фон, не блокирует (PreToolUse[1].hooks[0])',
+    PLUGIN_HOOKS,
+    (file) => {
+      rawHookAt(file, 'PreToolUse', 1, 0)['async'] = true;
+    },
+  ],
+  [
+    'лишний ключ у группы PreToolUse[0]',
+    PLUGIN_HOOKS,
+    (file) => {
+      rawGroupAt(file, 'PreToolUse', 0)['statusMessage'] = 'x';
+    },
+  ],
+  [
+    'лишний ключ в корне hooks.json',
+    PLUGIN_HOOKS,
+    (file) => {
+      file['disableAllHooks'] = true;
+    },
+  ],
+  [
+    '`async: true` у guard-bash в settings.json — зеркало не молчит',
+    SETTINGS_HOOKS,
+    (file) => {
+      rawHookAt(file, 'PreToolUse', 1, 0)['async'] = true;
+    },
+  ],
+];
+
 describe('проводка плагина agent-harness: hooks.json повторяет hooks из settings.json', () => {
   it('события, matcher, хуки, команды и таймауты — 1:1 и без лишнего', () => {
     expect(wiringDrift(readHookEvents(PLUGIN_HOOKS), expectedWiring())).toEqual([]);
   });
+
+  it('маркетплейс отдаёт потребителю каталог с этим манифестом: одна запись, source — корень плагина', () => {
+    const manifest = asRecord(JSON.parse(readFileSync(join(repoRoot, PLUGIN_MANIFEST), 'utf8')));
+    const marketplace = asRecord(
+      JSON.parse(readFileSync(join(repoRoot, MARKETPLACE_MANIFEST), 'utf8')),
+    );
+    const listed = wiringArray(marketplace['plugins'], MARKETPLACE_MANIFEST)
+      .map((entry) => asRecord(entry))
+      .filter((entry) => entry['name'] === manifest['name']);
+    // строго и строкой: вторая запись с тем же именем и объектные формы source не проходят
+    expect(listed.map((entry) => entry['source'])).toEqual([`./${PLUGIN_ROOT}`]);
+  });
+
+  for (const [name, path, sabotage] of UNCOMPARED_KEY_SABOTAGES) {
+    it(`саботаж замечается: ${name}`, () => {
+      const file = readWiringFile(path);
+      sabotage(file);
+      expect(() => parseHookEvents(file, path)).toThrow(/ключи вне сверки/);
+    });
+  }
 
   it('манифест подключает именно этот файл проводки', () => {
     const manifest = asRecord(JSON.parse(readFileSync(join(repoRoot, PLUGIN_MANIFEST), 'utf8')));
