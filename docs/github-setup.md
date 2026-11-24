@@ -68,6 +68,8 @@ Turbo-секреты держать **только** в environment `cache-read`
 
 Установите Renovate GitHub App. Конфиг лежит в [`.github/renovate.json`](../.github/renovate.json): обновления раз в неделю, `minimumReleaseAge` 3 дня, Playwright отдельной группой (после обновления — `tools/playwright-agents.sh` и `pnpm visual`).
 
+Действия закрепляются по SHA, а комментарий после пина называет неизменяемый тег релиза (`# v7.0.1`), не подвижный тег мажорной версии (`# v7`): zizmor сверяет комментарий с пином, и подвижный тег после выхода нового релиза красит джобу `zizmor` на всех PR (24.11.2026 — строка в [реестре пропущенных дефектов](escaped-defects.md)).
+
 ## 6. CODEOWNERS
 
 В копии проекта `.github/CODEOWNERS` уже создан `copier copy` с вашим владельцем из ответа `repo_owner` ([ADR 0008](adr/0008-template-distribution.md)). Замените владельцев на команды вашей организации (например, `@org/platform` для гейтов, `@org/api` для контрактов): `gate-integrity` доверяет label `gate-change-approved`, только если его поставил владелец из строки `*`. В самом шаблоне рабочий CODEOWNERS лежит в `docs/CODEOWNERS` — GitHub читает его, когда файла нет в `.github/`.

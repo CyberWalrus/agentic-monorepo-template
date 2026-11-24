@@ -64,7 +64,7 @@ jobs:
       # persist-credentials: false — агент с --dangerously-skip-permissions
       # работает в worktree с общим git-dir; токен job в .git/config ему не нужен
       # (находка security-ревью C9.1; прецедент — visual-approve.yml).
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - uses: $/.github/actions/setup
         with: { playwright: 'true' }
