@@ -102,6 +102,29 @@ const withTaskSchema = (spec: SpecDocument, mutate: (schema: SchemaNode) => void
   return copy;
 };
 
+/** Тело запроса из одного поля value — фикстура сужений входа. */
+const inputWithField = (field: SchemaNode): SpecDocument =>
+  createTaskSpec({ type: 'object', properties: { value: field } }, taskSchema());
+
+/** Ответ из одного поля value — фикстура расширений выхода. */
+const outputWithField = (field: SchemaNode): SpecDocument =>
+  listTasksSpec({ type: 'object', properties: { value: field }, required: ['value'] });
+
+/** Клон фикстуры /tasks с operationId у get; undefined — operationId снят. */
+const withOperationId = (spec: SpecDocument, operationId: string | undefined): SpecDocument => {
+  const copy = structuredClone(spec);
+  const operation = copy.paths?.['/tasks']?.['get'];
+  if (operation === undefined) {
+    throw new Error('fixture: в /tasks нет get');
+  }
+  if (operationId === undefined) {
+    delete operation.operationId;
+    return copy;
+  }
+  operation.operationId = operationId;
+  return copy;
+};
+
 // --- Канарейки критериев приёмки ----------------------------------------------------
 
 describe('checkCompatibility: критерии приёмки C6', () => {
@@ -448,6 +471,171 @@ describe('checkCompatibility: сужение входа и расширение 
         ),
       ),
     ).toEqual(['format-removed']);
+  });
+});
+
+describe('checkCompatibility: появление и снятие ограничения (e46)', () => {
+  /** Все границы чекера: «нет границы» — это «без ограничения», а не «не сравнивать». */
+  const BOUNDS = [
+    'minLength',
+    'maxLength',
+    'minimum',
+    'maximum',
+    'exclusiveMinimum',
+    'exclusiveMaximum',
+    'minItems',
+    'maxItems',
+  ] as const;
+  type Bound = (typeof BOUNDS)[number];
+
+  /** Поле value подходящего типа (строка, число, массив строк) с границей или без неё. */
+  const bounded = (keyword: Bound, value?: number): SchemaNode => {
+    const field: SchemaNode =
+      keyword === 'minLength' || keyword === 'maxLength'
+        ? { type: 'string' }
+        : keyword === 'minItems' || keyword === 'maxItems'
+          ? { type: 'array', items: { type: 'string' } }
+          : { type: 'number' };
+    if (value !== undefined) {
+      field[keyword] = value;
+    }
+    return field;
+  };
+  const inputWhere = 'POST /tasks.requestBody.application/json.properties.value';
+  const outputWhere = 'GET /tasks.responses.200.application/json.items.properties.value';
+
+  it.each(BOUNDS)('%s: a bound appearing on input is flagged', (keyword) => {
+    const findings = checkCompatibility(
+      inputWithField(bounded(keyword)),
+      inputWithField(bounded(keyword, 10)),
+    );
+
+    expect(findings).toEqual([
+      { kind: 'bound-narrowed', where: inputWhere, message: expect.stringContaining(keyword) },
+    ]);
+  });
+
+  it.each(BOUNDS)('%s: a bound removed from output is flagged', (keyword) => {
+    const findings = checkCompatibility(
+      outputWithField(bounded(keyword, 10)),
+      outputWithField(bounded(keyword)),
+    );
+
+    expect(findings).toEqual([
+      { kind: 'bound-widened', where: outputWhere, message: expect.stringContaining(keyword) },
+    ]);
+  });
+
+  it.each(BOUNDS)('%s: a bound appearing on output passes', (keyword) => {
+    expect(
+      checkCompatibility(outputWithField(bounded(keyword)), outputWithField(bounded(keyword, 10))),
+    ).toEqual([]);
+  });
+
+  it.each(BOUNDS)('%s: a bound removed from input passes', (keyword) => {
+    expect(
+      checkCompatibility(inputWithField(bounded(keyword, 10)), inputWithField(bounded(keyword))),
+    ).toEqual([]);
+  });
+
+  it('additionalProperties: false appearing on an input object is flagged (object → strictObject)', () => {
+    const looseInput = createTaskSpec(
+      { type: 'object', properties: { title: { type: 'string' } } },
+      taskSchema(),
+    );
+    const strictInput = createTaskSpec(
+      { type: 'object', properties: { title: { type: 'string' } }, additionalProperties: false },
+      taskSchema(),
+    );
+
+    const findings = checkCompatibility(looseInput, strictInput);
+
+    expect(findings).toEqual([
+      {
+        kind: 'additional-properties-narrowed',
+        where: 'POST /tasks.requestBody.application/json',
+        message: expect.stringContaining('additionalProperties'),
+      },
+    ]);
+  });
+
+  it('additionalProperties: false removed from an output object is flagged', () => {
+    const loose: SchemaNode = { type: 'object', properties: { title: { type: 'string' } } };
+    const strict: SchemaNode = { ...loose, additionalProperties: false };
+
+    const findings = checkCompatibility(outputWithField(strict), outputWithField(loose));
+
+    expect(findings).toEqual([
+      {
+        kind: 'additional-properties-widened',
+        where: outputWhere,
+        message: expect.stringContaining('additionalProperties'),
+      },
+    ]);
+    // Обратные направления безопасны: вход смягчён, выход стал строже.
+    expect(checkCompatibility(inputWithField(strict), inputWithField(loose))).toEqual([]);
+    expect(checkCompatibility(outputWithField(loose), outputWithField(strict))).toEqual([]);
+  });
+
+  it('renaming an operationId is flagged: the old name is gone from the spec', () => {
+    const findings = checkCompatibility(
+      withOperationId(listTasksSpec(taskSchema()), 'tasks.list'),
+      withOperationId(listTasksSpec(taskSchema()), 'tasks.getAll'),
+    );
+
+    expect(findings).toEqual([
+      {
+        kind: 'operation-id-changed',
+        where: 'GET /tasks',
+        message: 'operationId «tasks.list» → «tasks.getAll»',
+      },
+    ]);
+  });
+
+  it('removing an operationId is flagged', () => {
+    const findings = checkCompatibility(
+      withOperationId(listTasksSpec(taskSchema()), 'tasks.list'),
+      withOperationId(listTasksSpec(taskSchema()), undefined),
+    );
+
+    expect(findings).toEqual([
+      {
+        kind: 'operation-id-changed',
+        where: 'GET /tasks',
+        message: 'operationId «tasks.list» снят',
+      },
+    ]);
+  });
+
+  it('an operationId appearing where there was none is an addition and passes', () => {
+    expect(
+      checkCompatibility(
+        listTasksSpec(taskSchema()),
+        withOperationId(listTasksSpec(taskSchema()), 'tasks.list'),
+      ),
+    ).toEqual([]);
+  });
+
+  it('the committed openapi.json: a bound removed from a response field is flagged', () => {
+    const specPath = fileURLToPath(new URL('../openapi.json', import.meta.url));
+    const spec = parseSpec(readFileSync(specPath, 'utf8'));
+    if (spec === null) {
+      throw new Error('fixture: packages/contracts/openapi.json не распознан');
+    }
+
+    // Канарейка e46 на настоящей спецификации: снятие maxLength с title в
+    // ответе tasks.list — воспроизведение дефекта из аудита (ноль находок).
+    const loosened = withTaskSchema(spec, (task) => {
+      delete task.properties?.['title']?.maxLength;
+    });
+
+    expect(checkCompatibility(spec, loosened)).toEqual([
+      {
+        kind: 'bound-widened',
+        where: 'GET /tasks.responses.200.application/json.items.properties.title',
+        message: expect.stringContaining('maxLength'),
+      },
+    ]);
   });
 });
 
