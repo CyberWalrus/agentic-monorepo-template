@@ -16,7 +16,10 @@ import { deny, failClosedExit, projectDir, readHookInput } from './lib.ts';
 process.on('uncaughtException', failClosedExit);
 process.on('unhandledRejection', failClosedExit);
 
-/** Сверхдлинный вход не анализируем: таймаут хука пропускает команду, поэтому бюджет разбора ограничен заранее. */
+/**
+ * Сверхдлинный вход не анализируем: таймаут хука пропускает команду, поэтому бюджет разбора ограничен
+ * заранее — длиной входа и линейным от неё разбором (`scan` в tools/analyze-command.ts).
+ */
 const MAX_COMMAND_LENGTH = 64_000;
 
 const input = await readHookInput();

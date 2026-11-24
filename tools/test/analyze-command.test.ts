@@ -332,4 +332,80 @@ describe('stripHeredocs', () => {
     const input = script(["git commit -m \"$(cat <<'EOF'", 'echo x > tools/a.json', 'EOF', ')"']);
     expect(repoWriteTargets(stripHeredocs(input), REPO, REPO)).toEqual([PROTECTED]);
   });
+
+  /**
+   * e45 (ревью, раунд 3): heredoc внутри подстановки процесса, закрытой на той же строке. bash 3.2 и zsh
+   * читают следующие строки как команды, а не как тело; где тело у остальных оболочек — не видно.
+   */
+  it.each([
+    "cat <(cat <<'EOF')",
+    "cat > >(cat <<'EOF')",
+    "diff <(cat <<'EOF') /dev/null",
+    // zsh: `=( … )` — файл с выводом команды
+    "cat =(cat <<'EOF')",
+  ])('keeps the lines after a heredoc inside a process substitution: %s', (line) => {
+    const input = script([line, 'git commit --no-verify', 'EOF']);
+    expect(stripHeredocs(input)).toBe(input);
+  });
+
+  it('still cuts the body after a process substitution that holds no heredoc', () => {
+    const input = script(["cat <(echo a) <<'EOF'", 'echo x > tools/a.json', 'EOF']);
+    expect(repoWriteTargets(stripHeredocs(input), REPO, REPO)).toEqual([]);
+  });
+
+  /**
+   * e45 (ревью, раунд 3): командное слово не буквально — `$SHELL`, `$0`, `"b"ash` оболочка раскроет в имя
+   * интерпретатора, которого в тексте нет, и тело heredoc'а дойдёт до него как команды.
+   */
+  it.each([
+    "$SHELL <<'EOF'",
+    '$0 <<EOF',
+    '"b"ash <<\'EOF\'',
+    "${SHELL} <<'EOF'",
+    // за зарезервированным словом и в конвейере командное слово то же
+    "! $SHELL <<'EOF'",
+    "time $SHELL <<'EOF'",
+    "if $SHELL <<'EOF'",
+    "cat <<'EOF' | $SHELL",
+    // zsh: `=bash` — путь к команде; глоб и фигурные скобки
+    "=bash <<'EOF'",
+    "[b]ash <<'EOF'",
+    "b{a,a}sh <<'EOF'",
+    "ba\\sh <<'EOF'",
+    "$(echo bash) <<'EOF'",
+  ])('keeps the body when the command word is not a literal: %s', (line) => {
+    const input = script([line, 'git commit --no-verify', 'EOF']);
+    expect(stripHeredocs(input)).toBe(input);
+  });
+
+  /** Оболочка названа по ссылке и в аргументе обёртки: читатель — та же оболочка. */
+  it.each(['sudo $SHELL', 'env $0', 'nohup "$BASH"', 'exec ${ZSH_NAME}'])(
+    'keeps the body when a wrapper is given the shell by reference: %s',
+    (line) => {
+      const input = script([`${line} <<'EOF'`, 'git commit --no-verify', 'EOF']);
+      expect(stripHeredocs(input)).toBe(input);
+    },
+  );
+
+  /** Читатель — буквальное командное слово: аргументы и цели редиректа раскрываться могут. */
+  it.each([
+    'cat <<\'EOF\' | grep "$PATTERN"',
+    'cat <<\'EOF\' > "$OUT"',
+    "cat <<'EOF' $(pwd) *.md",
+    "FOO=bar cat <<'EOF'",
+    "2>/dev/null cat <<'EOF'",
+    "time cat <<'EOF'",
+  ])('still cuts the body when only arguments expand: %s', (line) => {
+    const input = script([line, 'echo x > tools/a.json', 'EOF']);
+    expect(stripHeredocs(input)).toBe(`${line}\n`);
+  });
+
+  /**
+   * e45 (ревью, раунд 3): время разбора растёт не быстрее длины команды — иначе длинная команда переживает
+   * таймаут хука, а таймаут пропускает команду. Границу по времени держит канарейка настоящего хука.
+   */
+  it('answers on a command that piles up heredocs, frames and lines', () => {
+    const piled = `cat${'<<EOF '.repeat(400)}${'$('.repeat(400)}${'\n'.repeat(2_000)}git commit --no-verify`;
+    expect(stripHeredocs(piled)).toBe(piled);
+  });
 });

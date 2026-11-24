@@ -114,6 +114,20 @@ const MUST_DENY: string[] = [
   '[[ $a == x<<EOF ]]\ngit commit --no-verify\nEOF',
   'case $x in a<<EOF)\ngit commit --no-verify\nEOF',
   "D=EOF && cat <<$D\ncat <<'A'\nEOF\ngit commit --no-verify\nA",
+  // e45 (ревью, раунд 3): heredoc внутри подстановки процесса, закрытой на той же строке —
+  // bash 3.2 и zsh читают следующие строки как команды, а не как тело
+  "cat <(cat <<'EOF')\ngit commit --no-verify\nEOF",
+  "cat > >(cat <<'EOF')\ngit push --force origin main\nEOF",
+  "diff <(cat <<'EOF') /dev/null\npnpm exec playwright test -u\nEOF",
+  "cat <(cat <<'EOF')\necho x > tools/protected-paths.json\nEOF",
+  // e45 (ревью, раунд 3): интерпретатор под ссылкой — командное слово не буквально, его имени в тексте нет
+  "$SHELL <<'EOF'\ngit commit --no-verify\nEOF",
+  "$0 <<'EOF'\ngit push --force origin main\nEOF",
+  '"b"ash <<\'EOF\'\ngit commit --no-verify\nEOF',
+  "${SHELL} <<'EOF'\necho x > tools/protected-paths.json\nEOF",
+  "cat <<'EOF' | $SHELL\ngit commit --no-verify\nEOF",
+  // e45 (ревью, раунд 3): обёртке передана оболочка по ссылке
+  "sudo $SHELL <<'EOF'\ngit commit --no-verify\nEOF",
 ];
 
 for (const command of MUST_DENY) {
@@ -156,6 +170,10 @@ const MUST_PASS: string[] = [
   // e45: определение функции и `[` в начале слова — легитимны, прилипшей скобки и индекса там нет
   "f() { :; }\ncat <<'EOF' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF",
   "if [ -f x ]; then cat <<'EOF' > /tmp/notes.md\nLEFTHOOK=0 is forbidden\nEOF\nfi",
+  // e45 (ревью, раунд 3): командное слово буквальное — аргументы и цели редиректа раскрываться могут
+  'cat <<\'EOF\' | grep "$PATTERN"\nLEFTHOOK=0 is forbidden\nEOF',
+  'cat <<\'EOF\' > "$OUT"\nLEFTHOOK=0 is forbidden\nEOF',
+  "cat <<'EOF' $(pwd) *.md\nLEFTHOOK=0 is forbidden\nEOF",
 ];
 
 for (const command of MUST_PASS) {
@@ -174,6 +192,17 @@ for (const command of MUST_PASS) {
 it('blocks an oversized command instead of analyzing it', () => {
   const result = runGuard(`echo ${'x'.repeat(70_000)} > tools/protected-paths.json`);
   expect(deniedIn(result)).toBe(true);
+});
+
+/**
+ * e45 (ревью, раунд 3): разбор растёт не быстрее длины команды. До правки вход меньше лимита выше
+ * заставлял хук молчать дольше своего таймаута (10 с, `.claude/settings.json`), а таймаут пропускает команду.
+ */
+it('answers a near-maximal command instead of timing out on it', () => {
+  const piled = `cat${'<<EOF '.repeat(2_000)}${'$('.repeat(8_000)}${'\n'.repeat(35_900)}git commit --no-verify`;
+  expect(piled.length).toBeGreaterThan(60_000);
+  expect(piled.length).toBeLessThanOrEqual(64_000);
+  expect(deniedIn(runGuard(piled))).toBe(true);
 });
 
 /** Битый stdin закрывает хук (exit 2): код 1 Claude Code считает неблокирующим. */
