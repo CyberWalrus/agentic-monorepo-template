@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-react';
 
 import { Frame } from '../../testing/visual-frame.tsx';
-import { TextField } from './TextField.tsx';
+import { TextField } from './text-field.tsx';
 
 describe('visual', () => {
   it('TextField states', async () => {

@@ -136,7 +136,7 @@ describe('gen feature', () => {
     const repository = read(root, 'apps/api/src/notes/repository.ts');
     expect(repository).toContain('export function noteRepositoryOf(');
 
-    const page = read(root, 'apps/web/src/features/notes/NotesPage.tsx');
+    const page = read(root, 'apps/web/src/features/notes/notes-page.tsx');
     expect(page).toContain('export function NotesPage');
     expect(page).toContain('<h1>Notes</h1>');
     expect(page).toContain('aria-label="Notes"');
@@ -157,9 +157,9 @@ describe('gen feature', () => {
       'apps/api/src/notes/repository.ts',
       'apps/api/src/notes/repository.test.ts',
       'apps/api/src/notes.test.ts',
-      'apps/web/src/features/notes/NotesPage.test.tsx',
-      'apps/web/src/features/notes/CreateNoteForm.tsx',
-      'apps/web/src/features/notes/CreateNoteForm.test.tsx',
+      'apps/web/src/features/notes/notes-page.test.tsx',
+      'apps/web/src/features/notes/create-note-form.tsx',
+      'apps/web/src/features/notes/create-note-form.test.tsx',
       'apps/web/src/features/notes/use-notes.test.tsx',
     ]) {
       expect(existsSync(join(root, path))).toBe(true);
@@ -175,7 +175,7 @@ describe('gen feature', () => {
     const run = runGen(['feature', 'todo-lists'], root, stubbedPnpm().env);
 
     expect(run.status).toBe(0);
-    const page = read(root, 'apps/web/src/features/todo-lists/TodoListsPage.tsx');
+    const page = read(root, 'apps/web/src/features/todo-lists/todo-lists-page.tsx');
     expect(page).toContain('<h1>TodoLists</h1>');
     expect(page).toContain('export function TodoListsPage({ todoLists, onCreate }');
     expect(read(root, 'apps/web/src/features/todo-lists/use-todo-lists.ts')).toContain(

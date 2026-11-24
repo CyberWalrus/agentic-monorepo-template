@@ -2,7 +2,7 @@ import { CreateTaskInputSchema } from '@repo/contracts';
 import { Button, TextField } from '@repo/ui';
 import { useState, type FormEvent } from 'react';
 
-import styles from './TasksPage.module.css';
+import styles from './tasks-page.module.css';
 
 export interface CreateTaskFormProps {
   onCreate: (title: string) => Promise<void>;
