@@ -2,6 +2,12 @@ import { Hono, type Context } from 'hono';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { gzipSync } from 'node:zlib';
+import {
+  REQUEST_BODY_LIMIT_BYTES,
+  REQUEST_TIMEOUT_MS,
+  requestGuards,
+  type RequestGuardsOptions,
+} from './lib/request-guards.ts';
 
 /**
  * Production-сервер web (C3.2): тонкий Node-entry поверх сборки TanStack Start.
@@ -11,7 +17,8 @@ import { gzipSync } from 'node:zlib';
  *      в свой origin, сборка не зависит от адреса API;
  *   3. статика клиентской сборки из `staticRoot` (dist/client);
  *   4. всё остальное — fetch-обработчик серверной сборки TanStack Start
- *      (dist/server/server.js экспортирует `{ default: { fetch } }`).
+ *      (dist/server/server.js экспортирует `{ default: { fetch } }`); не-GET/HEAD
+ *      идут в него под ограждениями `requestGuards` (лимит тела, таймаут, e55).
  * Логика — здесь (unit-тесты без сети и файлов приложения), проводка — в
  * `server.ts` в корне пакета.
  */
@@ -39,7 +46,11 @@ export function isStartEntry(value: unknown): value is StartEntry {
   return typeof mod.fetch === 'function';
 }
 
-export interface WebServerAppOptions {
+/**
+ * Опции сервера. `bodyLimitBytes` и `requestTimeoutMs` — контур ограждений
+ * не-GET/HEAD мимо статики (e55), тот же, что у API.
+ */
+export interface WebServerAppOptions extends RequestGuardsOptions {
   /** Адрес API: единственная цель прокси `/rpc` (ADR 0005). */
   apiUrl: string;
   /** Корень статики клиентской сборки (dist/client), абсолютный путь. */
@@ -138,7 +149,10 @@ export interface StaticFile {
   /** Копия файла в свежем ArrayBuffer: BodyInit требует ArrayBufferView<ArrayBuffer>. */
   body: Uint8Array<ArrayBuffer>;
   contentType: string;
-  /** `/assets/*` — хешированные имена клиентской сборки: кэш навсегда. */
+  /**
+   * Файл лежит внутри каталога ассетов сборки (`resolvedPath` под
+   * `<staticRoot>/assets`) — хешированные имена клиентской сборки: кэш навсегда.
+   */
   cacheable: boolean;
   /** Расширение файла в нижнем регистре — вход в решение о gzip-сжатии. */
   ext: string;
@@ -150,6 +164,12 @@ export interface StaticFile {
    */
   resolvedPath: string;
 }
+
+/**
+ * Каталог хешированных ассетов клиентской сборки: `assetsDir` Vite по
+ * умолчанию. Только файлы из него кэшируются навсегда.
+ */
+const ASSETS_DIR = 'assets';
 
 /**
  * Резолвит путь запроса в файл внутри `staticRoot`. Возвращает null, если
@@ -191,7 +211,11 @@ export async function resolveStaticFile(
   return {
     body: new Uint8Array(await fs.readFile(resolved)),
     contentType,
-    cacheable: decoded.startsWith('/assets/'),
+    // Кэш навсегда — по разрешённому файлу внутри каталога ассетов, а не по
+    // префиксу URL: `/assets/../x.js` (закодированный разделитель URL-парсер
+    // не нормализует) разрешается в корневой файл — нехешированный, immutable
+    // замораживал бы его копию в кэшах (e55).
+    cacheable: resolved.startsWith(path.resolve(staticRoot, ASSETS_DIR) + path.sep),
     ext: path.extname(resolved).toLowerCase(),
     resolvedPath: resolved,
   };
@@ -324,7 +348,17 @@ export function createWebServerApp(options: WebServerAppOptions): Hono {
   });
 
   // Не-GET/HEAD (server functions TanStack Start, POST-маршруты) мимо статики.
-  app.all('*', (c) => handler(c.req.raw));
+  // Ограждения стоят на классе запросов — на этом единственном catch-all, куда
+  // попадает каждая следующая server function, а не на маршруте: иначе новая
+  // будет забытым исключением. Контур тот же, что у API (c1.7): 1 МиБ, 30 с.
+  app.all(
+    '*',
+    ...requestGuards({
+      bodyLimitBytes: options.bodyLimitBytes ?? REQUEST_BODY_LIMIT_BYTES,
+      requestTimeoutMs: options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS,
+    }),
+    (c) => handler(c.req.raw),
+  );
 
   return app;
 }

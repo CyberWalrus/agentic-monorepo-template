@@ -5,12 +5,14 @@ import { gunzipSync } from 'node:zlib';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { REQUEST_BODY_LIMIT_BYTES, REQUEST_TIMEOUT_MS } from './lib/request-guards.ts';
 import {
   acceptsGzip,
   createWebServerApp,
   forwardHeaders,
   isStartEntry,
   resolveStaticFile,
+  type WebServerAppOptions,
 } from './server-app.ts';
 
 const API_URL = 'http://api.local:3901';
@@ -61,21 +63,25 @@ function makeProxyFetch() {
   });
 }
 
-function makeApp(
-  overrides: { staticRoot?: string; compressedBodies?: Map<string, Uint8Array<ArrayBuffer>> } = {},
-) {
+type AppOverrides = Partial<
+  Pick<
+    WebServerAppOptions,
+    'staticRoot' | 'compressedBodies' | 'bodyLimitBytes' | 'requestTimeoutMs'
+  >
+>;
+
+function makeApp(overrides: AppOverrides = {}) {
   const handler = makeHandler();
   const proxyFetch = makeProxyFetch();
+  // exactOptionalPropertyTypes: ключ не передаётся вовсе, когда значение не
+  // введено — иначе в опцию попадает undefined.
+  const { staticRoot: root, ...injected } = overrides;
   const app = createWebServerApp({
     apiUrl: API_URL,
-    staticRoot: overrides.staticRoot ?? staticRoot,
+    staticRoot: root ?? staticRoot,
     handler,
     proxyFetch,
-    // exactOptionalPropertyTypes: ключ не передаётся вовсе, когда кэш не
-    // введён — иначе в опцию попадает undefined.
-    ...(overrides.compressedBodies === undefined
-      ? {}
-      : { compressedBodies: overrides.compressedBodies }),
+    ...injected,
   });
   return { app, handler, proxyFetch };
 }
@@ -295,6 +301,19 @@ describe('static files', () => {
     expect(response.headers.get('cache-control')).toBeNull();
   });
 
+  it('does not cache immutably an /assets/… path that resolves outside the assets directory', async () => {
+    const { app } = makeApp();
+
+    // URL-парсер не трогает закодированный разделитель: путь доходит до
+    // резолвера как `/assets/../index.html` и разрешается в корневой файл —
+    // нехешированный, значит immutable кэшировать нельзя.
+    const response = await app.request('http://web.local/assets%2F..%2Findex.html');
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(response.headers.get('cache-control')).toBeNull();
+  });
+
   it('matches extensions case-insensitively', async () => {
     const { app } = makeApp();
 
@@ -498,9 +517,106 @@ describe('fallback to the TanStack Start handler', () => {
   });
 });
 
+describe('request guards on the SSR fallback', () => {
+  it('answers 413 with the API body when a non-GET body exceeds the limit', async () => {
+    const { app, handler } = makeApp({ bodyLimitBytes: 10 });
+
+    const response = await app.request('http://web.local/tasks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'x'.repeat(11),
+    });
+
+    expect(response.status).toBe(413);
+    // Форма и текст — дословно как у API (`apps/api/src/app.test.ts`, 413).
+    expect(response.headers.get('content-type')).toMatch(/^application\/json/);
+    await expect(response.json()).resolves.toEqual({ error: 'Payload too large' });
+    // Отклонённое тело не дошло до SSR-обработчика.
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('rejects by the declared content-length before reading the body', async () => {
+    const { app, handler } = makeApp({ bodyLimitBytes: 10 });
+
+    const response = await app.request('http://web.local/tasks', {
+      method: 'POST',
+      headers: { 'content-length': '11' },
+      body: 'x',
+    });
+
+    expect(response.status).toBe(413);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('lets a body exactly at the limit through to the handler intact', async () => {
+    const { app, handler } = makeApp({ bodyLimitBytes: 10 });
+    handler.mockImplementationOnce(
+      async (request) => new Response(`echo ${await request.text()}`, { status: 201 }),
+    );
+
+    const response = await app.request('http://web.local/tasks?open=1', {
+      method: 'POST',
+      body: 'x'.repeat(10),
+    });
+
+    // Штатный поток не сломан: тело, метод и URL доходят до обработчика.
+    expect(response.status).toBe(201);
+    await expect(response.text()).resolves.toBe(`echo ${'x'.repeat(10)}`);
+    const forwarded = handler.mock.calls[0]?.[0];
+    if (!(forwarded instanceof Request)) {
+      throw new Error('handler did not receive a Request');
+    }
+    expect(forwarded.method).toBe('POST');
+    expect(new URL(forwarded.url).search).toBe('?open=1');
+  });
+
+  it('answers 504 with the API body when the handler hangs', async () => {
+    const gate: { release?: () => void } = {};
+    const hanging = new Promise<Response>((resolve) => {
+      gate.release = () => resolve(new Response('too late'));
+    });
+    const { app, handler } = makeApp({ requestTimeoutMs: 20 });
+    // Обработчик отвечает позже таймаута: гонку обязан выиграть таймер.
+    handler.mockImplementationOnce(() => hanging);
+
+    const response = await app.request('http://web.local/tasks', { method: 'POST' });
+
+    expect(response.status).toBe(504);
+    // Форма и текст — дословно как у API (`apps/api/src/app.test.ts`, 504).
+    expect(response.headers.get('content-type')).toMatch(/^application\/json/);
+    await expect(response.json()).resolves.toEqual({ error: 'Request timed out' });
+    // Проигравший обработчик отпущен: висящих промисов тест не оставляет.
+    gate.release?.();
+    await hanging;
+  });
+
+  it('defaults to the API limits: 1 MiB of body and 30 s', async () => {
+    const { app, handler } = makeApp();
+
+    const response = await app.request('http://web.local/tasks', {
+      method: 'POST',
+      body: 'x'.repeat(REQUEST_BODY_LIMIT_BYTES + 1),
+    });
+
+    expect(response.status).toBe(413);
+    expect(handler).not.toHaveBeenCalled();
+    expect(REQUEST_BODY_LIMIT_BYTES).toBe(1_048_576);
+    expect(REQUEST_TIMEOUT_MS).toBe(30_000);
+  });
+});
+
 describe('resolveStaticFile', () => {
   it('returns null for the root itself', async () => {
     expect(await resolveStaticFile(staticRoot, '/')).toBeNull();
+  });
+
+  it('decides cacheability by the resolved file, not by the URL prefix', async () => {
+    const asset = await resolveStaticFile(staticRoot, '/assets/app-abc123.js');
+    const escaped = await resolveStaticFile(staticRoot, '/assets/../index.html');
+
+    expect(escaped?.resolvedPath).toBe(path.join(staticRoot, 'index.html'));
+    expect(asset?.cacheable).toBe(true);
+    expect(escaped?.cacheable).toBe(false);
   });
 
   it('canonicalizes percent-encodings to the same resolved path (cache key)', async () => {
