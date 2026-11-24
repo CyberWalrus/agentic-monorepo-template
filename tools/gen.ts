@@ -91,12 +91,13 @@ function contractTemplate(f: FeatureNames): string {
   return `/**
  * Заготовка контракта фичи ${f.name} — сгенерировано \`pnpm gen feature ${f.name}\`.
  * Дорабатывай под фичу: поля схемы, процедуры, политика доступа (public
- * меняется на owner/admin по образцу tasks). После изменения контракта —
- * \`pnpm --filter @repo/contracts openapi\`.
+ * меняется на owner/admin по образцу tasks — строитель меняется вместе с
+ * политикой: public — \`ocPublic\`, проверка доступа — \`ocAccess\`).
+ * После изменения контракта — \`pnpm --filter @repo/contracts openapi\`.
  */
 import * as z from 'zod';
 
-import { ocAccess } from './access-policy.ts';
+import { ocPublic } from './access-policy.ts';
 
 export const ${E}_TITLE_MAX_LENGTH = 200;
 
@@ -106,7 +107,9 @@ export const ${E}Schema = z.object({
   createdAt: z.iso.datetime(),
 });
 
-export const Create${E}InputSchema = z.object({
+// Вход создания — строгий объект (e57): лишний ключ (опечатка в имени поля) —
+// ошибка валидации, а не молчаливо отброшенное значение.
+export const Create${E}InputSchema = z.strictObject({
   title: z.string().trim().min(1, 'Title is required').max(${E}_TITLE_MAX_LENGTH),
 });
 
@@ -114,11 +117,11 @@ export type ${E} = z.infer<typeof ${E}Schema>;
 export type Create${E}Input = z.infer<typeof Create${E}InputSchema>;
 
 export const ${f.camel}Contract = {
-  list: ocAccess
+  list: ocPublic
     .route({ method: 'GET', path: '/${f.name}', summary: 'List ${f.name}, newest first' })
     .meta({ access: { type: 'public' } })
     .output(z.array(${E}Schema)),
-  create: ocAccess
+  create: ocPublic
     .route({ method: 'POST', path: '/${f.name}', summary: 'Create a ${f.entity}' })
     .meta({ access: { type: 'public' } })
     .input(Create${E}InputSchema)
@@ -143,6 +146,13 @@ describe('Create${E}InputSchema', () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.issues[0]?.message).toBe('Title is required');
+  });
+
+  it('rejects an unknown key instead of dropping it silently', () => {
+    const result = Create${E}InputSchema.safeParse({ title: 'x', extra: 1 });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toMatchObject([{ code: 'unrecognized_keys', keys: ['extra'] }]);
   });
 
   it('accepts a title of exactly the maximum length', () => {
