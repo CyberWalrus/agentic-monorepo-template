@@ -23,8 +23,16 @@ import {
   type TaskFile,
 } from './backlog-board.ts';
 
+/**
+ * Вывод git. trim() — только для построчного вывода; NUL-разделённый (`-z`) не
+ * обрезается: у записи porcelain «XY путь» ведущий пробел значим (X = « » —
+ * правка только в рабочем дереве), trim срезал его у первой записи вывода, и
+ * check-branch-scope терял первый символ её пути — ложное «вне touches» с
+ * искажённым именем (e71). Потребители `-z` отбрасывают пустые токены сами.
+ */
 export function git(...args: string[]): string {
-  return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const output = execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return args.includes('-z') ? output : output.trim();
 }
 
 export function tryGit(...args: string[]): string | null {
