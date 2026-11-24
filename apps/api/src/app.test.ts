@@ -447,7 +447,7 @@ describe('test API', () => {
           headers: { 'x-workspace-id': workspace },
         }),
       );
-    const reset = (tasks: (typeof seeded)[]): Promise<Response> =>
+    const reset = async (tasks: (typeof seeded)[]): Promise<Response> =>
       app.request('/__test__/reset', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-workspace-id': 'ws-a' },
