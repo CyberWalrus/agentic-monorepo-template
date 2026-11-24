@@ -126,3 +126,30 @@ describe('D7: next отличает «все пересекаются» от «�
     expect(result.stderr).toContain('Работа вне доски');
   });
 });
+
+describe('D7: мягкий путь не запирает захват (ADR 0023)', () => {
+  it('вторая задача, пересекающаяся с задачей в работе только по docs/architecture.md, захватывается', () => {
+    const laws = 'docs/architecture.md';
+    // s — в работе (ветка без коммитов, как чужой захват), e сходится с ней только
+    // по мягкому пути: документ обязаны объявить обе, пересечением он не считается.
+    writeFileSync(join(repo, 'backlog', 's.md'), taskFile('s', `${laws}, shared/laws.ts`));
+    writeFileSync(join(repo, 'backlog', 'e.md'), taskFile('e', `${laws}, other/mod.ts`));
+    git(['add', '-A']);
+    assertOk(git(['commit', '-m', 'доска: s и e сходятся по мягкому пути']), 'git commit');
+    assertOk(git(['branch', 'task/s']), 'claim s');
+
+    const next = run(backlogCli, ['next']);
+    expect(next.status).toBe(0);
+    expect(next.stdout).toContain('Следующая свободная задача: e');
+    // Выдача и захват считают пересечение одинаково: неотданных — по-прежнему ровно b.
+    expect(next.stderr).toContain('не выдаются (D7): b.');
+    const result = run(backlogCli, ['start', 'e']);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(git(['rev-parse', '--verify', 'task/e']).status).toBe(0);
+    // start e создал worktree рядом с клоном (worktreePath): снимаем до -D.
+    assertOk(git(['worktree', 'remove', '--force', `${repo}-task-e`]), 'worktree remove');
+    assertOk(git(['branch', '-D', 'task/e']), 'release e');
+    assertOk(git(['branch', '-D', 'task/s']), 'release s');
+  });
+});
