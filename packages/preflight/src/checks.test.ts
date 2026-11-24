@@ -217,6 +217,16 @@ describe('pnpm против packageManager', () => {
 });
 
 describe('node_modules против lockfile', () => {
+  /** stderr pnpm 12.21.0 в песочнице агента: блокировка хранилища вне гранта (e70, живой прогон). */
+  const sandboxStoreLockStderr = [
+    'Error: ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK',
+    '',
+    '  × installing dependencies',
+    '  ╰─▶ Failed to open the store operation lock at "pnpm-store-operation-locks":',
+    '      Operation not permitted (os error 1)',
+    '',
+  ].join('\n');
+
   it('дрейф lockfile даёт сообщение и команду pnpm install', async () => {
     const root = makeRoot();
 
@@ -224,9 +234,64 @@ describe('node_modules против lockfile', () => {
 
     const nodeModules = checkById(report, 'node_modules');
     expect(nodeModules.ok).toBe(false);
-    expect(nodeModules.problem).toContain('--frozen-lockfile');
+    expect(nodeModules.problem).toBe('pnpm install --frozen-lockfile завершился с кодом 3');
     expect(nodeModules.fix).toBe('pnpm install');
     expect(report.ok).toBe(false);
+  });
+
+  it('блокировка хранилища из песочницы называет причину и выход наружу, а не дрейф lockfile', async () => {
+    const root = makeRoot();
+
+    const report = await runPreflight(
+      envWithCommands(root, [onlyFrozenInstall({ code: 1, stderr: sandboxStoreLockStderr })]),
+    );
+
+    const nodeModules = checkById(report, 'node_modules');
+    expect(nodeModules.ok).toBe(false);
+    expect(nodeModules.level).toBe('error');
+    expect(nodeModules.problem).toContain('ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK');
+    expect(nodeModules.problem).toContain('песочниц');
+    expect(nodeModules.problem).not.toContain('не соответствует lockfile');
+    expect(nodeModules.fix).toBe(
+      'pnpm install --frozen-lockfile вне песочницы агента — в своём терминале',
+    );
+    expect(report.ok).toBe(false);
+  });
+
+  it('иной код ошибки pnpm попадает в сообщение', async () => {
+    const root = makeRoot();
+
+    const report = await runPreflight(
+      envWithCommands(root, [
+        onlyFrozenInstall({ code: 1, stderr: 'Error: ERR_PNPM_NO_OFFLINE_TARBALL\n' }),
+      ]),
+    );
+
+    const nodeModules = checkById(report, 'node_modules');
+    expect(nodeModules.problem).toBe(
+      'pnpm install --frozen-lockfile завершился с кодом 1: ERR_PNPM_NO_OFFLINE_TARBALL',
+    );
+    expect(nodeModules.fix).toBe('pnpm install');
+  });
+
+  it('блокировка хранилища без запрета песочницы не подписывается ею', async () => {
+    const root = makeRoot();
+    const stderr = [
+      'Error: ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK',
+      '  ╰─▶ Failed to open the store operation lock at "pnpm-store-operation-locks":',
+      '      Permission denied (os error 13)',
+      '',
+    ].join('\n');
+
+    const report = await runPreflight(
+      envWithCommands(root, [onlyFrozenInstall({ code: 1, stderr })]),
+    );
+
+    const nodeModules = checkById(report, 'node_modules');
+    expect(nodeModules.problem).toBe(
+      'pnpm install --frozen-lockfile завершился с кодом 1: ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK',
+    );
+    expect(nodeModules.fix).toBe('pnpm install');
   });
 });
 
