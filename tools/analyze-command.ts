@@ -637,3 +637,144 @@ function applyCd(segment: string, cwd: string, stack: string[]): string {
   }
   return cwd;
 }
+
+/**
+ * Делит команду на простые команды — по `;`, `&&`, `||`, `|`, `&` и переводу строки вне кавычек.
+ * В отличие от `SEGMENTS`, кавычки для разбора непрозрачны (`-m "a; b"` — один аргумент), а `&`
+ * перенаправления (`2>&1`, `&>file`) — не конец команды: правило по словам не должно терять команду
+ * из-за текста, который оболочка читает иначе (e50).
+ */
+export function splitCommands(command: string): string[] {
+  const commands: string[] = [];
+  let start = 0;
+  let quote = '';
+  const end = (at: number, width: number): void => {
+    commands.push(command.slice(start, at));
+    start = at + width;
+  };
+  for (let at = 0; at < command.length; at++) {
+    const char = command.charAt(at);
+    if (quote !== '') {
+      // экранированная кавычка внутри двойных кавычек их не закрывает
+      if (char === '\\' && quote === '"' && command.charAt(at + 1) === quote) at++;
+      else if (char === quote) quote = '';
+    } else if (char === "'" || char === '"' || char === '`') quote = char;
+    else if (char === '\\') at++; // экранированный символ и перенос строки
+    else if (char === ';' || char === '\n') end(at, 1);
+    else if (char === '|' || char === '&') {
+      // `2>&1`, `&>file`, `&>>file` — перенаправление потока, а не конец команды
+      const stream =
+        command.charAt(at - 1) === '>' ||
+        command.charAt(at - 1) === '<' ||
+        command.charAt(at + 1) === '>';
+      if (stream) continue;
+      // `&&` и `||` — один разделитель: второй символ не начинает пустую команду
+      const doubled = command.charAt(at + 1) === char;
+      end(at, doubled ? 2 : 1);
+      if (doubled) at++;
+    }
+  }
+  commands.push(command.slice(start));
+  return commands;
+}
+
+/**
+ * Слова простой команды — `tokenize` без оболочечного «клея» по краям слова: `$(git`, `(pnpm`, `{`,
+ * `-u)`. Клей относится к оболочке, а не к слову, которое читает правило.
+ */
+export function commandWords(command: string): string[] {
+  return tokenize(command)
+    .map((word) => word.replace(/^[({$`]+/, '').replace(/[)}]+$/, ''))
+    .filter((word) => word !== '');
+}
+
+/**
+ * Глобальные опции git между `git` и подкомандой. Значение отдельным словом берут `-C <путь>`,
+ * `-c <имя>=<значение>`, `--git-dir`, `--work-tree`, `--namespace`, `--config-env` (git 2.50.1:
+ * `git <опция> <значение> status` отвечает как с `=`, а `--exec-path` и `--no-pager` значение
+ * отдельным словом не берут); остальные — `--флаг` либо `--флаг=значение`.
+ */
+const GIT_GLOBAL_OPTIONS =
+  /\bgit(?:(?:\s+(?:-[Cc]|--git-dir|--work-tree|--namespace|--config-env)\s+(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+))|\s+--?[^\s;&|]+)*/g;
+
+/**
+ * Снимает с текста команды глобальные опции git: `git -C <dir> push -f` правила читают как
+ * `git push -f`. Буквальное правило матчит `git <подкоманда>`, а опция между ними разрывала
+ * форму (e50).
+ */
+export function withoutGitGlobalOptions(command: string): string {
+  return command.replace(GIT_GLOBAL_OPTIONS, 'git');
+}
+
+/** Раннер снапшотов — сам (`vitest`) или путь к его бинарнику (`./node_modules/.bin/playwright`). */
+const TEST_RUNNER = /(?:^|\/)(?:vitest|playwright|jest)$/;
+/** Диспетчер пакетов, через который вызывается тестовая задача: имени раннера в команде тогда нет. */
+const PACKAGE_MANAGER = /^(?:pnpm|pnpx|npx|npm|yarn|bun|bunx)$/;
+/** Тестовая задача диспетчера: `test`, его псевдонимы и `test:*`-скрипты. */
+const TEST_TASK = /^(?:test|tst|t|e2e|visual)(?::\S*)?$/;
+/** Флаг обновления снапшотов цельным словом: `-u`, `--update-snapshots`, `--updateSnapshot`. */
+const SNAPSHOT_UPDATE_FLAG = /^(?:-u|--update)/;
+
+const isSnapshotUpdateFlag = (word: string): boolean => SNAPSHOT_UPDATE_FLAG.test(word);
+
+/**
+ * Обновляет ли простая команда базлайны формой, которую буквальное правило не видит: флаг
+ * обновления стоит цельным словом
+ * - в хвосте после разделителя `--` — там аргументы вызываемого скрипта ровно в том виде, как их
+ *   написали (`pnpm test -- -u`);
+ * - без разделителя — в тестовом запуске: назван раннер (`npx playwright test -u`) либо диспетчер
+ *   пакетов вызывает тестовую задачу (`pnpm --filter x test -u`).
+ *
+ * `git push -u origin <ветка>` и `curl -u` остаются разрешёнными: в них нет ни разделителя,
+ * ни тестового запуска.
+ */
+export function updatesSnapshots(words: string[]): boolean {
+  const separator = words.indexOf('--');
+  if (separator !== -1 && words.slice(separator + 1).some(isSnapshotUpdateFlag)) return true;
+  const manager = words.findIndex((word) => PACKAGE_MANAGER.test(word));
+  const runsTests =
+    words.some((word) => TEST_RUNNER.test(word)) ||
+    (manager !== -1 && words.slice(manager + 1).some((word) => TEST_TASK.test(word)));
+  return runsTests && words.some(isSnapshotUpdateFlag);
+}
+
+/** Слово `git` — само или путь к бинарнику (`/usr/bin/git`). */
+const GIT = /(?:^|[^\w-])git$/;
+/** Опции `git checkout` со значением отдельным словом: за ним идёт имя, а не ревизия и не путь. */
+const CHECKOUT_OPTION_WITH_VALUE = new Set([
+  '-b',
+  '-B',
+  '--orphan',
+  '--pathspec-from-file',
+  '--conflict',
+]);
+
+/**
+ * Перезаписывает ли простая команда файлы рабочего дерева через `git checkout` — их несохранённые
+ * изменения отбрасываются, как у запрещённого `git checkout -- <файл>`:
+ * - за `--` есть пути: `git checkout <ревизия> -- <файл>`;
+ * - без `--` остались ревизия и путь (`git checkout <ревизия> <файл>` — та же операция), либо пути
+ *   читаются из файла (`--pathspec-from-file`).
+ *
+ * Опции и их значения не считаются: `git checkout -b <ветка> <старт>` — смена ветки. Одно слово
+ * без `--` (`git checkout task/e50`) — тоже смена ветки: ветка это или путь, по тексту не отличить.
+ */
+export function checkoutOverwritesPaths(words: string[]): boolean {
+  for (let at = 0; at + 1 < words.length; at++) {
+    if (!GIT.test(words[at] ?? '') || words[at + 1] !== 'checkout') continue;
+    const args = words.slice(at + 2);
+    const separator = args.indexOf('--');
+    if (separator !== -1) {
+      if (separator < args.length - 1) return true;
+    } else if (args.some((arg) => arg.startsWith('--pathspec-from-file'))) return true;
+    let skipValue = false;
+    let positional = 0;
+    for (const arg of args) {
+      if (skipValue) skipValue = false;
+      else if (CHECKOUT_OPTION_WITH_VALUE.has(arg)) skipValue = true;
+      else if (!arg.startsWith('-')) positional++;
+    }
+    if (positional >= 2) return true;
+  }
+  return false;
+}

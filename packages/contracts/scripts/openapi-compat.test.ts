@@ -1,7 +1,18 @@
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   checkCompatibility,
@@ -757,5 +768,169 @@ describe('diffSchema: направление сравнения', () => {
 
     expect(kinds(requestFindings('request'))).toEqual(['type-narrowed']);
     expect(requestFindings('output')).toEqual([]);
+  });
+});
+
+// --- CLI: база сравнения (e48) --------------------------------------------------------
+
+/** Результат запуска CLI в дочернем процессе. */
+interface CliRun {
+  status: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** Временный репозиторий без remote с копией настоящего CLI. */
+interface CliRepo {
+  commitSpec: (next: SpecDocument) => void;
+  head: () => string;
+  run: (env: Record<string, string>, ...args: string[]) => CliRun;
+}
+
+const cliDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of cliDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** Ответ /tasks без completed — breaking change относительно taskSchema (response-field-removed). */
+const responseWithoutCompleted = (): SpecDocument =>
+  listTasksSpec({
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      title: { type: 'string', minLength: 1, maxLength: 200 },
+    },
+    required: ['id', 'title'],
+  });
+
+/**
+ * Репозиторий без remote, где CLI лежит на своём пути (скрипт считает корень
+ * от расположения: scripts/ → contracts → packages → корень). Окружение
+ * запуска строится с нуля: наследованный TURBO_SCM_BASE или разрешение базы
+ * HEAD делали бы исход зависимым от того, что стоит в окружении тестов.
+ */
+function makeRepo(spec: SpecDocument): CliRepo {
+  // tmpdir на macOS — под симлинком (/var → /private/var): без realpath путь
+  // argv[1] разошёлся бы с import.meta.url, и скрипт не счёл бы запуск прямым.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'e48-openapi-compat-')));
+  cliDirs.push(dir);
+  const cli = join(dir, 'packages/contracts/scripts/openapi-compat.ts');
+  mkdirSync(join(dir, 'packages/contracts/scripts'), { recursive: true });
+  copyFileSync(fileURLToPath(new URL('./openapi-compat.ts', import.meta.url)), cli);
+  // Глобальный git-конфиг машины (gpgsign, hooksPath) не должен ломать fixture.
+  const neutral = ['-c', 'commit.gpgsign=false', '-c', `core.hooksPath=${join(dir, '.nohooks')}`];
+  const git = (...args: string[]): string => {
+    const done = spawnSync('git', ['-C', dir, ...neutral, ...args], {
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    if (done.error !== undefined || done.status !== 0) {
+      throw new Error(
+        `fixture: git ${args.join(' ')} failed: ${String(done.error ?? done.stderr)}`,
+      );
+    }
+    return done.stdout;
+  };
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 'e48@example.invalid');
+  git('config', 'user.name', 'e48 fixture');
+
+  const commitSpec = (next: SpecDocument): void => {
+    writeFileSync(
+      join(dir, 'packages/contracts/openapi.json'),
+      `${JSON.stringify(next, null, 2)}\n`,
+    );
+    git('add', '.');
+    git('commit', '-qm', 'spec');
+  };
+  commitSpec(spec);
+
+  return {
+    commitSpec,
+    head: () => git('rev-parse', 'HEAD').trim(),
+    run: (env, ...args) => {
+      const done = spawnSync(process.execPath, [cli, ...args], {
+        cwd: dir,
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: { PATH: process.env['PATH'] ?? '', ...env },
+      });
+      if (done.error !== undefined) {
+        throw new Error(`fixture: CLI failed: ${String(done.error)}`);
+      }
+      return { status: done.status ?? -1, stdout: done.stdout, stderr: done.stderr };
+    },
+  };
+}
+
+describe('CLI: база сравнения (e48)', () => {
+  it('a repository without origin/main and without an explicit base fails instead of comparing HEAD with itself', () => {
+    const repo = makeRepo(listTasksSpec(taskSchema()));
+    repo.commitSpec(responseWithoutCompleted());
+
+    const run = repo.run({});
+
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('openapi-compat: база не определена');
+    // Инструкция называет оба канала: локальный и CI.
+    expect(run.stderr).toContain('git fetch origin main');
+    expect(run.stderr).toContain('--base <ref>');
+    expect(run.stderr).toContain('TURBO_SCM_BASE');
+    expect(run.stdout).not.toContain('несовместимых изменений');
+  });
+
+  it.each([
+    {
+      channel: 'TURBO_SCM_BASE',
+      env: (base: string): Record<string, string> => ({ TURBO_SCM_BASE: base }),
+      args: (): string[] => [],
+    },
+    {
+      channel: '--base <ref>',
+      env: (): Record<string, string> => ({}),
+      args: (base: string): string[] => ['--base', base],
+    },
+  ])('$channel reaches the breaking change where there is no origin/main', ({ env, args }) => {
+    const repo = makeRepo(listTasksSpec(taskSchema()));
+    const base = repo.head();
+    repo.commitSpec(responseWithoutCompleted());
+
+    const run = repo.run(env(base), ...args(base));
+
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('[response-field-removed]');
+  });
+
+  it('the explicit opt-in compares HEAD with itself (the template copy canary)', () => {
+    const repo = makeRepo(listTasksSpec(taskSchema()));
+    repo.commitSpec(responseWithoutCompleted());
+
+    const run = repo.run({ OPENAPI_COMPAT_ALLOW_HEAD_BASE: '1' });
+
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain(`относительно ${repo.head()} нет`);
+    // Разрешение не тихое: в выводе сказано, что проверено сравнение с самим собой.
+    expect(run.stdout).toContain('OPENAPI_COMPAT_ALLOW_HEAD_BASE=1');
+  });
+
+  it.each(['0', 'false', '', 'yes'])('only the exact value opts in, not «%s»', (value) => {
+    const repo = makeRepo(listTasksSpec(taskSchema()));
+
+    const run = repo.run({ OPENAPI_COMPAT_ALLOW_HEAD_BASE: value });
+
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('openapi-compat: база не определена');
+  });
+
+  it('the opt-in does not rescue an explicit base that does not resolve', () => {
+    const repo = makeRepo(listTasksSpec(taskSchema()));
+
+    const run = repo.run({ OPENAPI_COMPAT_ALLOW_HEAD_BASE: '1', TURBO_SCM_BASE: 'origin/main' });
+
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('openapi-compat: база origin/main не резолвится в коммит.');
   });
 });

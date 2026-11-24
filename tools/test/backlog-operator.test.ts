@@ -268,6 +268,44 @@ describe('pnpm backlog start --operator', () => {
   }, 30_000);
 });
 
+describe('pnpm backlog next/start --operator: мягкий путь не запирает захват (ADR 0023)', () => {
+  it('задача оператора, пересекающаяся с ведущейся только по docs/architecture.md, выдаётся и захватывается', () => {
+    const laws = 'docs/architecture.md';
+    // ms ведётся оператором; mc сходится с ней только по мягкому пути: документ
+    // обязаны объявить обе, пересечением он не считается.
+    writeFileSync(
+      join(repo, 'backlog', 'ms.md'),
+      taskFile('ms', { priority: 'high', touches: `${laws}, tools/verify.ts` }),
+    );
+    writeFileSync(
+      join(repo, 'backlog', 'mc.md'),
+      taskFile('mc', {
+        priority: 'high',
+        touches: `${laws}, apps/web/src/lib/soft.ts`,
+        needs_human: 'оператор: согласовать раздел законов',
+      }),
+    );
+    git(['add', '-A']);
+    assertOk(git(['commit', '-m', 'доска: ms и mc сходятся по мягкому пути']), 'git commit');
+    // m2 — другой свободный кандидат того же приоритета: его дорожка занята, чтобы
+    // выдача выбирала только между mc и его пересечением с ms.
+    claimBranches(['m2', 'ms']);
+
+    const next = run(backlogCli, ['next', '--operator']);
+    expect(next.status).toBe(0);
+    expect(next.stdout).toContain('задача оператора: mc');
+    expect(next.stderr).toContain('task/ms [docs/architecture.md, tools/verify.ts]');
+    expect(next.stderr).not.toContain('mc — с task/ms');
+    // Выданное не отвергается захватом под замком: выдача и D7 считают одинаково.
+    const start = run(backlogCli, ['start', 'mc', '--operator']);
+    expect(start.status).toBe(0);
+    expect(start.stderr).not.toContain('пересекается');
+    expect(git(['rev-parse', '--verify', 'task/mc']).status).toBe(0);
+    assertOk(git(['worktree', 'remove', '--force', join(tmpBase, 'clone-task-mc')]), 'remove mc');
+    releaseBranches(['mc', 'ms', 'm2']);
+  }, 60_000);
+});
+
 // Пути ленивые (функции на уровне модуля): repo/tmpBase заполняются в beforeAll,
 // describe-константы вычисляются раньше и превращаются в относительные.
 const mainSettings = (): string => join(repo, '.claude', 'settings.local.json');
