@@ -4,14 +4,18 @@
  * её --only, и slow-шаги в --only требуют --full (full совпадает с slow).
  * Сам прогон канареек здесь не запускается — он тяжёлый (worktree + install) и
  * идёт из workflow canaries.yml и nightly (`pnpm canaries`).
+ *
+ * Канарейки шага boundaries сверяются с правилами конфига границ поимённо
+ * (e47): покрытие «шаг покрыт» не замечало, что правил без канарейки всё больше.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { gzipSync } from 'node:zlib';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BLOAT, BLOAT_DELTA, CANARIES } from '../gate-canaries.ts';
+import { BLOAT, BLOAT_DELTA, CANARIES, type GateCanary } from '../gate-canaries.ts';
 import { allStepNames, fast, post, serialFast, slow } from '../verify-steps.ts';
 
 const slowNames = new Set(slow.map((step) => step.name));
@@ -111,6 +115,85 @@ describe('таблица канареек гейтов', () => {
     expect(canaryDeltaKb, 'дельта канарейки против запаса до бюджета').toBeGreaterThan(
       budget - total,
     );
+  });
+});
+
+// --- Канарейки границ по правилам (e47) ----------------------------------------------
+
+const DEPENDENCY_CONFIG = resolve(import.meta.dirname, '..', '..', '.dependency-cruiser.cjs');
+
+/**
+ * Правила границ без канарейки на своём имени — с причиной. Вайтлист не растёт
+ * молча: каждое имя обязано быть правилом в конфиге (тест ниже).
+ */
+const BOUNDARIES_RULE_CANARY_EXEMPT = new Map<string, string>([
+  [
+    'no-deep-package-imports',
+    'правило недостижимо на текущем дереве: подпуть вне exports-карты пакета не разрешается (ловит not-to-unresolvable — канарейка «глубокий импорт пакета»), а симлинк node_modules/@repo/* раскрывается в packages/* (preserveSymlinks: false), поэтому пути «node_modules/@repo/<имя>/…» нет ни у одного модуля графа',
+  ],
+]);
+
+/**
+ * Имена правил `forbidden` из конфига границ. Конфиг — CommonJS, как его
+ * загружает dependency-cruiser. Битый конфиг бросает: проверка не отключается.
+ */
+function dependencyRuleNames(): string[] {
+  const config: unknown = createRequire(import.meta.url)(DEPENDENCY_CONFIG);
+  const forbidden: unknown = isRecord(config) ? config['forbidden'] : undefined;
+  if (!Array.isArray(forbidden) || forbidden.length === 0) {
+    throw new Error(`${DEPENDENCY_CONFIG}: ожидается непустой массив forbidden`);
+  }
+  return forbidden.map((rule: unknown, index: number) => {
+    const name = isRecord(rule) ? rule['name'] : undefined;
+    if (typeof name !== 'string' || name.length === 0) {
+      throw new Error(`${DEPENDENCY_CONFIG}: forbidden[${index}] без name`);
+    }
+    return name;
+  });
+}
+
+/** Канарейка ожидает именно это правило: имя — литерал в expect, и expect матчит имя. */
+function expectsRule(canary: GateCanary, rule: string): boolean {
+  // Двусторонне: одного test мало — /no-/ матчит четыре правила; одного
+  // includes мало — /not-to-dev-dep-2/ накрыл бы not-to-dev-dep. Регулярка
+  // пересобирается без флагов: у RegExp с g тест помнит lastIndex.
+  return canary.expect.source.includes(rule) && new RegExp(canary.expect.source).test(rule);
+}
+
+describe('канарейки шага boundaries — по правилам, а не по шагу (e47)', () => {
+  // Вердикт канарейки выносит целевой шаг: сосед в steps границу не доказывает.
+  const boundaries = CANARIES.filter((canary) => canary.failedStep === 'boundaries');
+
+  it('у каждого правила границ есть канарейка с expect на его name', () => {
+    const uncovered = dependencyRuleNames().filter(
+      (rule) =>
+        !BOUNDARIES_RULE_CANARY_EXEMPT.has(rule) &&
+        !boundaries.some((canary) => expectsRule(canary, rule)),
+    );
+
+    expect(
+      uncovered,
+      'правила границ без канарейки — добавь канарейку с expect на его name или запиши причину в BOUNDARIES_RULE_CANARY_EXEMPT',
+    ).toEqual([]);
+  });
+
+  it('expect каждой канарейки границ называет существующее правило', () => {
+    // Обратное направление: переименовали правило в конфиге или написали expect
+    // на путь зонда — красный шаг test:hooks, не ночной «НЕ УПАЛ».
+    const rules = dependencyRuleNames();
+    const unnamed = boundaries.filter((canary) => !rules.some((rule) => expectsRule(canary, rule)));
+
+    expect(
+      unnamed.map((canary) => `«${canary.name}» /${canary.expect.source}/`),
+      'канарейки boundaries, чей expect — не имя ни одного правила границ',
+    ).toEqual([]);
+  });
+
+  it('вайтлист не растёт молча: причина названа для существующего правила', () => {
+    const rules = dependencyRuleNames();
+    const stale = [...BOUNDARIES_RULE_CANARY_EXEMPT.keys()].filter((rule) => !rules.includes(rule));
+
+    expect(stale, 'исключённые правила, которых нет в .dependency-cruiser.cjs').toEqual([]);
   });
 });
 
@@ -283,5 +366,76 @@ describe('дельта-канарейка и инвариант порогов (
       wireCeiling - page['jsWireKb'],
       `запас wire-байт (${wireCeiling} − ${page['jsWireKb'].toFixed(1)}) больше дельта-порога ${threshold}`,
     ).toBeGreaterThan(threshold);
+  });
+});
+
+describe('якоря канареек живы на текущем дереве (правка регистрации /rpc, 2026-11-24)', () => {
+  // Канарейки идут по фильтру путей (canaries.yml): PR, меняющий файл-якорь вне
+  // фильтра, их не запускает. e55 переписала регистрацию /rpc в server-app.ts —
+  // якоря двух канареек исчезли, мерж прошёл зелёным, а краснить стало на всех
+  // следующих PR, где пути фильтра есть. Здесь каждая канарейка применяется к
+  // копии дерева: пропавший якорь красит test:hooks в том же PR.
+  const repoRoot = resolve(import.meta.dirname, '..', '..');
+  // Канарейки, которым нужна настоящая ветка (создают task/evil-*): без
+  // репозитория apply бросает «canary setup failed»; их держит раннер канареек.
+  const needGit: ReadonlySet<string> = new Set([
+    'файл задачи не перенесён в done/',
+    'дифф вне touches задачи',
+  ]);
+  // Копируется только дерево исходников: зависимости, сборка, отчёты и покрытия
+  // (apps/api/coverage после прогона тестов) канарейкам не нужны
+  const notCopied = new Set([
+    'node_modules',
+    '.git',
+    'dist',
+    'coverage',
+    '.turbo',
+    '.stryker-tmp',
+    'reports',
+    'playwright-report',
+    'test-results',
+    '.cache',
+  ]);
+  const depth = repoRoot.split(sep).length;
+  // Симлинк не копируется: в копии он вёл бы в настоящее дерево, и канарейка,
+  // пишущая через него, поправила бы оригинал
+  const copyFilter = (source: string): boolean =>
+    !lstatSync(source).isSymbolicLink() &&
+    !source
+      .split(sep)
+      .slice(depth)
+      .some((part) => notCopied.has(part));
+
+  it('apply каждой канарейки не бросает на копии дерева', () => {
+    const root = mkdtempSync(join(tmpdir(), 'canary-anchors-'));
+    const pristine = join(root, 'pristine');
+    try {
+      cpSync(repoRoot, pristine, { recursive: true, filter: copyFilter });
+      const failures: string[] = [];
+      let applied = 0;
+      for (const canary of CANARIES) {
+        if (needGit.has(canary.name)) {
+          continue;
+        }
+        const copy = join(root, 'copy');
+        rmSync(copy, { recursive: true, force: true });
+        cpSync(pristine, copy, { recursive: true });
+        try {
+          canary.apply(copy);
+          applied += 1;
+        } catch (e) {
+          failures.push(`${canary.name}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      expect(applied, 'сколько канареек проверено').toBe(CANARIES.length - needGit.size);
+      expect(failures, 'канарейки, чей якорь не найден в дереве').toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('список канареек, требующих git, называет существующие канарейки', () => {
+    const names = new Set(CANARIES.map((canary) => canary.name));
+    expect([...needGit].filter((name) => !names.has(name))).toEqual([]);
   });
 });

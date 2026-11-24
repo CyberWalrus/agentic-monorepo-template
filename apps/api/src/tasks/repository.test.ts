@@ -55,4 +55,30 @@ describe('InMemoryTaskRepository', () => {
     await expect(repo.remove(owned.id, 'ws-a')).resolves.toEqual(owned);
     expect(await repo.list('ws-a')).toEqual([]);
   });
+
+  // e53: сбойный seed не оставляет в хранилище ни стёртого, ни частичного
+  // набора — замена атомарна, как транзакция Postgres. Тот же сценарий на
+  // обеих реализациях гоняет контрактный набор; здесь — на реализации с
+  // дефектом, с тем, что в контракт не входит: сбойный reset сохраняет
+  // владельца оставшейся строки.
+  it('leaves the store untouched when a seed is rejected', async () => {
+    const repo = createRepository();
+    const kept = await repo.create('Keep me', 'owner-1', 'ws-a');
+    const neighbour = await repo.create('Neighbour', null, 'ws-b');
+    const replaced = { ...kept, title: 'Replaced' };
+
+    // Первая строка набора валидна, вторая занимает id чужого рабочего пространства.
+    await expect(
+      repo.reset([replaced, { ...kept, id: neighbour.id, title: 'Imposter' }], 'ws-a'),
+    ).rejects.toThrow(
+      `Task id ${neighbour.id} already exists in workspace "ws-b" — seed data must use ids unique across workspaces (ADR 0020)`,
+    );
+
+    expect(await repo.list('ws-a')).toEqual([kept]);
+    expect(await repo.ownerOf(kept.id)).toBe('owner-1');
+    expect(await repo.list('ws-b')).toEqual([neighbour]);
+    // Контроль: хранилище не заклинило — валидный набор с тем же id заменяет строку.
+    await repo.reset([replaced], 'ws-a');
+    expect(await repo.list('ws-a')).toEqual([replaced]);
+  });
 });

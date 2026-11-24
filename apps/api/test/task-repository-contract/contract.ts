@@ -296,6 +296,123 @@ export const taskRepositoryContractChecks: readonly TaskRepositoryContractCheck[
       ).rejects.toThrow(/Duplicate task id within one seed/);
     },
   },
+  // Атомарность сбойного reset (e53). Postgres выполняет reset в транзакции:
+  // сбой набора откатывает и удаление старых строк. InMemory до исправления
+  // стирал данные до проверки набора и оставался стёртым или частичным — тот
+  // же сбойный набор обязан оставлять хранилище нетронутым в обеих
+  // реализациях, с той же ошибкой. Сбой везде «посередине»: часть набора уже
+  // могла бы быть записана. Тексты ошибок — литералами: совпадение ошибок
+  // реализаций держится только одинаковым утверждением в одном наборе.
+  {
+    name: 'a failed global reset leaves the whole store untouched',
+    check: async (repository) => {
+      const older = seededTask({ createdAt: '2026-01-01T00:00:00.000Z' });
+      const newer = seededTask({ createdAt: '2026-01-02T00:00:00.000Z' });
+      const neighbour = seededTask();
+      const first = seededTask();
+      await repository.reset([older, newer]);
+      await repository.reset([neighbour], 'ws-a');
+
+      await expect(
+        repository.reset([first, seededTask({ id: first.id, title: 'twin' })]),
+      ).rejects.toThrow(`Duplicate task id within one seed: ${first.id} (ADR 0020)`);
+
+      expect(await repository.list()).toEqual([newer, older]);
+      expect(await repository.list('ws-a')).toEqual([neighbour]);
+    },
+  },
+  {
+    name: 'a failed workspace reset leaves that workspace and its neighbours untouched',
+    check: async (repository) => {
+      const kept = seededTask();
+      const neighbour = seededTask();
+      const fresh = seededTask();
+      await repository.reset([kept], 'ws-a');
+      await repository.reset([neighbour], 'ws-b');
+
+      await expect(
+        repository.reset([fresh, seededTask({ id: fresh.id, title: 'twin' })], 'ws-a'),
+      ).rejects.toThrow(`Duplicate task id within one seed: ${fresh.id} (ADR 0020)`);
+
+      expect(await repository.list('ws-a')).toEqual([kept]);
+      expect(await repository.list('ws-b')).toEqual([neighbour]);
+    },
+  },
+  {
+    name: 'a failed workspace reset keeps earlier seed rows out when a later row clashes',
+    check: async (repository) => {
+      const kept = seededTask();
+      const neighbour = seededTask();
+      const fresh = seededTask();
+      await repository.reset([kept], 'ws-a');
+      await repository.reset([neighbour], 'ws-b');
+
+      await expect(
+        repository.reset([fresh, seededTask({ id: neighbour.id, title: 'imposter' })], 'ws-a'),
+      ).rejects.toThrow(
+        `Task id ${neighbour.id} already exists in workspace "ws-b" — seed data must use ids unique across workspaces (ADR 0020)`,
+      );
+
+      // Валидная строка набора, шедшая перед сбойной, тоже не попадает в хранилище.
+      expect(await repository.list('ws-a')).toEqual([kept]);
+      expect(await repository.list('ws-b')).toEqual([neighbour]);
+    },
+  },
+  {
+    // Ничейная строка (NULL) — тоже чужой scope: текст ошибки называет её «none».
+    name: 'a workspace reset that reuses an ownerless id fails and leaves the store untouched',
+    check: async (repository) => {
+      const ownerless = seededTask();
+      const kept = seededTask();
+      await repository.reset([ownerless]);
+      await repository.reset([kept], 'ws-a');
+
+      await expect(repository.reset([seededTask({ id: ownerless.id })], 'ws-a')).rejects.toThrow(
+        `Task id ${ownerless.id} already exists in workspace "none" — seed data must use ids unique across workspaces (ADR 0020)`,
+      );
+
+      expect(await repository.list('ws-a')).toEqual([kept]);
+      expect(await repository.list()).toEqual([ownerless]);
+    },
+  },
+  {
+    // Два дефекта в одном наборе: названная ошибка зависит от порядка проверок.
+    // Порядок закреплён за Postgres — сначала дубликаты: дубликат — свойство
+    // самого набора, он не зависит от состояния хранилища.
+    name: 'a seed with a duplicate and a foreign id reports the duplicate and leaves the store untouched',
+    check: async (repository) => {
+      const neighbour = seededTask();
+      const kept = seededTask();
+      const fresh = seededTask();
+      await repository.reset([neighbour], 'ws-b');
+      await repository.reset([kept], 'ws-a');
+
+      await expect(
+        repository.reset(
+          [fresh, seededTask({ id: neighbour.id }), seededTask({ id: fresh.id, title: 'twin' })],
+          'ws-a',
+        ),
+      ).rejects.toThrow(`Duplicate task id within one seed: ${fresh.id} (ADR 0020)`);
+
+      expect(await repository.list('ws-a')).toEqual([kept]);
+      expect(await repository.list('ws-b')).toEqual([neighbour]);
+    },
+  },
+  {
+    // Глобальный сброс стирает всё — id прежних строк любого scope свободны:
+    // проверка «чужого id» смотрит только на строки, которые сброс оставляет.
+    name: 'a global reset accepts ids that the old store used',
+    check: async (repository) => {
+      const old = seededTask();
+      await repository.reset([old], 'ws-a');
+      const reused = seededTask({ id: old.id, title: 'reused' });
+
+      await repository.reset([reused]);
+
+      expect(await repository.list()).toEqual([reused]);
+      expect(await repository.list('ws-a')).toEqual([]);
+    },
+  },
   {
     name: 'create records the workspace and the list scopes by it',
     check: async (repository) => {

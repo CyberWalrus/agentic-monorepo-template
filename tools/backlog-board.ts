@@ -254,9 +254,12 @@ export function statusOf(task: TaskFile, facts: BoardFacts): TaskStatus {
   return 'free';
 }
 
+/** Суффикс развёрнутой записи буквального пути (expandTouches). */
+const LITERAL_SUFFIX = '/__literal__';
+
 /** Литеральный путь превращается в узкий glob, каталог/** остаётся широким. */
 function expandTouches(paths: string[]): string[] {
-  return paths.map((path) => (path.endsWith('/**') ? path : `${path}/__literal__`));
+  return paths.map((path) => (path.endsWith('/**') ? path : `${path}${LITERAL_SUFFIX}`));
 }
 
 /**
@@ -279,19 +282,61 @@ export const SHARED_PATHS: readonly string[] = ['docs/escaped-defects.md'];
 
 const isSharedPath = (path: string): boolean => SHARED_PATHS.includes(path);
 
-/** expandTouches без общих путей (SHARED_PATHS): те пересечений не создают. */
+/**
+ * Мягкие пути (ADR 0023): документы, которые по записанному правилу обязана
+ * править — и объявлять в touches — каждая задача некоторого класса, но которые
+ * не общий хвост любого PR. От общих путей (SHARED_PATHS) отличаются обеими
+ * сторонами: пересечение освобождается только у пары двух мягких записей
+ * (isExemptPair), а объявлять путь в touches обязательно — гейт branch-scope
+ * (fileInTouches) красит правку без объявления.
+ *
+ * docs/architecture.md — законы обвязки. Задача обвязки, меняющая закон или
+ * добавляющая ADR, правит его (architecture.md, раздел 4); запрет пересечения
+ * (D7) выстраивал такие задачи в очередь из одной, хотя конфликт в документе
+ * стоит одного слияния. Класс пути — не deny: конфликт не задевает гейт-контур.
+ *
+ * Сравнение буквальное: мягкая запись — ровно путь из списка. Пара с записью,
+ * которая его покрывает («каталог/**»), пересекается, как до ADR 0023: широкий
+ * захват каталога — настоящий захват. Пополняется только через ADR.
+ */
+export const SOFT_OVERLAP_PATHS: readonly string[] = ['docs/architecture.md'];
+
+const isSoftOverlapPath = (path: string): boolean => SOFT_OVERLAP_PATHS.includes(path);
+
+/** expandTouches без общих путей (SHARED_PATHS): те не пересекаются ни с кем. */
 function expandOverlapping(paths: string[]): string[] {
   return expandTouches(paths.filter((path) => !isSharedPath(path)));
 }
 
-/** Задачи, в работе на этом клоне, пересекающиеся по touches с данной (ADR 0007, D7 — запрет при захвате). */
+/** Развёрнутая запись — мягкий путь, записанный буквально (не «каталог/**»). */
+function isSoftPathEntry(entry: string): boolean {
+  return (
+    entry.endsWith(LITERAL_SUFFIX) && isSoftOverlapPath(entry.slice(0, -LITERAL_SUFFIX.length))
+  );
+}
+
+/**
+ * Пара развёрнутых записей touches, пересечением не считающаяся. Общие пути
+ * сюда не попадают: expandOverlapping их убрал. Мягкий путь освобождает только
+ * от пары с другой мягкой записью — обе задачи обязаны объявить документ, а
+ * конфликт в нём стоит одного слияния (ADR 0023).
+ */
+const isExemptPair = (mine: string, theirs: string): boolean =>
+  isSoftPathEntry(mine) && isSoftPathEntry(theirs);
+
+/**
+ * Задачи, в работе на этом клоне, пересекающиеся по touches с данной (ADR 0007,
+ * D7 — запрет при захвате). Общие пути (SHARED_PATHS) не пересекаются ни с кем,
+ * мягкие (SOFT_OVERLAP_PATHS) — только друг с другом.
+ */
 export function touchesOverlap(task: TaskFile, inProgress: TaskFile[]): boolean {
   return inProgress.some((other) =>
     expandOverlapping(task.touches).some((mine) =>
       expandOverlapping(other.touches).some(
         (theirs) =>
-          matchesGlob(mine, theirs.replace(/\/\*\*$/, '/**')) ||
-          matchesGlob(theirs, mine.replace(/__literal__$/, '/__child__')),
+          !isExemptPair(mine, theirs) &&
+          (matchesGlob(mine, theirs.replace(/\/\*\*$/, '/**')) ||
+            matchesGlob(theirs, mine.replace(/__literal__$/, '/__child__'))),
       ),
     ),
   );
@@ -303,7 +348,8 @@ export function touchesOverlap(task: TaskFile, inProgress: TaskFile[]): boolean 
  * expandTouches, здесь одна сторона — сырой путь диффа. Литеральный путь —
  * точное равенство (bare-каталог без «/**» покрывает только сам себя,
  * грамматика invalidTouch шире не разрешает), «каталог/**» — glob. Общий путь
- * (SHARED_PATHS) — true независимо от touches.
+ * (SHARED_PATHS) — true независимо от touches; мягкий путь (SOFT_OVERLAP_PATHS)
+ * — как любой другой: только если объявлен.
  */
 export function fileInTouches(file: string, touches: string[]): boolean {
   return (

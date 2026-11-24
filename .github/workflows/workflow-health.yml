@@ -1,0 +1,89 @@
+# Сводный check здоровья workflow (e26): каждый workflow, ожидаемо стартующий на
+# main (триггеры push/schedule из .github/workflows/**), обязан иметь зелёный
+# прогон на свежем head-коммите main либо свежий schedule-прогон в окне. Закрывает
+# escaped-defect 2026-11-21: workflow с битым uses не стартовал ни разу, а вне
+# required checks main оставался зелёным.
+#
+# Отдельный workflow, а не джоба nightly.yml (e39): чекер судит о schedule-workflow
+# по последнему завершённому schedule-прогону — о прошлой ночи. Живя внутри
+# nightly, красная джоба health делала ночь N красной, ночь N+1 видела красную
+# ночь N и краснела снова; цикл не рвался и после фикса. Поэтому собственный хост
+# выведен из области сверки (SELF_HOST_WORKFLOW в tools/check-workflow-health.ts,
+# тест проводки — tools/test/check-workflow-health.test.ts). Граница: если этот
+# файл перестанет стартовать, пробел увидит только человек в списке Actions —
+# файл намеренно минимальный (checkout и один run-шаг).
+#
+# Push на main — сигнал о сломанном main в день поломки, а не раз в сутки.
+# Schedule — ночной контур: судит о завершённой ночи. Расписания GitHub
+# задерживаются, порядок с nightly не гарантирован: если nightly ещё идёт,
+# чекер судит по предыдущей завершённой ночи (семантика e26 без изменений).
+name: Workflow health
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '40 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-health:
+    name: workflow health (e26)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # actions: read обязателен: чекер читает Actions API (gh api repos/…/commits,
+    # /actions/workflows, /actions/runs) — без него GITHUB_TOKEN получает 403 на
+    # /actions/* и гейт был бы красным каждый первый прогон (находка ревью e26).
+    # contents: read — commits API и checkout. Job-level permissions заменяет
+    # workflow-уровень целиком (e16).
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - name: workflow health check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # Событие собственного прогона: на push соседние прогоны на head SHA
+          # создаёт тот же push — их отсутствие «ещё не созданы», а не «не
+          # стартовал» (иначе ложный красный на гонке). Класс «не стартовал» на
+          # том же head SHA ловит schedule-прогон.
+          OWN_EVENT: ${{ github.event_name }}
+        run: node tools/check-workflow-health.ts --own-event "$OWN_EVENT"
+
+  # Красный прогон заводит issue собственным job report (нужды в needs): вне
+  # required checks молчаливый красный — тот же класс escaped-defect, что закрыл
+  # e26. Один открытый issue на все красные прогоны (дедуп по заголовку, как у
+  # flaky в nightly.yml): прогон на push идёт после каждого мержа, по issue на
+  # прогон — шум.
+  report:
+    name: report failure
+    needs: [workflow-health]
+    if: failure()
+    runs-on: ubuntu-latest
+    # issues: write — gh issue create/comment; contents: read для единого
+    # полного набора (e16).
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          FOUND=$(gh issue list --repo "${{ github.repository }}" --state open --search "Workflow health in:title" --limit 1 --json number --jq '.[0].number' 2>/dev/null || true)
+          BODY="Сводный check здоровья workflow красный: нарушения или отказ API (fail-loud) — причина в логе шага «workflow health check»: $RUN_URL"
+          if [ -n "$FOUND" ]; then
+            echo "существующий issue #$FOUND, комментирую"
+            gh issue comment "$FOUND" --repo "${{ github.repository }}" --body "$BODY"
+          else
+            gh issue create --repo "${{ github.repository }}" \
+              --title "Workflow health: check красный" \
+              --label nightly-failure \
+              --body "$BODY"
+          fi

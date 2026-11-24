@@ -9,8 +9,14 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { checkHookInstall } from '../check-hook-install.ts';
+
+// Каждый тест — цепочка из 9 spawnSync (git и pnpm install в клоне): проверка
+// таймаута ждёт возврата из spawn. Под нагрузкой CI main (run 45153926919) тест
+// занял 6,2–6,7 с — дефолтных 5 с не хватало (e41, рецидив строки реестра
+// 2026-11-13). 30 с — ≥ ×3 к p95 замеров, журнал: backlog/done/e41.md.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
 const repoDir = resolve(import.meta.dirname, '..', '..');
 const fixtures = mkdtempSync(join(tmpdir(), 'd12-fixtures-'));
@@ -22,6 +28,35 @@ const PREPARE_OK =
   'mkdir -p "$(git rev-parse --git-common-dir)/hooks" && printf x > "$(git rev-parse --git-common-dir)/hooks/pre-commit" && printf x > "$(git rev-parse --git-common-dir)/hooks/pre-push"';
 const PREPARE_SABOTAGE =
   '[ -d .git ] && mkdir -p "$(git rev-parse --git-common-dir)/hooks" && printf x > "$(git rev-parse --git-common-dir)/hooks/pre-commit" && printf x > "$(git rev-parse --git-common-dir)/hooks/pre-push"';
+
+/**
+ * Lockfile общий на обе фикстуры (e41): зависимостей нет, и имя пакета в
+ * pnpm-lock.yaml не попадает — содержимое от фикстуры не зависит. Один
+ * `pnpm install --lockfile-only` на файл вместо двух: каждый тест теряет
+ * тяжёлый spawn. Генерируется в beforeAll под hookTimeout, а не при импорте —
+ * зависший pnpm обязан получить таймаут, а не повесить запуск.
+ */
+let lockfile: string;
+
+beforeAll(() => {
+  const source = join(fixtures, 'lockfile');
+  mkdirSync(source);
+  writeFileSync(
+    join(source, 'package.json'),
+    `${JSON.stringify({ name: 'd12-lockfile', version: '0.0.0' }, null, 2)}\n`,
+  );
+  const lock = spawnSync('pnpm', ['install', '--lockfile-only'], {
+    cwd: source,
+    encoding: 'utf8',
+  });
+  if (lock.status !== 0) {
+    // Ошибка, а не expect: вне теста expect запрещён (vitest/no-standalone-expect).
+    throw new Error(
+      `pnpm install --lockfile-only для фикстур d12 не удался (exit ${lock.status}):\n${lock.stderr}`,
+    );
+  }
+  lockfile = readFileSync(join(source, 'pnpm-lock.yaml'), 'utf8');
+});
 
 /** Снимок индекса настоящего репозитория (режим, sha, путь каждой записи) — барьер e37. */
 function realRepoIndex(): string {
@@ -44,12 +79,10 @@ function buildFixture(name: string, prepare: string): string {
     spawnSync('git', args, { cwd: root });
   };
   git(['init', '-b', 'main']);
+  // Lockfile нужен для pnpm install --frozen-lockfile внутри проверляемого клона.
+  writeFileSync(join(root, 'pnpm-lock.yaml'), lockfile);
   git(['add', '-A']);
   git(['-c', 'user.name=d12', '-c', 'user.email=d12@test', 'commit', '-qm', 'fixture']);
-  // Lockfile нужен для pnpm install --frozen-lockfile внутри проверяемого клона.
-  spawnSync('pnpm', ['install', '--lockfile-only'], { cwd: root });
-  git(['add', '-A']);
-  git(['-c', 'user.name=d12', '-c', 'user.email=d12@test', 'commit', '-qm', 'lockfile']);
   expect(
     realRepoIndex(),
     `индекс настоящего репозитория изменился за сборку фикстуры «${name}»: тест test:hooks зовёт git без cwd фикстуры (e37) — смотри git status`,
