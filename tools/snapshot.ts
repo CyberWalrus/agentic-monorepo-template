@@ -2,8 +2,10 @@
  * Снимок защищённых файлов — проверка по результату (roadmap A2 пункт 1, ADR 0003).
  * SessionStart запоминает содержимое tracked-файлов из deny-путей на начало сессии,
  * PostToolUse(Bash) и Stop сверяют текущее состояние со снимком: изменение отменяется
- * возвратом к снимку и объясняется агенту; дрейф, совпавший с новым HEAD (pull/merge),
- * перебазирует снимок; новые файлы под deny только сообщаются и никогда не удаляются.
+ * возвратом к снимку и объясняется агенту; дрейф, принесённый движением ветки (pull, merge,
+ * rebase, switch), перебазирует снимок, а commit, созданный в этом worktree, движением
+ * не считается — записать файл и закоммитить одной командой может кто угодно; новые файлы
+ * под deny только сообщаются и никогда не удаляются.
  *
  * Порча state (пропавшая или не совпадающая с manifest копия) делает проверку громко
  * слепой: сверка и откат не проводятся по ненадёжному состоянию, сообщается отказ.
@@ -36,11 +38,17 @@ export interface SnapshotEntry {
   /** sha1 содержимого файла на момент снимка. */
   hash: string;
   executable: boolean;
+  /**
+   * Git-blob'ы содержимого, которое проверка уже отвергла как записанное и закоммиченное
+   * командой. Тот же blob в новом HEAD (merge, rebase, cherry-pick над этим commit-ом) —
+   * не движение ветки, а то же изменение: снимок на него не перебазируется.
+   */
+  rejected?: string[];
 }
 
 export interface SnapshotManifest {
   version: 1;
-  /** HEAD на момент снимка; обновляется при перебазировании. */
+  /** HEAD на последней проверке: движение с него — обязательное условие перебазировки. */
   head: string;
   /** Относительный путь → запись снимка. */
   files: Record<string, SnapshotEntry>;
@@ -97,6 +105,20 @@ export function stateDir(projectDir: string, sessionId: string): string {
   const safeId = sessionId.replaceAll(/[^A-Za-z0-9._-]/g, '-');
   const key = createHash('sha256').update(projectDir).digest('hex').slice(0, 12);
   return join(STATE_ROOT, `${safeId}-${key}`);
+}
+
+/**
+ * Имя копии без потерь: путь кодируется обратимо (`%` → `%25`, `/` → `%2F`), поэтому
+ * `a/b__c` и `a__b/c` — разные копии. Копии лежат в `files/`, отдельно от manifest.json
+ * и state других хуков: защищённый путь не может совпасть с именем служебного файла.
+ */
+function copyName(path: string): string {
+  return path.replaceAll('%', '%25').replaceAll('/', '%2F');
+}
+
+/** Копия защищённого файла в state сессии — единственный источник отката. */
+export function snapshotCopy(projectDir: string, sessionId: string, path: string): string {
+  return join(stateDir(projectDir, sessionId), 'files', copyName(path));
 }
 
 /**
@@ -163,6 +185,7 @@ export function createSnapshot(
   const dir = stateDir(projectDir, sessionId);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  mkdirSync(join(dir, 'files'), { recursive: true, mode: 0o700 });
   const manifest: SnapshotManifest = { version: 1, head: headSha(projectDir), files: {} };
   const missing: string[] = [];
   for (const path of enumerateProtected(projectDir)) {
@@ -182,7 +205,7 @@ export function createSnapshot(
         `protected path is a symlink: ${path}; refusing to snapshot or restore through it`,
       );
     }
-    const copy = join(dir, path.replaceAll('/', '__'));
+    const copy = snapshotCopy(projectDir, sessionId, path);
     copyFileSync(absolute, copy);
     chmodSync(copy, 0o600);
     manifest.files[path] = {
@@ -228,6 +251,15 @@ export function loadSnapshot(projectDir: string, sessionId: string): SnapshotMan
       return null;
     }
     entries[path] = { hash: entry['hash'], executable: entry['executable'] };
+    const rejected = entry['rejected'];
+    if (rejected !== undefined) {
+      if (!isBlobList(rejected)) {
+        return null;
+      }
+      if (rejected.length > 0) {
+        entries[path]['rejected'] = rejected;
+      }
+    }
   }
   return { version: 1, head, files: entries };
 }
@@ -236,13 +268,96 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** Список git-blob'ов из manifest: только 40-символьные sha1. */
+function isBlobList(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.every((blob) => typeof blob === 'string' && /^[0-9a-f]{40}$/.test(blob))
+  );
+}
+
+/**
+ * Движение HEAD с `recordedHead` — ветку двигали (pull, merge, rebase, switch), а не
+ * commit, созданный в этом worktree. Обязательное условие перебазировки: совпадение
+ * содержимого с blob HEAD можно создать командой — записать файл и закоммитить одним
+ * вызовом, — а источник движения показывает только reflog HEAD. Записи от новейшей до
+ * той, что привела на `recordedHead`, обязаны объяснять движение и не быть действием
+ * `commit` (включая amend и merge-commit после конфликта). Нет reflog, нет записи о
+ * `recordedHead`, действие пусто (`git update-ref` без сообщения) или это commit —
+ * движение не доказано, значит это не pull: откат.
+ */
+export function isLegitMovement(
+  projectDir: string,
+  recordedHead: string,
+  currentHead: string,
+): boolean {
+  if (recordedHead === '' || currentHead === '' || currentHead === recordedHead) {
+    return false;
+  }
+  const result = spawnSync('git', ['reflog', 'show', 'HEAD', '--format=%H %gs'], {
+    cwd: projectDir,
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) {
+    return false;
+  }
+  for (const line of result.stdout.split('\n')) {
+    const separator = line.indexOf(' ');
+    const sha = separator === -1 ? line : line.slice(0, separator);
+    const action = separator === -1 ? '' : line.slice(separator + 1);
+    if (sha === recordedHead) {
+      return true;
+    }
+    if (action === '' || /^commit\b/.test(action)) {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Открытый путь (режим обслуживания по областям, ADR 0009) не откатывается. Изменение,
+ * уже попавшее в HEAD — оператор закоммитил его при включённом режиме, — принимается в
+ * снимок сразу: после выключения режима движение HEAD уже не отличить от commit-а командой.
+ * Незакоммиченное изменение снимок не принимает — после выключения режима оно откатится.
+ */
+function adoptCommitted(
+  projectDir: string,
+  path: string,
+  entry: SnapshotEntry,
+  tree: Map<string, string>,
+  manifest: SnapshotManifest,
+  result: ReconcileResult,
+): boolean {
+  const absolute = join(projectDir, path);
+  if (!existsSync(absolute)) {
+    if (tree.has(path)) {
+      return false;
+    }
+    delete manifest.files[path];
+    result.dropped.push(path);
+    return true;
+  }
+  const hash = contentHash(absolute);
+  if (hash === entry.hash) {
+    return false;
+  }
+  const blob = git(projectDir, ['hash-object', '--', path]).trim();
+  if (blob === '' || blob !== tree.get(path)) {
+    return false;
+  }
+  entry.hash = hash;
+  result.rebased.push(path);
+  return true;
+}
+
 function restoreFile(
   projectDir: string,
   sessionId: string,
   path: string,
   entry: SnapshotEntry,
 ): void {
-  const copy = join(stateDir(projectDir, sessionId), path.replaceAll('/', '__'));
+  const copy = snapshotCopy(projectDir, sessionId, path);
   const absolute = join(projectDir, path);
   // Ссылка на защищённом пути заменяется файлом из снимка: запись сквозь неё
   // ушла бы в цель ссылки, в том числе вне worktree. Отсутствующего файла это
@@ -284,7 +399,7 @@ export function reconcile(projectDir: string, sessionId: string): ReconcileOutco
   for (const [path, entry] of Object.entries(manifest.files)) {
     let copyHash: string;
     try {
-      copyHash = contentHash(join(dir, path.replaceAll('/', '__')));
+      copyHash = contentHash(snapshotCopy(projectDir, sessionId, path));
     } catch {
       return { kind: 'broken', detail: `copy of ${path} is missing or unreadable` };
     }
@@ -293,6 +408,21 @@ export function reconcile(projectDir: string, sessionId: string): ReconcileOutco
     }
   }
 
+  // Движение HEAD считается один раз и только когда найден дрейф.
+  let movement: boolean | undefined;
+  const legitMovement = (): boolean =>
+    (movement ??= isLegitMovement(projectDir, manifest.head, currentHead));
+  /** Откат одного файла; строка — сбой окружения, проверка закрывается громко. */
+  const rollback = (path: string, entry: SnapshotEntry): string | null => {
+    try {
+      restoreFile(projectDir, sessionId, path, entry);
+    } catch (error) {
+      return `could not restore ${path}: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    result.restored.push(path);
+    return null;
+  };
+
   let changed = false;
   for (const [path, entry] of Object.entries(manifest.files)) {
     // Режим обслуживания по областям (b9, ADR 0009): пути из
@@ -300,20 +430,18 @@ export function reconcile(projectDir: string, sessionId: string): ReconcileOutco
     // открытого пути, разрешённая protect-paths, откатывалась бы здесь по
     // содержимому. Битый файл режима — null: сверка идёт по всем deny-файлам.
     if (isPathOpen(projectDir, path)) {
+      changed = adoptCommitted(projectDir, path, entry, tree, manifest, result) || changed;
       continue;
     }
     const absolute = join(projectDir, path);
     if (!existsSync(absolute)) {
-      if (tree.has(path)) {
-        try {
-          restoreFile(projectDir, sessionId, path, entry);
-        } catch (error) {
-          return {
-            kind: 'broken',
-            detail: `could not restore ${path}: ${error instanceof Error ? error.message : String(error)}`,
-          };
+      // «Исчез вместе с HEAD» — только если HEAD действительно двигался веткой: commit
+      // после `git rm` убирает файл из HEAD так же, а pull-ом не является.
+      if (tree.has(path) || !legitMovement()) {
+        const failure = rollback(path, entry);
+        if (failure !== null) {
+          return { kind: 'broken', detail: failure };
         }
-        result.restored.push(path);
       } else {
         delete manifest.files[path];
         result.dropped.push(path);
@@ -325,24 +453,33 @@ export function reconcile(projectDir: string, sessionId: string): ReconcileOutco
     if (hash === entry.hash) {
       continue;
     }
-    // Совпадение содержимого с blob текущего HEAD означает легитимное движение
-    // ветки (pull/merge принёс изменения гейтов) — снимок перебазируется.
+    // Снимок перебазируется только на содержимое, которое принесло движение ветки:
+    // HEAD двигался с прошлой проверки не commit-ом этого worktree, файл равен blob HEAD
+    // и это не тот blob, что проверка уже отвергла. Иначе изменение сделано командой —
+    // отменяется возвратом к снимку.
     const blob = git(projectDir, ['hash-object', '--', path]).trim();
-    if (blob !== '' && blob === tree.get(path)) {
+    const committed = blob !== '' && blob === tree.get(path);
+    const rejected = (entry.rejected ?? []).includes(blob);
+    if (committed && !rejected && legitMovement()) {
       entry.hash = hash;
-      manifest.head = currentHead;
       result.rebased.push(path);
     } else {
-      try {
-        restoreFile(projectDir, sessionId, path, entry);
-      } catch (error) {
-        return {
-          kind: 'broken',
-          detail: `could not restore ${path}: ${error instanceof Error ? error.message : String(error)}`,
-        };
+      // Подмена, уже закоммиченная командой: blob запоминается — merge или rebase над
+      // этим commit-ом пронесут то же содержимое движением, которое reflog объяснит.
+      if (committed && !rejected) {
+        entry.rejected = [...(entry.rejected ?? []), blob];
       }
-      result.restored.push(path);
+      const failure = rollback(path, entry);
+      if (failure !== null) {
+        return { kind: 'broken', detail: failure };
+      }
     }
+    changed = true;
+  }
+  // HEAD запоминается на каждой проверке: движение измеряется от предыдущей проверки,
+  // иначе commit, отвергнутый раньше, «промывался» бы любым следующим движением ветки.
+  if (manifest.head !== currentHead) {
+    manifest.head = currentHead;
     changed = true;
   }
   const known = new Set(Object.keys(manifest.files));
