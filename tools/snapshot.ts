@@ -57,7 +57,7 @@ export interface SnapshotManifest {
 export interface ReconcileResult {
   /** Изменения, отменённые возвратом к снимку. */
   restored: string[];
-  /** Дрейф, совпавший с новым HEAD: снимок перебазирован, ничего не откатывалось. */
+  /** Дрейф, принятый в снимок: из удалённой истории или закоммичен при включённом режиме. */
   rebased: string[];
   /** Файл исчез вместе с HEAD (легитимное движение ветки) — убран из снимка. */
   dropped: string[];
@@ -536,8 +536,9 @@ export function reconcile(projectDir: string, sessionId: string): ReconcileOutco
       entry.hash = hash;
       result.rebased.push(path);
     } else {
-      // Подмена, уже закоммиченная командой: blob запоминается — merge или rebase над
-      // этим commit-ом пронесут то же содержимое движением, которое reflog объяснит.
+      // Подмена, уже закоммиченная командой: blob запоминается — push или слияние над
+      // этим commit-ом пронесут то же содержимое движением ветки, а отвергнутый blob
+      // не перебазирует снимок до конца сессии, откуда бы он ни пришёл.
       if (committed && !rejected) {
         entry.rejected = [...(entry.rejected ?? []), blob];
       }
