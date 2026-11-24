@@ -12,7 +12,13 @@ export const TaskSchema = z.object({
   createdAt: z.iso.datetime(),
 });
 
-export const CreateTaskInputSchema = z.object({
+/**
+ * Вход создания — строгий объект (e57): лишний ключ (опечатка в имени поля)
+ * — ошибка валидации, одна и та же на клиенте и на сервере, а не молчаливо
+ * отброшенное значение. «Отказывает явно» держит сама схема и не зависит от
+ * отправителя.
+ */
+export const CreateTaskInputSchema = z.strictObject({
   title: z.string().trim().min(1, 'Title is required').max(TASK_TITLE_MAX_LENGTH),
 });
 

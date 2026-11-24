@@ -14,6 +14,13 @@ describe('CreateTaskInputSchema', () => {
     expect(result.error?.issues[0]?.message).toBe('Title is required');
   });
 
+  it('rejects an unknown key instead of dropping it silently', () => {
+    const result = CreateTaskInputSchema.safeParse({ title: 'x', extra: 1 });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toMatchObject([{ code: 'unrecognized_keys', keys: ['extra'] }]);
+  });
+
   it('accepts a title of exactly the maximum length', () => {
     const title = 'a'.repeat(TASK_TITLE_MAX_LENGTH);
 
