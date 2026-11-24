@@ -6,6 +6,7 @@ import {
   REQUEST_BODY_LIMIT_BYTES,
   REQUEST_TIMEOUT_MS,
   requestGuards,
+  requestShapeGuard,
   type RequestGuardsOptions,
 } from './lib/request-guards.ts';
 
@@ -18,7 +19,8 @@ import {
  *   3. статика клиентской сборки из `staticRoot` (dist/client);
  *   4. всё остальное — fetch-обработчик серверной сборки TanStack Start
  *      (dist/server/server.js экспортирует `{ default: { fetch } }`); не-GET/HEAD
- *      идут в него под ограждениями `requestGuards` (лимит тела, таймаут, e55).
+ *      идут в него под ограждениями `requestGuards` (форма запроса, таймаут,
+ *      лимит тела; e55).
  * Логика — здесь (unit-тесты без сети и файлов приложения), проводка — в
  * `server.ts` в корне пакета.
  */
@@ -249,6 +251,59 @@ function filterResponseHeaders(headers: Headers): Headers {
   return filtered;
 }
 
+/** Тело запроса не дочитано за срок: клиент начал загрузку и не закончил. */
+class ProxyBodyStalled extends Error {}
+/** Тело запроса превысило потолок прокси. */
+class ProxyBodyTooLarge extends Error {}
+
+/**
+ * Читает тело проксируемого запроса с потолком и сроком. Буферизуется не всё,
+ * что прислал клиент, а до первой строки, на которой сумма превысила потолок:
+ * чтение останавливается, поток дальше никто не тянет. Срок тот же, что у
+ * вызова API: тело, которое клиент не дочитал, не держит соединение дольше
+ * `PROXY_TIMEOUT_MS`. Остаток запроса после ответа сбрасывает сам слушатель
+ * `@hono/node-server` (`drainIncoming`: до 500 мс и 64 МиБ, затем сокет
+ * закрывается). Сбой самого потока не перехватывается — это не «слишком
+ * велико» и не «не дочитал», маскировать его под ответы ограждений нельзя.
+ */
+async function readProxyBody(body: ReadableStream<Uint8Array>): Promise<Uint8Array<ArrayBuffer>> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stalled = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ProxyBodyStalled()), PROXY_TIMEOUT_MS);
+  });
+  // Рекурсия, а не цикл: каждый чанк ждётся отдельно, до него — гонка со сроком.
+  const readNext = async (): Promise<void> => {
+    const { done, value } = await Promise.race([reader.read(), stalled]);
+    if (done) {
+      return;
+    }
+    chunks.push(value);
+    received += value.byteLength;
+    if (received > MAX_RPC_BODY_BYTES) {
+      // Не дожидаемся cancel: на остановленном потоке он мог бы не разрешиться
+      // и задержать ответ. Его отказ — не наша ошибка.
+      reader.cancel().catch(() => undefined);
+      throw new ProxyBodyTooLarge();
+    }
+    await readNext();
+  };
+  try {
+    await readNext();
+  } finally {
+    clearTimeout(timer);
+  }
+  const buffered = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buffered.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return buffered;
+}
+
 export function createWebServerApp(options: WebServerAppOptions): Hono {
   const { apiUrl, staticRoot, handler } = options;
   const proxyFetch = options.proxyFetch ?? fetch;
@@ -277,17 +332,33 @@ export function createWebServerApp(options: WebServerAppOptions): Hono {
     target.host = api.host;
 
     // Тело буферизуется: RPC-запросы — небольшие JSON, стриминг не нужен, а
-    // ArrayBuffer избавляет от требований undici к duplex у стримов. Потолок
-    // отбивает дешёвый memory-DoS большими телами (413 до буферизации — по
-    // content-length, после — по фактическим байтам, e.g. chunked).
+    // буфер избавляет от требований undici к duplex у стримов. Потолок отбивает
+    // дешёвый memory-DoS большими телами: по content-length — до чтения, по
+    // фактическим байтам — во время чтения, не дальше потолка и одного чанка
+    // (chunked без content-length раньше буферизовался целиком и только потом
+    // получал 413 — память процесса росла до конца загрузки, e55).
     const hasBody = incoming.method !== 'GET' && incoming.method !== 'HEAD';
     const declaredLength = Number(incoming.headers.get('content-length') ?? 0);
     if (hasBody && declaredLength > MAX_RPC_BODY_BYTES) {
       return c.json({ error: 'RPC request body is too large' }, 413);
     }
-    const buffered = hasBody ? await incoming.arrayBuffer() : undefined;
-    if (buffered !== undefined && buffered.byteLength > MAX_RPC_BODY_BYTES) {
-      return c.json({ error: 'RPC request body is too large' }, 413);
+    // После проверки формы `body === null` значит «тела нет»: TRACE и запрос с
+    // объявленным телом без потока до сюда не доходят.
+    let buffered: Uint8Array<ArrayBuffer> | undefined;
+    if (hasBody && incoming.body !== null) {
+      try {
+        buffered = await readProxyBody(incoming.body);
+      } catch (error) {
+        if (error instanceof ProxyBodyTooLarge) {
+          return c.json({ error: 'RPC request body is too large' }, 413);
+        }
+        if (error instanceof ProxyBodyStalled) {
+          // 408 — сервер не дождался полного запроса. Не 502: это отказ API;
+          // не 504: в этом сервере так отвечает срок обработчика SSR.
+          return c.json({ error: 'Request timed out' }, 408);
+        }
+        throw error;
+      }
     }
     const init: RequestInit = {
       method: incoming.method,
@@ -314,8 +385,10 @@ export function createWebServerApp(options: WebServerAppOptions): Hono {
       return c.json({ error: 'API is unreachable' }, 502);
     }
   };
-  app.all('/rpc', proxyRpc);
-  app.all('/rpc/*', proxyRpc);
+  // Проверка формы запроса — раньше чтения тела: TRACE и «тело объявлено,
+  // потока нет» не должны доходить ни до потолка прокси, ни до API.
+  app.all('/rpc', requestShapeGuard, proxyRpc);
+  app.all('/rpc/*', requestShapeGuard, proxyRpc);
 
   app.on(['GET', 'HEAD'], '*', async (c) => {
     const pathname = new URL(c.req.raw.url).pathname;

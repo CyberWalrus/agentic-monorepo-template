@@ -23,6 +23,37 @@ export interface RequestGuardsOptions {
   requestTimeoutMs?: number;
 }
 
+/** Тело заявлено заголовками — независимо от того, построил ли адаптер поток. */
+const declaresBody = (headers: Headers): boolean =>
+  headers.has('transfer-encoding') || Number(headers.get('content-length') ?? 0) > 0;
+
+/**
+ * Проверка формы запроса — fail-closed: не верит `request.body`.
+ *
+ * `@hono/node-server` собирает Request не так, как запрос пришёл по проводу:
+ * `TRACE` получает GET без потока и подменённый геттер `method` — у него
+ * `request.body === null`, хотя тело в соединении есть; у GET/HEAD потока тоже
+ * нет. Ограждение, которое смотрит только на `request.body`, такой запрос
+ * пропускает мимо лимита. Поэтому форма проверяется по тому, что запрос сам о
+ * себе заявил, — по методу и заголовкам:
+ *   - `TRACE` → 405: шаблонного сценария с ним нет, а собрать его честно
+ *     адаптер не может;
+ *   - тело объявлено (`content-length` больше 0 или есть `transfer-encoding`),
+ *     а потока нет → 400: читать нечего, пропустить — значит пропустить мимо
+ *     лимита тело, которое клиент шлёт.
+ * Запрос без объявления тела (POST с `content-length: 0`) проходит как прежде.
+ */
+export const requestShapeGuard: Guard = async (c, next) => {
+  const request = c.req.raw;
+  if (request.method === 'TRACE') {
+    return c.json({ error: 'Method not allowed' }, 405);
+  }
+  if (request.body === null && declaresBody(request.headers)) {
+    return c.json({ error: 'Request body is not readable' }, 400);
+  }
+  return next();
+};
+
 /**
  * Гонка «обработчик vs таймер»: ответ ограничен по времени, даже если
  * обработчик завис. Сам обработчик при победе таймера не прерывается — сигнал
@@ -45,20 +76,27 @@ const requestTimeout =
   };
 
 /**
- * Пара ограждений для класса запросов: тело сверх потолка — 413 до чтения
- * (по content-length) или по фактическим байтам (без content-length), зависший
- * обработчик — 504 по таймеру. Ставится на класс (catch-all), а не на каждый
- * маршрут: иначе каждая следующая server function будет забытым исключением.
+ * Тройка ограждений для класса запросов — в порядке «форма → срок → потолок»:
+ *   - форма (`requestShapeGuard`) — раньше всех: то, что нижние проверить не
+ *     могут (метод, тело без потока), отбивается здесь;
+ *   - срок: гонка «обработчик vs таймер» (504) стоит раньше потолка, потому что
+ *     `bodyLimit` без content-length читает тело до конца раньше, чем вызовет
+ *     `next()`: поставь его первым — и срок не накроет чтение медленного тела;
+ *   - потолок: тело сверх лимита — 413 до чтения (по content-length) или по
+ *     фактическим байтам.
+ * Ставится на класс (catch-all), а не на каждый маршрут: иначе каждая
+ * следующая server function будет забытым исключением.
  */
 export function requestGuards({
   bodyLimitBytes = REQUEST_BODY_LIMIT_BYTES,
   requestTimeoutMs = REQUEST_TIMEOUT_MS,
-}: RequestGuardsOptions = {}): [Guard, Guard] {
+}: RequestGuardsOptions = {}): [Guard, Guard, Guard] {
   return [
+    requestShapeGuard,
+    requestTimeout(requestTimeoutMs),
     bodyLimit({
       maxSize: bodyLimitBytes,
       onError: (c) => c.json({ error: 'Payload too large' }, 413),
     }),
-    requestTimeout(requestTimeoutMs),
   ];
 }

@@ -1,9 +1,12 @@
+import { once } from 'node:events';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { gunzipSync } from 'node:zlib';
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { serve } from '@hono/node-server';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { REQUEST_BODY_LIMIT_BYTES, REQUEST_TIMEOUT_MS } from './lib/request-guards.ts';
 import {
@@ -14,6 +17,14 @@ import {
   resolveStaticFile,
   type WebServerAppOptions,
 } from './server-app.ts';
+
+declare global {
+  // `duplex: 'half'` требует undici для поточного тела, а в `RequestInit`
+  // lib.dom его нет: тип дополнен, а не подавлен директивой.
+  interface RequestInit {
+    duplex?: 'half';
+  }
+}
 
 const API_URL = 'http://api.local:3901';
 
@@ -33,6 +44,10 @@ beforeAll(async () => {
   await writeFile(path.join(staticRoot, 'assets', 'style-abc123.css'), 'body {}');
   // Уже сжатый формат: gzip не применяется, отдаётся как есть.
   await writeFile(path.join(staticRoot, 'assets', 'logo-abc123.png'), 'fake-png-bytes');
+  // Соседний каталог с общим началом имени: `assets-extra` начинается с
+  // `assets`, но ассетом не является.
+  await mkdir(path.join(staticRoot, 'assets-extra'), { recursive: true });
+  await writeFile(path.join(staticRoot, 'assets-extra', 'old.js'), '// old');
   await writeFile(path.join(staticRoot, 'index.html'), '<html lang="en"></html>');
   await writeFile(path.join(staticRoot, 'notes.txt'), 'text');
   await writeFile(path.join(staticRoot, 'blob.xyz'), 'unknown');
@@ -204,6 +219,130 @@ describe('rpc proxy', () => {
     expect(proxyFetch).not.toHaveBeenCalled();
   });
 
+  it('answers 405 to TRACE before touching the body or the API', async () => {
+    const { app, proxyFetch } = makeApp();
+
+    // Так @hono/node-server собирает TRACE: GET без потока и геттер method
+    // (`app.request` с методом TRACE отклоняет сам Hono).
+    const response = await app.request(
+      withMethod(
+        new Request('http://web.local/rpc/tasks/list', {
+          headers: { 'content-length': String(1024 * 1024 + 1) },
+        }),
+        'TRACE',
+      ),
+    );
+
+    expect(response.status).toBe(405);
+    await expect(response.json()).resolves.toEqual({ error: 'Method not allowed' });
+    expect(proxyFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { via: 'content-length', headers: { 'content-length': String(1024 * 1024 + 1) } },
+    { via: 'transfer-encoding', headers: { 'transfer-encoding': 'chunked' } },
+  ])('answers 400 when $via declares a body that the request cannot yield', async ({ headers }) => {
+    const { app, proxyFetch } = makeApp();
+
+    const response = await app.request('http://web.local/rpc/tasks/list', {
+      method: 'PUT',
+      headers,
+      body: null,
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: 'Request body is not readable' });
+    expect(proxyFetch).not.toHaveBeenCalled();
+  });
+
+  it('stops reading an oversized chunked body one chunk past the ceiling', async () => {
+    const { app, proxyFetch } = makeApp();
+    const ceiling = 1024 * 1024;
+    const chunkSize = 64 * 1024;
+    const ceilingChunks = ceiling / chunkSize;
+    let pulled = 0;
+    const upload = new ReadableStream<Uint8Array>(
+      {
+        // 20 чанков при потолке в 16: клиент шлёт сверх потолка и не останавливается.
+        pull(controller) {
+          pulled += 1;
+          if (pulled > ceilingChunks + 4) {
+            controller.close();
+          } else {
+            controller.enqueue(new Uint8Array(chunkSize));
+          }
+        },
+      },
+      // Без предвыборки: каждый pull — ровно один чанк, прочитанный прокси.
+      { highWaterMark: 0 },
+    );
+
+    const response = await app.request('http://web.local/rpc/tasks/list', {
+      method: 'POST',
+      headers: { 'transfer-encoding': 'chunked' },
+      body: upload,
+      duplex: 'half',
+    });
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: 'RPC request body is too large' });
+    expect(proxyFetch).not.toHaveBeenCalled();
+    // Потолок плюс один чанк — строка, на которой сумма превысила потолок.
+    expect(pulled * chunkSize).toBeLessThanOrEqual(ceiling + chunkSize);
+    expect(pulled * chunkSize).toBeGreaterThan(ceiling);
+  });
+
+  it('answers 408 when the request body stalls past the proxy timeout', async () => {
+    vi.useFakeTimers();
+    const { app, proxyFetch } = makeApp();
+    const gate: { release?: () => void } = {};
+    const stalled = new ReadableStream<Uint8Array>({
+      // Клиент прислал заголовки и молчит: первый read() не разрешается.
+      pull: (controller) =>
+        new Promise<void>((resolve) => {
+          gate.release = () => {
+            controller.close();
+            resolve();
+          };
+        }),
+    });
+
+    const pending = app.request('http://web.local/rpc/tasks/list', {
+      method: 'POST',
+      body: stalled,
+      duplex: 'half',
+    });
+    // Фейковые таймеры: срок прокси истекает без реальных полминуты.
+    await vi.advanceTimersByTimeAsync(30_000);
+    const response = await pending;
+
+    expect(response.status).toBe(408);
+    await expect(response.json()).resolves.toEqual({ error: 'Request timed out' });
+    expect(proxyFetch).not.toHaveBeenCalled();
+    // Проигравшая ветка отпущена: висящих промисов тест не оставляет.
+    gate.release?.();
+  });
+
+  it('answers 500 when the request body stream itself fails', async () => {
+    const { app, proxyFetch } = makeApp();
+    const failing = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(new Error('socket hang up'));
+      },
+    });
+
+    const response = await app.request('http://web.local/rpc/tasks/list', {
+      method: 'POST',
+      body: failing,
+      duplex: 'half',
+    });
+
+    // Сбой потока — не «слишком велико» и не «не дочитал»: он не маскируется
+    // под ответы ограждений и не доходит до API.
+    expect(response.status).toBe(500);
+    expect(proxyFetch).not.toHaveBeenCalled();
+  });
+
   it('strips hop-by-hop headers from the API response before returning it', async () => {
     const proxyFetch = vi.fn<FetchLike>(async () => {
       return new Response('upstream-body', {
@@ -311,6 +450,18 @@ describe('static files', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(response.headers.get('cache-control')).toBeNull();
+  });
+
+  it('does not cache a sibling directory whose name merely starts with "assets"', async () => {
+    const { app } = makeApp();
+
+    // Без разделителя в префиксе `assets-extra/` прошло бы проверку «внутри
+    // каталога ассетов» по общему началу строки.
+    const response = await app.request('http://web.local/assets-extra/old.js');
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe('// old');
     expect(response.headers.get('cache-control')).toBeNull();
   });
 
@@ -548,27 +699,46 @@ describe('request guards on the SSR fallback', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('lets a body exactly at the limit through to the handler intact', async () => {
-    const { app, handler } = makeApp({ bodyLimitBytes: 10 });
-    handler.mockImplementationOnce(
-      async (request) => new Response(`echo ${await request.text()}`, { status: 201 }),
-    );
+  it.each([
+    { declared: 'without a declared length', headers: {} },
+    { declared: 'with a declared length', headers: { 'content-length': '10' } },
+  ])(
+    'lets a body exactly at the limit through to the handler intact ($declared)',
+    async ({ headers: declared }) => {
+      const { app, handler } = makeApp({ bodyLimitBytes: 10 });
+      handler.mockImplementationOnce(async (request) => {
+        const seen = [
+          await request.text(),
+          request.headers.get('content-type'),
+          request.headers.get('cookie'),
+        ];
+        return new Response(JSON.stringify(seen), { status: 201 });
+      });
 
-    const response = await app.request('http://web.local/tasks?open=1', {
-      method: 'POST',
-      body: 'x'.repeat(10),
-    });
+      const response = await app.request('http://web.local/tasks?open=1', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: 'session=abc', ...declared },
+        body: 'x'.repeat(10),
+      });
 
-    // Штатный поток не сломан: тело, метод и URL доходят до обработчика.
-    expect(response.status).toBe(201);
-    await expect(response.text()).resolves.toBe(`echo ${'x'.repeat(10)}`);
-    const forwarded = handler.mock.calls[0]?.[0];
-    if (!(forwarded instanceof Request)) {
-      throw new Error('handler did not receive a Request');
-    }
-    expect(forwarded.method).toBe('POST');
-    expect(new URL(forwarded.url).search).toBe('?open=1');
-  });
+      // Штатный поток не сломан: тело, заголовки, метод и URL доходят целыми —
+      // и когда лимит пересобирает запрос из буфера (без content-length), и когда
+      // пропускает его по объявленной длине.
+      expect(response.status).toBe(201);
+      await expect(response.json()).resolves.toEqual([
+        'x'.repeat(10),
+        'application/json',
+        'session=abc',
+      ]);
+
+      const forwarded = handler.mock.calls[0]?.[0];
+      if (!(forwarded instanceof Request)) {
+        throw new Error('handler did not receive a Request');
+      }
+      expect(forwarded.method).toBe('POST');
+      expect(new URL(forwarded.url).search).toBe('?open=1');
+    },
+  );
 
   it('answers 504 with the API body when the handler hangs', async () => {
     const gate: { release?: () => void } = {};
@@ -590,7 +760,123 @@ describe('request guards on the SSR fallback', () => {
     await hanging;
   });
 
-  it('defaults to the API limits: 1 MiB of body and 30 s', async () => {
+  it.each(['PUT', 'DELETE', 'PATCH', 'OPTIONS'])(
+    'answers 413 to %s over the limit as well',
+    async (method) => {
+      const { app, handler } = makeApp({ bodyLimitBytes: 10 });
+
+      const response = await app.request('http://web.local/tasks', {
+        method,
+        body: 'x'.repeat(11),
+      });
+
+      // Класс «не-GET/HEAD», а не один POST: ограждение стоит на catch-all.
+      expect(response.status).toBe(413);
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
+
+  it('answers 405 to TRACE', async () => {
+    const { app, handler } = makeApp({ bodyLimitBytes: 10 });
+
+    // Так @hono/node-server собирает TRACE: GET без потока и геттер method.
+    const request = withMethod(
+      new Request('http://web.local/tasks', { headers: { 'content-length': '11' } }),
+      'TRACE',
+    );
+
+    const response = await app.request(request);
+
+    expect(response.status).toBe(405);
+    expect(response.headers.get('content-type')).toMatch(/^application\/json/);
+    await expect(response.json()).resolves.toEqual({ error: 'Method not allowed' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { via: 'content-length', headers: { 'content-length': '11' } },
+    { via: 'transfer-encoding', headers: { 'transfer-encoding': 'chunked' } },
+  ])('answers 400 when $via declares a body that the request cannot yield', async ({ headers }) => {
+    const { app, handler } = makeApp({ bodyLimitBytes: 10 });
+
+    const response = await app.request('http://web.local/tasks', {
+      method: 'PUT',
+      headers,
+      body: null,
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get('content-type')).toMatch(/^application\/json/);
+    await expect(response.json()).resolves.toEqual({ error: 'Request body is not readable' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('lets a declared empty body through', async () => {
+    const { app, handler } = makeApp({ bodyLimitBytes: 10 });
+
+    const response = await app.request('http://web.local/tasks', {
+      method: 'POST',
+      headers: { 'content-length': '0' },
+      body: null,
+    });
+
+    expect(response.status).toBe(200);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('characterization: lets GET with a body reach the handler without 413', async () => {
+    const { app, handler } = makeApp({ bodyLimitBytes: 10 });
+    handler.mockImplementationOnce(async (request) => new Response(await request.text()));
+
+    // undici запрещает тело у GET — метод подменяется геттером, как делает
+    // @hono/node-server для запросов, у которых метод и тело расходятся.
+    const request = withMethod(
+      new Request('http://web.local/tasks', { method: 'PUT', body: 'x'.repeat(11) }),
+      'GET',
+    );
+
+    const response = await app.request(request);
+
+    // Осознанная граница задачи: контур — «не-GET/HEAD», GET с телом не ограждён.
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe('x'.repeat(11));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds the time spent reading a slow body, not only the handler', async () => {
+    vi.useFakeTimers();
+    const { app, handler } = makeApp({ requestTimeoutMs: 20 });
+    const gate: { release?: () => void } = {};
+    const slow = new ReadableStream<Uint8Array>({
+      // Клиент прислал заголовки и молчит: обработчик ждёт первый байт тела.
+      pull: (controller) =>
+        new Promise<void>((resolve) => {
+          gate.release = () => {
+            controller.close();
+            resolve();
+          };
+        }),
+    });
+    handler.mockImplementationOnce(
+      async (request) => new Response(await request.text(), { status: 201 }),
+    );
+
+    const pending = app.request('http://web.local/tasks', {
+      method: 'POST',
+      body: slow,
+      duplex: 'half',
+    });
+    // Фейковые таймеры: срок истекает без реального ожидания.
+    await vi.advanceTimersByTimeAsync(20);
+    const response = await pending;
+
+    expect(response.status).toBe(504);
+    await expect(response.json()).resolves.toEqual({ error: 'Request timed out' });
+    // Проигравшая ветка отпущена: висящих промисов тест не оставляет.
+    gate.release?.();
+  });
+
+  it('pins the default limits by their literal values', async () => {
     const { app, handler } = makeApp();
 
     const response = await app.request('http://web.local/tasks', {
@@ -600,8 +886,75 @@ describe('request guards on the SSR fallback', () => {
 
     expect(response.status).toBe(413);
     expect(handler).not.toHaveBeenCalled();
+    // Зеркало литералов, а не сверка с API: сквозного дрейф-гейта между
+    // приложениями нет (журнал e55, решение 3). 30 с поведением не проверяется.
     expect(REQUEST_BODY_LIMIT_BYTES).toBe(1_048_576);
     expect(REQUEST_TIMEOUT_MS).toBe(30_000);
+  });
+});
+
+// Фейковые таймеры включают отдельные тесты; снимаются после каждого, чтобы
+// упавший на таймауте тест не оставил их следующим.
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+/**
+ * Request с подменённым геттером `method` — так @hono/node-server собирает
+ * запросы, у которых метод и тело расходятся (TRACE; GET/HEAD без потока).
+ * undici сам такой Request не даёт собрать: у GET тела быть не может.
+ */
+function withMethod(request: Request, method: string): Request {
+  Object.defineProperty(request, 'method', { value: method, configurable: true });
+  return request;
+}
+
+/** Сырой HTTP-обмен одним кадром; ответ читается до закрытия соединения сервером. */
+async function rawExchange(port: number, frame: string): Promise<string> {
+  const socket = connect(port, '127.0.0.1');
+  const received: Uint8Array[] = [];
+  await new Promise<void>((resolve, reject) => {
+    // Страховка от зависшего обмена: своя ошибка вместо таймаута Vitest.
+    socket.setTimeout(2_000, () => socket.destroy(new Error('raw exchange timed out')));
+    socket.on('data', (chunk: Buffer) => {
+      received.push(new Uint8Array(chunk));
+    });
+    socket.once('close', resolve);
+    socket.once('error', reject);
+    socket.once('connect', () => socket.end(frame));
+  });
+  return Buffer.concat(received).toString('utf8');
+}
+
+describe('on a real HTTP server', () => {
+  it('answers 405 to a TRACE with a body before it reaches the handler', async () => {
+    const { app, handler } = makeApp({ bodyLimitBytes: 10 });
+    handler.mockImplementationOnce(
+      async (request) => new Response(`handler read ${(await request.text()).length}`),
+    );
+    // Порт 0: свободный порт выдаёт система, параллельные прогоны не пересекаются.
+    const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 });
+
+    try {
+      await once(server, 'listening');
+      const address = server.address();
+      if (address === null || typeof address === 'string') {
+        throw new Error('the server did not report a TCP port');
+      }
+
+      // Дыра воспроизводится только здесь: node-server собирает TRACE как GET без
+      // потока (`request.body === null`), хотя тело в соединении есть.
+      const raw = await rawExchange(
+        address.port,
+        `TRACE /tasks HTTP/1.1\r\nHost: web.local\r\nContent-Length: 11\r\nConnection: close\r\n\r\n${'x'.repeat(11)}`,
+      );
+
+      expect(raw).toMatch(/^HTTP\/1\.1 405 /);
+      expect(raw).toContain('{"error":"Method not allowed"}');
+      expect(handler).not.toHaveBeenCalled();
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });
 
