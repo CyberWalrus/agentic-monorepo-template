@@ -28,7 +28,7 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - uses: $/.github/actions/setup
         with: { playwright: 'true' }
@@ -101,7 +101,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - uses: $/.github/actions/setup
       # b2.4: mutation-full остаётся артефактом ТОЛЬКО api — телеметрия c9.4
@@ -140,7 +140,7 @@ jobs:
       contents: write # ветка и коммит храповика
       pull-requests: write # PR храповика
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - uses: $/.github/actions/setup
       - name: download this run's reports
@@ -232,7 +232,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - uses: $/.github/actions/setup
       - name: download this run's reports
@@ -265,7 +265,7 @@ jobs:
       # обходчиков ночью не проверяется — граница названа в выводе чекера
       # (docs/architecture.md, 3.4).
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - name: ruleset drift check
         env:
@@ -288,7 +288,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       # playwright: 'true' обязателен (e31): turbo test включает @repo/ui#test —
       # vitest browser mode, ему нужен Chromium. Без флага шаги Cache/Install
@@ -327,7 +327,7 @@ jobs:
       issues: write
       actions: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - uses: $/.github/actions/setup
         with: { playwright: 'true' }
@@ -409,7 +409,7 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - uses: $/.github/actions/setup
         with: { playwright: 'true' }
@@ -453,7 +453,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Полная история: bundle-delta (канарейка и негатив-проверки) строит базу
         # от merge-base(HEAD, origin/main) (A6 PR-2, ADR 0013).
         with: { fetch-depth: 0, persist-credentials: false }
@@ -472,7 +472,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Полная история: шаг bundle-delta строит базу от merge-base(HEAD,
         # origin/main) (A6 PR-2, ADR 0013); на main база == HEAD — шаг быстрый.
         with: { fetch-depth: 0, persist-credentials: false }
@@ -499,7 +499,7 @@ jobs:
       pull-requests: read
     steps:
       # Полная история: doctor сверяет ветки task/* с доской (ADR 0007, «Замыкание задачи»).
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0, persist-credentials: false }
       - uses: $/.github/actions/setup
       # Гейт целостности доски — deny-модуль напрямую (ADR 0014): ночной контур
@@ -521,7 +521,7 @@ jobs:
       actions: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Полная история: конфликты пар task/* считаются git merge-tree по
         # удалённым ссылкам — fetch-depth 1 их не привозит.
         with: { fetch-depth: 0, persist-credentials: false }
