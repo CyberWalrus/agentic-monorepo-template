@@ -345,9 +345,12 @@ it('проводка: права джобы ruleset-drift — ровно content
   // Области administration у GITHUB_TOKEN нет (workflow-syntax, permissions):
   // право не выдать, список обходчиков ночью не проверяется — граница проверки.
   const nightly = readFileSync(join(repoDir, '.github', 'workflows', 'nightly.yml'), 'utf8');
+  // Конец среза — следующая джоба nightly. Ключ обязан существовать: иначе indexOf
+  // даёт −1 и срез уходит до конца файла (e39: так сломался маркер
+  // '  workflow-health:' после выноса джобы health в workflow-health.yml).
   const job = nightly.slice(
     nightly.indexOf('  ruleset-drift:'),
-    nightly.indexOf('  workflow-health:'),
+    nightly.indexOf('  test-count-ratchet:'),
   );
   expect(Object.fromEntries(permissionEntries(job))).toEqual({ contents: 'read', issues: 'write' });
 });
