@@ -9,7 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsc",
-    "test": "vitest run --project unit --reporter=json --reporter=default --outputFile=reports/vitest.json",
+    "test": "vitest run --project unit --coverage --reporter=json --reporter=default --outputFile=reports/vitest.json",
     "test:visual": "vitest run --project visual"
   },
   "devDependencies": {
@@ -17,6 +17,7 @@
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "@vitest/browser-playwright": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
     "axe-core": "catalog:",
     "playwright": "catalog:",
     "typescript": "catalog:",
