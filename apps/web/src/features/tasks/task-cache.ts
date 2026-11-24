@@ -19,10 +19,29 @@ export function applyTaskToggle(
 }
 
 /**
- * Данные кэша после неудачной мутации: ровно снимок до неё — тот же массив,
- * без пересборки, чтобы отрисовка вернулась к прежнему состоянию без дёрганий.
- * Снимка не было (undefined) — восстанавливать нечего.
+ * Данные кэша после неудачного переключения. Откат строится от текущего
+ * состояния кэша, а не от снимка до клика: пока мутация летела, в кэш могли
+ * прийти свежие данные (фоновый refetch, другая мутация), и снимок их затёр бы.
+ * Задача `id` получает из снимка `previous` ровно то, что применяла
+ * оптимистика — `completed`; остальные её поля и остальной список остаются
+ * как есть. Исходный массив не мутируется.
+ *
+ * Откатывать нечего — задача ушла из кэша, её нет в снимке или состояние уже
+ * совпадает со снимком: возвращается тот же массив. Текущего состояния в кэше
+ * нет — восстанавливается снимок, если он был.
  */
-export function rollbackTaskToggle(previous: Task[] | undefined): Task[] | undefined {
-  return previous;
+export function rollbackTaskToggle(
+  tasks: Task[] | undefined,
+  id: string,
+  previous: Task[] | undefined,
+): Task[] | undefined {
+  if (!tasks) {
+    return previous;
+  }
+  const before = previous?.find((task) => task.id === id);
+  const current = tasks.find((task) => task.id === id);
+  if (!before || !current || current.completed === before.completed) {
+    return tasks;
+  }
+  return tasks.map((task) => (task.id === id ? { ...task, completed: before.completed } : task));
 }
