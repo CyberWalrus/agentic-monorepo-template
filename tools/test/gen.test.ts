@@ -12,7 +12,14 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+
+// Каждый тест — цепочка spawnSync (git init → node gen.ts → git rev-parse → два стаба
+// pnpm; «second feature» — две такие цепочки): проверка таймаута ждёт возврата из
+// spawn. Под нагрузкой CI main (run 45153926919) цепочка заняла 7,3–7,5 с при
+// обычных ~0,3 с — дефолтных 5 с не хватало (e41, рецидив строки реестра 2026-11-13).
+// 30 с — ≥ ×3 к p95 замеров, журнал: backlog/done/e41.md.
+vi.setConfig({ testTimeout: 30_000 });
 
 const genCli = resolve(import.meta.dirname, '../gen.ts');
 const repoDir = resolve(import.meta.dirname, '..', '..');
