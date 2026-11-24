@@ -49,7 +49,9 @@ interface TaskRow {
  * (ADR 0020, контрактный набор закрепляет отказ).
  */
 export class InMemoryTaskRepository implements TaskRepository {
-  readonly #tasks = new Map<string, TaskRow>();
+  // Не readonly: reset заменяет карту целиком (см. reset) — наблюдатели не
+  // видят промежуточное состояние между стиранием и заполнением.
+  #tasks = new Map<string, TaskRow>();
   readonly #now: () => Date;
   readonly #generateId: () => string;
 
@@ -107,31 +109,43 @@ export class InMemoryTaskRepository implements TaskRepository {
     return this.#tasks.get(id)?.ownerId ?? null;
   }
 
+  /**
+   * Замена набора, атомарная как транзакция Postgres (e53): ни одной мутации
+   * хранилища, пока новый набор не собран целиком. Сбойный seed — дубликат id
+   * в наборе или id чужого рабочего пространства — оставляет хранилище
+   * нетронутым и с той же ошибкой, что Postgres. Порядок проверок закреплён
+   * за Postgres: сначала дубликаты (свойство самого набора), затем чужие id
+   * (свойство хранилища). Чужие id ищутся только среди строк, которые сброс
+   * оставляет: без `workspaceId` стирается всё (легаси-семантика общего
+   * `/__test__/reset`), и id прежних строк любого scope свободны.
+   */
   async reset(tasks: readonly Task[], workspaceId?: string): Promise<void> {
-    const scope = workspaceId ?? null;
-    if (workspaceId === undefined) {
-      // Легаси-семантика общего /__test__/reset: стираем всё хранилище.
-      this.#tasks.clear();
-    } else {
-      for (const [id, row] of this.#tasks) {
-        if (row.workspaceId === workspaceId) {
-          this.#tasks.delete(id);
-        }
-      }
-    }
     const seededIds = new Set<string>();
     for (const task of tasks) {
-      const existing = this.#tasks.get(task.id);
-      if (existing !== undefined && existing.workspaceId !== scope) {
-        throw new Error(
-          `Task id ${task.id} already exists in workspace "${existing.workspaceId ?? 'none'}" — seed data must use ids unique across workspaces (ADR 0020)`,
-        );
-      }
       if (seededIds.has(task.id)) {
         throw new Error(`Duplicate task id within one seed: ${task.id} (ADR 0020)`);
       }
       seededIds.add(task.id);
-      this.#tasks.set(task.id, { task, ownerId: null, workspaceId: scope });
     }
+    const retained = new Map<string, TaskRow>();
+    if (workspaceId !== undefined) {
+      for (const [id, row] of this.#tasks) {
+        if (row.workspaceId !== workspaceId) {
+          retained.set(id, row);
+        }
+      }
+    }
+    for (const task of tasks) {
+      const foreign = retained.get(task.id);
+      if (foreign !== undefined) {
+        throw new Error(
+          `Task id ${task.id} already exists in workspace "${foreign.workspaceId ?? 'none'}" — seed data must use ids unique across workspaces (ADR 0020)`,
+        );
+      }
+    }
+    for (const task of tasks) {
+      retained.set(task.id, { task, ownerId: null, workspaceId: workspaceId ?? null });
+    }
+    this.#tasks = retained;
   }
 }

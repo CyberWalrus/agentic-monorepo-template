@@ -41,6 +41,53 @@ class OrderingLosingTaskRepository implements TaskRepository {
   }
 }
 
+/**
+ * Реализация с дефектом e53: сбойный reset стирал данные до того, как набор
+ * подтверждён. Через интерфейс это воспроизводится очисткой scope до
+ * делегирования: с валидным набором результат неотличим от атомарной замены,
+ * со сбойным хранилище остаётся стёртым.
+ */
+class WipeFirstResetTaskRepository implements TaskRepository {
+  readonly #inner = new InMemoryTaskRepository();
+
+  list(workspaceId?: string) {
+    return this.#inner.list(workspaceId);
+  }
+
+  create(title: string, ownerId?: string | null, workspaceId?: string) {
+    return this.#inner.create(title, ownerId, workspaceId);
+  }
+
+  toggle(id: string, workspaceId?: string) {
+    return this.#inner.toggle(id, workspaceId);
+  }
+
+  remove(id: string, workspaceId?: string) {
+    return this.#inner.remove(id, workspaceId);
+  }
+
+  ownerOf(id: string) {
+    return this.#inner.ownerOf(id);
+  }
+
+  async reset(tasks: readonly Task[], workspaceId?: string): Promise<void> {
+    await this.#inner.reset([], workspaceId);
+    await this.#inner.reset(tasks, workspaceId);
+  }
+}
+
+/**
+ * Проверки атомарности сбойного reset (e53): ровно их красит реализация,
+ * которая стирает данные до подтверждения набора.
+ */
+const FAILED_RESET_CHECK_NAMES = [
+  'a failed global reset leaves the whole store untouched',
+  'a failed workspace reset leaves that workspace and its neighbours untouched',
+  'a failed workspace reset keeps earlier seed rows out when a later row clashes',
+  'a workspace reset that reuses an ownerless id fails and leaves the store untouched',
+  'a seed with a duplicate and a foreign id reports the duplicate and leaves the store untouched',
+];
+
 /** Прогоняет все проверки набора (каждая на своём экземпляре) и возвращает имена упавших. */
 async function failingCheckNames(createRepository: () => TaskRepository): Promise<string[]> {
   const verdicts = await Promise.all(
@@ -63,6 +110,12 @@ describe('TaskRepository contract canary', () => {
     const failures = await failingCheckNames(() => new OrderingLosingTaskRepository());
 
     expect(failures).toContain('list orders tasks newest first');
+  });
+
+  it('catches an implementation that wipes the store before the seed is confirmed', async () => {
+    const failures = await failingCheckNames(() => new WipeFirstResetTaskRepository());
+
+    expect(failures).toEqual(FAILED_RESET_CHECK_NAMES);
   });
 
   it('passes every check for a healthy implementation', async () => {
