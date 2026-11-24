@@ -24,11 +24,15 @@
     },
     {
       "type": "required_status_checks",
-      "$comment": "Третий обязательный check bundle-approval добавляется вручную по docs/github-setup.md §1 после создания label (ADR 0013 — сознательное окно до создания label); согласованность снимка и документации держит канарейка tools/test/setup-docs-consistency.test.ts",
+      "$comment": "Три обязательных check: gate, gate-integrity и bundle-approval (ADR 0013 — доверенное одобрение роста бандла). bundle-approval добавлен в живой ruleset и в снимок 2026-11-24 (e29), после создания label bundle-growth-approved; окно без блокировки закрыто. Ночной чек дрейфа сверяет список с живым правилом: убранный из живого check — красный ruleset-drift. Согласованность снимка и документации держит канарейка tools/test/setup-docs-consistency.test.ts",
       "parameters": {
         "strict_required_status_checks_policy": true,
         "do_not_enforce_on_create": false,
-        "required_status_checks": [{ "context": "gate" }, { "context": "gate-integrity" }]
+        "required_status_checks": [
+          { "context": "gate" },
+          { "context": "gate-integrity" },
+          { "context": "bundle-approval" }
+        ]
       }
     }
   ]
