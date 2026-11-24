@@ -7,7 +7,7 @@ import { oc } from '@orpc/contract';
 import { implement } from '@orpc/server';
 import type { ContractRouterClient } from '@orpc/contract';
 import { serve } from '@hono/node-server';
-import { ocAccess, type Contract } from '@repo/contracts';
+import { contract, ocAccess, type Contract } from '@repo/contracts';
 import * as z from 'zod';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // публичный экспорт: фикстуры описывают HTTP-слой, в контракт процедур не входят.
 import {
   errorResponses,
+  generateSpec,
   type WireResponse,
 } from '../../../packages/contracts/scripts/openapi-spec.ts';
 import { createApp, REQUEST_BODY_LIMIT_BYTES, REQUEST_TIMEOUT_MS } from './app.ts';
@@ -770,6 +771,38 @@ describe('on a real HTTP server', () => {
       }
     },
   );
+
+  // e56 (ревью): адаптер не передаёт поток тела методам GET и HEAD, и
+  // объявленное тело отбивает ограждение формы — до потолка (200 байт при
+  // потолке 64 не дают 413) и до процедуры. Этот 400 спека описывает у
+  // методов без тела; проверка на каждой GET-операции настоящего контракта.
+  it('answers a GET with a declared body with the 400 the spec documents', async () => {
+    const app = createApp({ tasks: new InMemoryTaskRepository(), bodyLimitBytes: 64 });
+    const { port, close } = await listen(app);
+    const spec = await generateSpec(contract);
+    const gets = Object.entries(spec.paths ?? {}).filter(([, item]) => item?.get !== undefined);
+
+    try {
+      expect(gets.map(([path]) => path)).toEqual(['/tasks']);
+      await Promise.all(
+        gets.map(async ([path, item]) => {
+          const { raw } = await rawExchange(
+            port,
+            `GET /api${path} HTTP/1.1\r\nHost: api.local\r\nContent-Type: application/json\r\nContent-Length: 200\r\nConnection: close\r\n\r\n${' '.repeat(200)}`,
+            2_000,
+          );
+          const documented = Object.keys(item?.get?.responses ?? {});
+
+          expect(raw).toMatch(/^HTTP\/1\.1 400 /);
+          expect(raw).toContain(JSON.stringify(errorResponses.unreadableBody.body));
+          expect(documented).toContain('400');
+          expect(documented).not.toContain('413');
+        }),
+      );
+    } finally {
+      await close();
+    }
+  });
 
   it('answers 504 to a stalled chunked body in about the request timeout', async () => {
     const { app, expectNothingRan } = setupGuards({ bodyLimitBytes: 64, requestTimeoutMs: 200 });

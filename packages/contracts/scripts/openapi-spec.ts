@@ -82,6 +82,12 @@ export const errorResponses = {
   /** HTTP-слой до транспорта (apps/api/src/app.ts): статичный текст, без данных запроса (C4.1). */
   payloadTooLarge: { status: 413, body: { error: 'Payload too large' } },
   requestTimedOut: { status: 504, body: { error: 'Request timed out' } },
+  /**
+   * Тело объявлено у метода, которому адаптер потока не передаёт (GET, HEAD):
+   * ограждение формы отвечает до лимита и до процедуры. На настоящем
+   * адаптере — apps/api/src/app.test.ts, «on a real HTTP server».
+   */
+  unreadableBody: { status: 400, body: { error: 'Request body is not readable' } },
 } as const;
 
 type JsonObject = Record<string, unknown>;
@@ -129,29 +135,18 @@ const malformedBodySchema: JsonObject = {
   not: { required: ['data'] },
 };
 
-const badRequestResponse: JsonObject = {
-  description: '400: input validation failed or the request body is malformed',
-  content: {
-    'application/json': { schema: { oneOf: [validationFailureSchema, malformedBodySchema] } },
-  },
-};
-
 /** Схема ответа ограждения: ровно ключ error с текстом фикстуры. */
-function guardResponse(fixture: GuardResponse, description: string): JsonObject {
+function guardSchema(fixture: GuardResponse): JsonObject {
   return {
-    description,
-    content: {
-      'application/json': {
-        schema: {
-          type: 'object',
-          properties: { error: { const: fixture.body.error } },
-          required: ['error'],
-          additionalProperties: false,
-        },
-      },
-    },
+    type: 'object',
+    properties: { error: { const: fixture.body.error } },
+    required: ['error'],
+    additionalProperties: false,
   };
 }
+
+/** Тело у метода без потока тела: отвечает ограждение формы — один ключ error. */
+const unreadableBodySchema: JsonObject = guardSchema(errorResponses.unreadableBody);
 
 const payloadTooLargeResponse = guardResponse(
   errorResponses.payloadTooLarge,
@@ -163,7 +158,41 @@ const requestTimedOutResponse = guardResponse(
   '504: request exceeded the time limit; answered by the HTTP layer, not the procedure',
 );
 
+/** Ответ ограждения со схемой фикстуры. */
+function guardResponse(fixture: GuardResponse, description: string): JsonObject {
+  return {
+    description,
+    content: { 'application/json': { schema: guardSchema(fixture) } },
+  };
+}
+
+/** Ответ 400 из вариантов, которые операция даёт на проводе, и его описание. */
+function badRequestResponse(
+  inputValidated: boolean,
+  carriesBody: boolean,
+  variants: JsonObject[],
+): JsonObject {
+  const transport = carriesBody
+    ? 'the request body is malformed'
+    : 'a body was sent with a method that carries none';
+  const description = inputValidated
+    ? `400: input validation failed or ${transport}`
+    : `400: ${transport}; answered before the procedure, which is not called`;
+  return {
+    description,
+    content: {
+      'application/json': { schema: variants.length === 1 ? variants[0] : { oneOf: variants } },
+    },
+  };
+}
+
 const HTTP_METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'] as const;
+
+/**
+ * Методы, которым адаптер не передаёт поток тела: GET и HEAD приходят в
+ * приложение с body === null, объявленное тело отбивает ограждение формы.
+ */
+const BODYLESS_METHODS: ReadonlySet<string> = new Set(['get', 'head']);
 
 /** Часть контрактной процедуры, читаемая здесь; остальное спеку не нужно. */
 interface ContractProcedure {
@@ -199,28 +228,41 @@ function* procedures(node: unknown): Generator<ContractProcedure> {
 }
 
 /**
- * Вход процедуры валидируется: схема есть и пустой вход (undefined) она
- * отклоняет — тело или параметры обязаны прийти. Схема, принимающая undefined
- * (z.void(), z.any()), ничего не проверяет, и 400 через неё не получить.
+ * Пробы входа: схема, отвергает хотя бы одну из них, валидирует вход. Одного
+ * undefined мало (ревью e56): `.optional()` и `.default()` его принимают, но
+ * отвергают другие значения, и 400 через них достижим — как через z.void(),
+ * который отвергает любое тело. Ничего не проверяют только схемы, принимающие
+ * всё (z.any(), z.unknown()), и процедуры без входа. Схема, принимающая все
+ * пробы, но отвергающая что-то ещё, считается не валидирующей — набор проб
+ * расширяется с первым таким случаем.
  */
+const INPUT_PROBES: readonly unknown[] = [undefined, {}, [], null, '', 0, false];
+
+/** Вход процедуры валидируется: схема есть и хотя бы одну пробу она отклоняет. */
 export function hasValidatedInput(procedure: unknown): boolean {
   if (!isProcedure(procedure)) {
     return false;
   }
   const schema = procedure['~orpc'].inputSchema;
-  return schema instanceof ZodType && !schema.safeParse(undefined).success;
+  return (
+    schema instanceof ZodType && INPUT_PROBES.some((probe) => !schema.safeParse(probe).success)
+  );
 }
 
 /**
  * Операции («METHOD /path»), у которых провал валидации входа достижим, —
  * вычисляются из роутера контракта, а не ведутся руками (e56): ручной список
- * расходился с `pnpm gen feature` по построению. 400 достижим, когда вход
- * валидируется и проверка доступа его не опережает: у public-процедур
+ * расходился с `pnpm gen feature` по построению. 400 валидации достижим, когда
+ * вход валидируется и проверка доступа его не опережает: у public-процедур
  * мидлварь авторизации ничего не проверяет. Процедура с политикой owner или
  * admin (или без политики) отказывает FORBIDDEN до валидации (fail-closed,
  * C2.3): владелец читается по форме входа, и вход, не прошедший валидацию,
- * формы не даёт. Рантайм-доказательство правила для каждой процедуры
- * настоящего роутера — router-divergence.test.ts.
+ * формы не даёт.
+ *
+ * Это правило — только про 400 валидации. Ответы транспорта и ограждений на
+ * тело (битое тело, 413) от операции не зависят — см. documentErrorResponses.
+ * Сверка спеки с проводом для каждой операции настоящего роутера —
+ * apps/api/src/router-divergence.test.ts, «spec on the wire».
  */
 export function operationsWithInputValidation(router: AnyContractRouter): ReadonlySet<string> {
   const operations = new Set<string>();
@@ -241,13 +283,19 @@ export function operationsWithInputValidation(router: AnyContractRouter): Readon
 }
 
 /**
- * Дополняет спеку ответами, которых генератор не видит, и убирает пустые
- * content-мапы (генератор ставит content: {} у void-вывода, хотя рантайм
- * тела не отдаёт: пустая мапа утверждает тело и вводит кодогенерацию в
- * заблуждение):
- *   - 400 (валидация или битое тело) — операциям из validated;
- *   - 413 — операциям с телом запроса: превысить потолок может только тело;
- *   - 504 — всем: любая процедура может не уложиться в срок.
+ * Дополняет спеку ответами HTTP-слоя, которых генератор не видит, и убирает
+ * пустые content-мапы (генератор ставит content: {} у void-вывода, хотя
+ * рантайм тела не отдаёт: пустая мапа утверждает тело и вводит кодогенерацию
+ * в заблуждение). Ограждения стоят на всём `/api/*` и срабатывают до
+ * процедуры, а JSON разбирает транспорт до мидлвари авторизации — поэтому
+ * их ответы не зависят от того, что операция объявляет:
+ *   - 504 — всем: любая процедура может не уложиться в срок;
+ *   - 413 — методам с телом: потолок превышает тело запроса, а не операции,
+ *     и клиент может послать тело любой операции;
+ *   - 400 — всем; варианты — то, что операция реально отвечает:
+ *       провал валидации — операциям из validated;
+ *       битое тело — методам с телом;
+ *       «тело не читается» — методам без потока тела.
  * Уже объявленный контрактом код не перезаписывает (источник правды —
  * контракт, обогащение вступает, только если код не задокументирован).
  * Порядок кодов в сериализации и так возрастающий: числовые ключи объекты JS
@@ -268,10 +316,12 @@ export function documentErrorResponses(
         continue;
       }
       dropEmptyContent(operation.responses);
-      if (validated.has(`${method.toUpperCase()} ${path}`)) {
-        setResponse(operation, '400', badRequestResponse);
-      }
-      if (operation.requestBody) {
+      const carriesBody = !BODYLESS_METHODS.has(method);
+      const inputValidated = validated.has(`${method.toUpperCase()} ${path}`);
+      const variants = inputValidated ? [validationFailureSchema] : [];
+      variants.push(carriesBody ? malformedBodySchema : unreadableBodySchema);
+      setResponse(operation, '400', badRequestResponse(inputValidated, carriesBody, variants));
+      if (carriesBody) {
         setResponse(operation, '413', payloadTooLargeResponse);
       }
       setResponse(operation, '504', requestTimedOutResponse);

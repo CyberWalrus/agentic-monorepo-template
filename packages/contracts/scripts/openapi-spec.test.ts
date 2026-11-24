@@ -8,6 +8,7 @@ import {
   documentErrorResponses,
   errorResponses,
   generateSpec,
+  hasValidatedInput,
   operationsWithInputValidation,
   voidSchemaConverter,
 } from './openapi-spec.ts';
@@ -149,6 +150,31 @@ function keysWithResponse(spec: OpenAPI.Document, code: string): string[] {
     .toSorted();
 }
 
+/** Три формы 400 с провода; свёртка решает, какие пропускает схема ответа. */
+const BAD_REQUEST_FIXTURES = {
+  malformedBody: errorResponses.malformedBody.body,
+  unreadableBody: errorResponses.unreadableBody.body,
+  validationFailed: errorResponses.validationFailed.body,
+} as const;
+
+/** Формы 400, которые пропускает схема ответа операции, — по ключу «METHOD /path». */
+function accepted400(spec: OpenAPI.Document, key: string): string[] {
+  const schema = bodySchemaOf(
+    operationsOf(spec).find(({ key: found }) => found === key)?.operation,
+    '400',
+  );
+  return Object.entries(BAD_REQUEST_FIXTURES)
+    .filter(([, body]) => mismatches(schema, body).length === 0)
+    .map(([name]) => name);
+}
+
+/** По каждой операции — формы 400, которые она обещает. */
+function answers400(spec: OpenAPI.Document): Record<string, string[]> {
+  return Object.fromEntries(
+    operationsOf(spec).map(({ key }) => [key, accepted400(spec, key)] as const),
+  );
+}
+
 const specFixture = (): OpenAPI.Document => ({
   openapi: '3.1.1',
   info: { title: 'Fixture', version: '0.0.0' },
@@ -169,26 +195,41 @@ const specFixture = (): OpenAPI.Document => ({
 const VALIDATED = new Set(['POST /tasks']);
 
 describe('documentErrorResponses', () => {
-  it('documents 400 only for the operations with reachable input validation', () => {
+  // Ограждения стоят на всём `/api/*`, а JSON разбирает транспорт до
+  // процедуры: их ответы не зависят от того, что объявляет операция.
+  it('documents 400 on every operation with the shapes that operation answers', () => {
     const spec = documentErrorResponses(specFixture(), VALIDATED);
 
     // Описание начинается с кода — как у ответов самого генератора
-    expect(spec.paths?.['/tasks']?.post?.responses?.['400']).toMatchObject({
-      description: expect.stringMatching(/^400\b/),
+    for (const { operation } of operationsOf(spec)) {
+      expect(operation.responses?.['400']).toMatchObject({
+        description: expect.stringMatching(/^400\b/),
+      });
+    }
+    // Валидация — только у validated (у остальных вход не проверяется).
+    // Ответ на тело — по методу: метод с телом разбирает JSON (битое тело),
+    // метод без потока тела получает отказ ограждения формы
+    expect(answers400(spec)).toEqual({
+      'DELETE /tasks/{id}': ['malformedBody'],
+      'GET /tasks': ['unreadableBody'],
+      'POST /tasks': ['malformedBody', 'validationFailed'],
     });
-    // Валидация недостижима или входа нет — 400 операция не обещает
-    expect(spec.paths?.['/tasks']?.get?.responses?.['400']).toBeUndefined();
-    expect(spec.paths?.['/tasks/{id}']?.delete?.responses?.['400']).toBeUndefined();
   });
 
-  it('documents 413 exactly for the operations with a request body and 504 for every operation', () => {
+  it('adds the validation shape to a bodyless method when its input is validated', () => {
+    const spec = documentErrorResponses(specFixture(), new Set(['POST /tasks', 'GET /tasks']));
+
+    expect(answers400(spec)['GET /tasks']).toEqual(['unreadableBody', 'validationFailed']);
+  });
+
+  it('documents 413 on every method that carries a body, declared or not, and 504 on every operation', () => {
     const spec = documentErrorResponses(specFixture(), VALIDATED);
 
     expect(spec.paths?.['/tasks']?.post?.responses?.['413']).toMatchObject({
       description: expect.stringMatching(/^413\b/),
     });
-    expect(spec.paths?.['/tasks']?.get?.responses?.['413']).toBeUndefined();
-    expect(spec.paths?.['/tasks/{id}']?.delete?.responses?.['413']).toBeUndefined();
+    // У DELETE requestBody нет — а тело запроса лимит покрывает
+    expect(keysWithResponse(spec, '413')).toEqual(['DELETE /tasks/{id}', 'POST /tasks']);
     expect(keysWithResponse(spec, '504')).toEqual([
       'DELETE /tasks/{id}',
       'GET /tasks',
@@ -249,10 +290,15 @@ describe('documentErrorResponses', () => {
   });
 });
 
+/** Public-процедура фикстурного домена: маршрут до `.input(...)`. */
+const note = (path: `/${string}`) =>
+  ocPublic.route({ method: 'POST', path, summary: 'Fixture' }).meta({ access: { type: 'public' } });
+
 describe('operationsWithInputValidation', () => {
   // Домен, каким его собирает `pnpm gen feature` (tools/gen.ts, contractTemplate),
   // и процедуры, на которых правило достижимости даёт разные ответы.
   const title = z.strictObject({ title: z.string().min(1) });
+  const filters = z.object({ q: z.string().min(2) });
   const domain = {
     list: ocPublic
       .route({ method: 'GET', path: '/notes', summary: 'Fixture' })
@@ -277,23 +323,55 @@ describe('operationsWithInputValidation', () => {
       .route({ method: 'POST', path: '/notes/untagged', summary: 'Fixture' })
       .input(title)
       .output(z.string()),
-    optional: ocPublic
-      .route({ method: 'POST', path: '/notes/optional', summary: 'Fixture' })
-      .meta({ access: { type: 'public' } })
-      .input(z.void())
+    // Вход принимает undefined — и всё же отвергает значения (ревью e56)
+    search: note('/notes/search').input(filters.optional()).output(z.string()),
+    defaults: note('/notes/defaults')
+      .input(filters.default({ q: 'ab' }))
       .output(z.string()),
+    loose: note('/notes/loose')
+      .input(z.object({ q: z.string().min(2).optional() }).optional())
+      .output(z.string()),
+    nothing: note('/notes/nothing').input(z.void()).output(z.string()),
+    anything: note('/notes/anything').input(z.any()).output(z.string()),
   };
+  // Ожидание записано руками: create, search, defaults, loose (отвергают
+  // невалидные значения) и nothing (void отвергает любое тело) — public и с
+  // валидируемым входом; anything принимает всё, list входа не имеет, у archive
+  // и purge проверка доступа отвечает раньше, untagged без политики.
+  const VALIDATED_OPERATIONS = [
+    'POST /notes',
+    'POST /notes/defaults',
+    'POST /notes/loose',
+    'POST /notes/nothing',
+    'POST /notes/search',
+  ];
 
   it('derives the operations from the contract router: validated input and no access check before it', () => {
-    // Сгенерированный домен попадает в список без правки рук: только create
-    // валидирует вход без проверки доступа
-    expect([...operationsWithInputValidation(domain)]).toEqual(['POST /notes']);
+    expect([...operationsWithInputValidation(domain)].toSorted()).toEqual(VALIDATED_OPERATIONS);
   });
 
-  it('gets 400 for a generated domain without touching any list', async () => {
+  it('counts an input as validated when its schema rejects at least one probe', () => {
+    // undefined schema принимает, {q: 'a'} — нет
+    expect(hasValidatedInput(domain.search)).toBe(true);
+    expect(hasValidatedInput(domain.defaults)).toBe(true);
+    // {} и undefined проходит, {q: 'a'} и [] — нет
+    expect(hasValidatedInput(domain.loose)).toBe(true);
+    expect(hasValidatedInput(domain.nothing)).toBe(true);
+    expect(hasValidatedInput(domain.anything)).toBe(false);
+    expect(hasValidatedInput(domain.list)).toBe(false);
+    expect(hasValidatedInput('not a procedure')).toBe(false);
+  });
+
+  it('gets the validation 400 on a generated domain without touching any list', async () => {
     const spec = await generateSpec(domain);
 
-    expect(keysWithResponse(spec, '400')).toEqual(['POST /notes']);
+    // Независимый оракул: какие тела 400 пропускает схема ответа
+    expect(
+      operationsOf(spec)
+        .filter(({ key }) => accepted400(spec, key).includes('validationFailed'))
+        .map(({ key }) => key)
+        .toSorted(),
+    ).toEqual(VALIDATED_OPERATIONS);
   });
 });
 
@@ -304,21 +382,27 @@ describe('generateSpec on the real contract', () => {
     expect(spec.paths?.['/tasks/{id}']?.delete?.responses?.['200']).toEqual({ description: 'OK' });
   });
 
-  it('computes the operations with reachable 400 from the contract router', () => {
-    // remove валидирует тот же TaskIdInputSchema, но owner-проверка отвечает
-    // FORBIDDEN до валидации (fail-closed, C2.3): 400 для DELETE недостижим
+  it('computes the operations with reachable validation 400 from the contract router', () => {
+    // list входа не имеет; remove валидирует тот же TaskIdInputSchema, но
+    // owner-проверка отвечает FORBIDDEN до валидации (fail-closed, C2.3):
+    // 400 валидации для DELETE недостижим
     expect([...operationsWithInputValidation(contract)]).toEqual([
       'POST /tasks',
       'POST /tasks/{id}/toggle',
     ]);
   });
 
-  it('documents 400 for every computed operation and for no other', async () => {
+  // Ожидание записано руками, а не выведено тем же правилом, что строит
+  // спеку (ревью e56); формы проверяет свёртка по фикстурам провода.
+  it('documents 400 on every operation with exactly the shapes it answers', async () => {
     const spec = await generateSpec(contract);
-    const validated = operationsWithInputValidation(contract);
 
-    expect(operationsOf(spec).length).toBeGreaterThan(validated.size);
-    expect(keysWithResponse(spec, '400')).toEqual([...validated].toSorted());
+    expect(answers400(spec)).toEqual({
+      'DELETE /tasks/{id}': ['malformedBody'],
+      'GET /tasks': ['unreadableBody'],
+      'POST /tasks': ['malformedBody', 'validationFailed'],
+      'POST /tasks/{id}/toggle': ['malformedBody', 'validationFailed'],
+    });
   });
 
   it('builds 400, 413 and 504 from the wire fixtures', async () => {
@@ -336,6 +420,12 @@ describe('generateSpec on the real contract', () => {
     expect(mismatches(bodySchemaOf(create, '504'), errorResponses.requestTimedOut.body)).toEqual(
       [],
     );
+    expect(
+      mismatches(
+        bodySchemaOf(spec.paths?.['/tasks']?.get, '400'),
+        errorResponses.unreadableBody.body,
+      ),
+    ).toEqual([]);
   });
 
   it('describes the 400 without data as a separate schema: the two shapes do not overlap', async () => {
@@ -356,10 +446,14 @@ describe('generateSpec on the real contract', () => {
     ]);
   });
 
-  it('documents 413 only where there is a request body and 504 on every operation', async () => {
+  it('documents 413 on every method that carries a body and 504 on every operation', async () => {
     const spec = await generateSpec(contract);
 
-    expect(keysWithResponse(spec, '413')).toEqual(['POST /tasks']);
+    expect(keysWithResponse(spec, '413')).toEqual([
+      'DELETE /tasks/{id}',
+      'POST /tasks',
+      'POST /tasks/{id}/toggle',
+    ]);
     const withoutTimeout = operationsOf(spec).filter(
       ({ operation }) => operation.responses?.['504'] === undefined,
     );
