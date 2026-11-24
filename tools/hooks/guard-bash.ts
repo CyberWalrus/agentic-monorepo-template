@@ -7,7 +7,15 @@
  */
 import { relative } from 'node:path';
 
-import { repoWriteTargets, stripHeredocs } from '../analyze-command.ts';
+import {
+  checkoutOverwritesPaths,
+  commandWords,
+  repoWriteTargets,
+  splitCommands,
+  stripHeredocs,
+  updatesSnapshots,
+  withoutGitGlobalOptions,
+} from '../analyze-command.ts';
 import { protectionOf } from '../protected-paths.ts';
 process.env['HOOK_GATE_NAME'] ??= 'guard-bash';
 import { deny, failClosedExit, projectDir, readHookInput } from './lib.ts';
@@ -32,11 +40,21 @@ if (raw.length > MAX_COMMAND_LENGTH) {
   );
 }
 const command = stripHeredocs(raw);
+// `git -C <dir> push -f` правила читают как `git push -f`: глобальные опции перед подкомандой сняты (e50)
+const normalized = withoutGitGlobalOptions(command);
+/** Слова каждой простой команды — для правил, которым буквальной формы мало. */
+const simple = splitCommands(normalized).map(commandWords);
 
-const rules: { pattern: RegExp; reason: string }[] = [
+/**
+ * Правило читает команду дважды: текстом (`pattern` — командой и её нормализацией) и по словам
+ * (`inWords` — каждой простой команды). Любого совпадения достаточно.
+ */
+const rules: { pattern: RegExp; inWords?: (words: string[]) => boolean; reason: string }[] = [
   {
     pattern:
       /visual:update|VISUAL_UPDATE=1|--update-snapshots|\b(?:vitest|playwright)\b[^|;&\n]*\s(?:-u|--update)\b/,
+    // флаг обновления цельным словом: в хвосте после `--` (`pnpm test -- -u`) и в тестовом запуске без разделителя
+    inWords: updatesSnapshots,
     reason:
       'Updating screenshot baselines is a human-only action. Triage the diff (skill visual-diff-triage) and fix the code.',
   },
@@ -51,12 +69,16 @@ const rules: { pattern: RegExp; reason: string }[] = [
   },
   {
     pattern: /git\s+(reset\s+--hard|clean\s+-[a-z]*f|checkout\s+--\s|restore\s)/,
+    // `git checkout <ревизия> -- <файл>` и `<ревизия> <файл>` без `--` отбрасывают изменения файлов так же
+    inWords: checkoutOverwritesPaths,
     reason: 'Destructive git commands are not allowed for agents.',
   },
 ];
 
 for (const rule of rules) {
-  if (rule.pattern.test(command)) {
+  const byPattern = rule.pattern.test(command) || rule.pattern.test(normalized);
+  const byWords = simple.some((words) => rule.inWords?.(words) ?? false);
+  if (byPattern || byWords) {
     deny('guard-bash', `Blocked command: ${rule.reason}`);
   }
 }
