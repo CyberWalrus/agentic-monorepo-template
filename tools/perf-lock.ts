@@ -6,13 +6,15 @@
  * упавшего прогона и забираются с предупреждением (иначе один крах навсегда
  * блокирует перф на машине).
  *
- * З13: время приходит параметром (now), случайности нет.
+ * З13: время приходит параметром (now), случайности нет. Путь lock-файла —
+ * тоже параметр (lockFile): по умолчанию машинный в tmpdir, тесты передают
+ * свой файл во временном каталоге, чтобы не мешать чужому perf-прогону.
  */
 import { openSync, closeSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const LOCK_FILE = join(tmpdir(), 'agentic-monorepo-perf.lock');
+const DEFAULT_LOCK_FILE = join(tmpdir(), 'agentic-monorepo-perf.lock');
 const POLL_MS = 2_000;
 const STALE_MS = 15 * 60 * 1000;
 
@@ -21,6 +23,12 @@ export interface PerfLockOptions {
   now?: number;
   /** Частота опроса держателя: тесты ускоряют. */
   pollMs?: number;
+  /**
+   * Путь lock-файла. По умолчанию — машинный замок в tmpdir, общий для всех
+   * worktree. Тесты передают свой файл во временном каталоге: на настоящем
+   * пути они ждали бы чужой живой perf-прогон до таймаута и удаляли его lock.
+   */
+  lockFile?: string;
 }
 
 export interface PerfLock {
@@ -63,9 +71,9 @@ function isAlive(pid: number): boolean {
 }
 
 /** Читает lock: исчез между попытками (держатель отпустил) — null, не ошибка. */
-function readPayload(): LockPayload | null {
+function readPayload(lockFile: string): LockPayload | null {
   try {
-    return payloadOf(readFileSync(LOCK_FILE, 'utf8'));
+    return payloadOf(readFileSync(lockFile, 'utf8'));
   } catch {
     return null;
   }
@@ -83,10 +91,10 @@ function isStale(held: LockPayload | null, now: number): boolean {
   return held === null || !isAlive(held.pid) || now - held.takenAt > STALE_MS;
 }
 
-function tryAcquire(now: number): PerfLock | null {
+function tryAcquire(lockFile: string, now: number): PerfLock | null {
   let fd: number;
   try {
-    fd = openSync(LOCK_FILE, 'wx');
+    fd = openSync(lockFile, 'wx');
   } catch {
     return null;
   }
@@ -98,9 +106,9 @@ function tryAcquire(now: number): PerfLock | null {
   return {
     release: () => {
       try {
-        const held = payloadOf(readFileSync(LOCK_FILE, 'utf8'));
+        const held = payloadOf(readFileSync(lockFile, 'utf8'));
         if (held?.pid === process.pid) {
-          unlinkSync(LOCK_FILE);
+          unlinkSync(lockFile);
         }
       } catch {
         // Не наш файл или уже удалён — освобождать нечего.
@@ -116,30 +124,31 @@ function tryAcquire(now: number): PerfLock | null {
  * мог появиться заново (перечитываем и удаляем только подтверждённо-протухший).
  */
 export async function acquirePerfLock(options: PerfLockOptions = {}): Promise<PerfLock> {
+  const lockFile = options.lockFile ?? DEFAULT_LOCK_FILE;
   const pollMs = options.pollMs ?? POLL_MS;
   for (;;) {
     // now — на каждой итерации: вошедший при «свежем» lock ждёт вечно, если
     // держатель завис, оставаясь живым, а протухание проверять нечем.
     const now = options.now ?? Date.now();
-    const acquired = tryAcquire(now);
+    const acquired = tryAcquire(lockFile, now);
     if (acquired !== null) {
       return acquired;
     }
-    const held = readPayload();
+    const held = readPayload(lockFile);
     if (!isStale(held, now)) {
       console.warn(
-        `perf-lock: waiting for pid ${held?.pid} to finish its perf run... (lock: ${LOCK_FILE})`,
+        `perf-lock: waiting for pid ${held?.pid} to finish its perf run... (lock: ${lockFile})`,
       );
       await sleep(pollMs);
       continue;
     }
-    const reread = readPayload();
+    const reread = readPayload(lockFile);
     if (!isStale(reread, now)) {
       // Файл пересоздали со свежим держателем — не наш, ждать.
       continue;
     }
     try {
-      unlinkSync(LOCK_FILE);
+      unlinkSync(lockFile);
     } catch (error: unknown) {
       // ENOENT — уже удалён (держатель отпустил сам); sticky-каталог мог не дать
       // удалить чужую запись (EPERM) — громко ждём дальше, не роняя прогон.
