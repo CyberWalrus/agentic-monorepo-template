@@ -1,8 +1,12 @@
+import { once } from 'node:events';
+import { connect } from 'node:net';
+
 import { createORPCClient, ORPCError } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import { oc } from '@orpc/contract';
 import { implement } from '@orpc/server';
 import type { ContractRouterClient } from '@orpc/contract';
+import { serve } from '@hono/node-server';
 import { ocAccess, type Contract } from '@repo/contracts';
 import * as z from 'zod';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -52,6 +56,145 @@ function setup({
     }),
   );
   return { app, client };
+}
+
+const PROCEDURE_SITES = [
+  { name: 'RPC', path: '/rpc/ping' },
+  { name: 'OpenAPI', path: '/api/fixture/ping' },
+] as const;
+
+/**
+ * Три места регистрации ограждений в `createApp` (e74): проверка формы, срок
+ * и потолок обязаны стоять на каждом — таблица не даёт забыть одно из них.
+ */
+const GUARDED_SITES = [...PROCEDURE_SITES, { name: 'test API', path: '/__test__/reset' }] as const;
+
+/** Тело объявлено заголовком, а поток запрос дать не может — для каждого места ограждений. */
+const DECLARED_WITHOUT_STREAM = GUARDED_SITES.flatMap((site) => [
+  { ...site, via: 'content-length', headers: { 'content-length': '11' } },
+  { ...site, via: 'transfer-encoding', headers: { 'transfer-encoding': 'chunked' } },
+]);
+
+/**
+ * Приложение на фикстурном роутере (e74): одна процедура без входной схемы —
+ * шпион показывает, вызвана ли процедура. У процедур настоящего роутера вход
+ * обязателен: пустое тело отбила бы валидация транспорта раньше обработчика.
+ */
+function setupGuards({
+  bodyLimitBytes,
+  requestTimeoutMs,
+}: { bodyLimitBytes?: number; requestTimeoutMs?: number } = {}) {
+  const ping = vi.fn<() => string>(() => 'pong');
+  const fixtureContract = {
+    ping: ocAccess
+      .route({ method: 'POST', path: '/fixture/ping', summary: 'Answers at once' })
+      .meta({ access: { type: 'public' } })
+      .output(z.string()),
+  };
+  const os = implement(fixtureContract).$context<AppContext>().use(authorizationMiddleware);
+  const tasks = new InMemoryTaskRepository();
+  const reset = vi.spyOn(tasks, 'reset');
+  const app = createApp({
+    tasks,
+    router: os.router({ ping: os.ping.handler(ping) }),
+    enableTestApi: true,
+    // exactOptionalPropertyTypes: ключ не передаётся вовсе, когда значение не введено.
+    ...(bodyLimitBytes === undefined ? {} : { bodyLimitBytes }),
+    ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }),
+  });
+  return {
+    app,
+    /** Ни одна процедура не вызвана: ни фикстурная, ни сброс тестового API. */
+    expectNothingRan: () => {
+      expect(ping).not.toHaveBeenCalled();
+      expect(reset).not.toHaveBeenCalled();
+    },
+    ping,
+  };
+}
+
+/**
+ * Тело, которое клиент начал и не закончил; `release` закрывает поток —
+ * проигравшая гонку ветка ограждений отпускается, висящих промисов тест не
+ * оставляет.
+ */
+function stalledBody(): { stream: ReadableStream<Uint8Array>; release: () => void } {
+  const gate: { release?: () => void } = {};
+  const stream = new ReadableStream<Uint8Array>({
+    // Клиент прислал заголовки и молчит: потолок ждёт первый байт тела.
+    pull: (controller) =>
+      new Promise<void>((resolve) => {
+        gate.release = () => {
+          controller.close();
+          resolve();
+        };
+      }),
+  });
+  return { stream, release: () => gate.release?.() };
+}
+
+/**
+ * Request с подменённым геттером `method` — так @hono/node-server собирает
+ * TRACE: GET без потока. undici сам такой Request не даёт собрать: `new Request`
+ * с методом TRACE бросает TypeError.
+ */
+function withMethod(request: Request, method: string): Request {
+  Object.defineProperty(request, 'method', { value: method, configurable: true });
+  return request;
+}
+
+/**
+ * Настоящий адаптер на свободном порту: порт 0 выдаёт система, параллельные
+ * прогоны не пересекаются.
+ */
+async function listen(app: ReturnType<typeof createApp>): Promise<{
+  port: number;
+  close: () => Promise<void>;
+}> {
+  const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 });
+  await once(server, 'listening');
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('the server did not report a TCP port');
+  }
+  return {
+    port: address.port,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+/**
+ * Сырой HTTP-обмен одним кадром: кадр пишется целиком, соединение клиент не
+ * закрывает — ответ читается до закрытия соединения сервером. Страховка от
+ * зависшего обмена — своя ошибка вместо таймаута Vitest. `firstByteAfterMs` —
+ * сколько прошло от записи кадра до первого байта ответа (NaN — ответа не было).
+ */
+async function rawExchange(
+  port: number,
+  frame: string,
+  watchdogMs: number,
+): Promise<{ raw: string; firstByteAfterMs: number }> {
+  const socket = connect(port, '127.0.0.1');
+  return new Promise<{ raw: string; firstByteAfterMs: number }>((resolve, reject) => {
+    const startedAt = performance.now();
+    const received: Uint8Array[] = [];
+    let firstByteAfterMs: number | undefined;
+    socket.setTimeout(watchdogMs, () => {
+      socket.destroy(new Error('raw exchange timed out'));
+    });
+    socket.on('data', (chunk: Buffer) => {
+      firstByteAfterMs ??= performance.now() - startedAt;
+      received.push(new Uint8Array(chunk));
+    });
+    socket.once('close', () => {
+      resolve({
+        raw: Buffer.concat(received).toString('utf8'),
+        firstByteAfterMs: firstByteAfterMs ?? Number.NaN,
+      });
+    });
+    socket.once('error', reject);
+    socket.once('connect', () => socket.write(frame));
+  });
 }
 
 describe('RPC transport', () => {
@@ -361,6 +504,216 @@ describe('request guards', () => {
     // который выстрелит на уже законченном контексте (мутационный прогон c1.7).
     expect(clearTimeoutSpy).toHaveBeenCalled();
     clearTimeoutSpy.mockRestore();
+  });
+
+  // Проверка формы запроса (e74) — fail-closed, по методу и заголовкам, а не по
+  // `request.body`: потолок запрос без потока пропускает не читая, а адаптер
+  // именно так собирает TRACE с телом. Поэтому форма стоит раньше потолка.
+
+  it.each(DECLARED_WITHOUT_STREAM)(
+    'rejects a body declared by $via that the request cannot yield: 400 before the $name procedure runs',
+    async ({ path, headers }) => {
+      const { app, expectNothingRan } = setupGuards({ bodyLimitBytes: 64 });
+
+      const response = await app.request(path, { method: 'POST', headers, body: null });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'Request body is not readable' });
+      expectNothingRan();
+    },
+  );
+
+  it.each(
+    PROCEDURE_SITES.flatMap((site) => [
+      { ...site, declared: 'content-length: 0', headers: { 'content-length': '0' } },
+      { ...site, declared: 'no body headers', headers: {} },
+    ]),
+  )(
+    'lets a request with $declared through the $name guards to the procedure as before',
+    async ({ path, headers }) => {
+      const { app, ping } = setupGuards({ bodyLimitBytes: 64 });
+
+      const response = await app.request(path, { method: 'POST', headers, body: null });
+
+      expect(response.status).toBe(200);
+      expect(ping).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('lets a request with an empty body through the test API guards to the reset handler as before', async () => {
+    const { app } = setupGuards({ bodyLimitBytes: 64 });
+
+    const response = await app.request('/__test__/reset', {
+      method: 'POST',
+      headers: { 'content-length': '0' },
+      body: null,
+    });
+
+    // Тело не объявлено — ограждения пропускают; пустое тело отбивает сам обработчик.
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: 'Invalid seed data' });
+  });
+
+  it.each(GUARDED_SITES)(
+    'answers 504 at $name when a body without content-length stalls below the limit',
+    async ({ path }) => {
+      const { app, expectNothingRan } = setupGuards({ bodyLimitBytes: 64, requestTimeoutMs: 50 });
+      const stalled = stalledBody();
+
+      const response = await app.request(path, {
+        method: 'POST',
+        body: stalled.stream,
+        duplex: 'half',
+      });
+
+      // Срок накрывает чтение тела: без content-length потолок читает тело до
+      // конца раньше, чем вызовет следующий шаг, — таймер обязан стоять раньше.
+      expect(response.status).toBe(504);
+      expect(await response.json()).toEqual({ error: 'Request timed out' });
+      expectNothingRan();
+      // Проигравшая ветка отпущена: висящих промисов тест не оставляет.
+      stalled.release();
+    },
+  );
+
+  it('answers 405, 400, 413 and 504 with one body form: a single error text, nothing from the request', async () => {
+    const { app } = setupGuards({ bodyLimitBytes: 10, requestTimeoutMs: 20 });
+    const stalled = stalledBody();
+    const requests = [
+      // Так адаптер собирает TRACE: GET без потока и геттер method.
+      withMethod(
+        new Request('http://api.local/rpc/ping', { headers: { 'content-length': '11' } }),
+        'TRACE',
+      ),
+      new Request('http://api.local/api/fixture/ping', {
+        method: 'POST',
+        headers: { 'content-length': '11' },
+        body: null,
+      }),
+      new Request('http://api.local/__test__/reset', {
+        method: 'POST',
+        body: 'x'.repeat(11),
+      }),
+      new Request('http://api.local/rpc/ping', {
+        method: 'POST',
+        body: stalled.stream,
+        duplex: 'half',
+      }),
+    ];
+
+    try {
+      const settled = await Promise.all(
+        requests.map(async (request) => {
+          const response = await app.request(request);
+          const body: unknown = await response.json();
+          return {
+            status: response.status,
+            contentType: response.headers.get('content-type'),
+            body,
+          };
+        }),
+      );
+
+      // Один ключ и только текст ошибки — одинаково у всех четырёх; данных
+      // запроса (включая тело сверх потолка) в ответе нет (C4.1).
+      expect(settled).toEqual([
+        {
+          status: 405,
+          contentType: expect.stringMatching(/^application\/json/),
+          body: { error: 'Method not allowed' },
+        },
+        {
+          status: 400,
+          contentType: expect.stringMatching(/^application\/json/),
+          body: { error: 'Request body is not readable' },
+        },
+        {
+          status: 413,
+          contentType: expect.stringMatching(/^application\/json/),
+          body: { error: 'Payload too large' },
+        },
+        {
+          status: 504,
+          contentType: expect.stringMatching(/^application\/json/),
+          body: { error: 'Request timed out' },
+        },
+      ]);
+    } finally {
+      stalled.release();
+    }
+  });
+});
+
+// Дыра воспроизводится только на настоящем адаптере: node-server собирает
+// TRACE как GET без потока (`request.body === null`), хотя тело в соединении
+// есть; через `app.request()` такой запрос не собрать (см. withMethod).
+describe('on a real HTTP server', () => {
+  // Тела валидны для своих процедур и с запасом выше потолка: до правки TRACE
+  // с таким телом доходил до транспорта — лимит для него не действовал.
+  it.each([
+    { name: 'RPC', path: '/rpc/tasks/create', body: { json: { title: 'Poked by TRACE' } } },
+    { name: 'OpenAPI', path: '/api/tasks', body: { title: 'Poked by TRACE' } },
+    {
+      name: 'test API',
+      path: '/__test__/reset',
+      body: {
+        tasks: [
+          {
+            id: '00000000-0000-4000-8000-000000000001',
+            title: 'Poked by TRACE',
+            completed: false,
+            createdAt: '2026-11-01T10:00:00.000Z',
+          },
+        ],
+      },
+    },
+  ])(
+    'answers 405 to a TRACE with a body over the limit at $name before the procedure runs',
+    async ({ path, body }) => {
+      const { app, client } = setup({ enableTestApi: true, bodyLimitBytes: 64 });
+      const { port, close } = await listen(app);
+
+      try {
+        // Хвостовые пробелы — валидный JSON: 200 байт при потолке 64.
+        const { raw } = await rawExchange(
+          port,
+          `TRACE ${path} HTTP/1.1\r\nHost: api.local\r\nContent-Type: application/json\r\nContent-Length: 200\r\nConnection: close\r\n\r\n${JSON.stringify(body).padEnd(200)}`,
+          2_000,
+        );
+
+        // Ни создание задачи, ни сидирование не выполнены: процедура не вызвана.
+        expect(await client.tasks.list()).toEqual([]);
+        expect(raw).toMatch(/^HTTP\/1\.1 405 /);
+        expect(raw).toContain('{"error":"Method not allowed"}');
+      } finally {
+        await close();
+      }
+    },
+  );
+
+  it('answers 504 to a stalled chunked body in about the request timeout', async () => {
+    const { app, expectNothingRan } = setupGuards({ bodyLimitBytes: 64, requestTimeoutMs: 200 });
+    const { port, close } = await listen(app);
+
+    try {
+      // Chunked-тело ниже потолка остановилось на 10 байтах: клиент молчит и
+      // держит соединение, `Connection: close` не просит.
+      const { raw, firstByteAfterMs } = await rawExchange(
+        port,
+        'POST /rpc/ping HTTP/1.1\r\nHost: api.local\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\na\r\n0123456789\r\n',
+        3_000,
+      );
+
+      expect(raw).toMatch(/^HTTP\/1\.1 504 /);
+      expect(raw).toContain('{"error":"Request timed out"}');
+      expectNothingRan();
+      // Раньше срока ответа не бывает — это таймер. Сверху — запас к порядку
+      // величины: до правки ответ ждал бы requestTimeout Node (300 с по умолчанию).
+      expect(firstByteAfterMs).toBeGreaterThanOrEqual(200);
+      expect(firstByteAfterMs).toBeLessThan(2_000);
+    } finally {
+      await close();
+    }
   });
 });
 
