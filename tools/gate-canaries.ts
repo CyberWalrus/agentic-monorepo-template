@@ -14,7 +14,7 @@
  * одностороннее ослабление З10-пары (канарейка sandbox).
  */
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface GateCanary {
@@ -265,19 +265,27 @@ export const CANARIES: GateCanary[] = [
     // Пакет импортируется в обход exports (architecture.md, 2.1). Ожидание —
     // not-to-unresolvable, а не no-deep-package-imports: то правило на текущем
     // дереве недостижимо (причина — BOUNDARIES_RULE_CANARY_EXEMPT в
-    // gates-canary.test) — подпуть вне exports-карты не разрешается. Канарейка
-    // страхует закон: открой в exports подстановку подпутей — импорт разрешится,
-    // шаг останется зелёным, и канарейка скажет «НЕ УПАЛ».
+    // gates-canary.test) — подпуть вне exports-карты не разрешается.
+    // Канарейка страхует закон: открой в exports подстановку подпутей — импорт
+    // разрешится без нарушений, шаг останется зелёным, и канарейка скажет «НЕ
+    // УПАЛ». Поэтому зонд ведёт на существующий внутренний модуль пакета:
+    // несуществующий путь неразрешим при любой exports-карте и повторял бы
+    // «неразрешимый импорт». Якорь проверяется — модуль исчезнет, и прогон
+    // упадёт здесь, а не пройдёт впустую.
     name: 'глубокий импорт пакета',
     steps: 'boundaries',
     failedStep: 'boundaries',
     expect: /not-to-unresolvable/,
-    apply: (root) =>
+    apply: (root) => {
+      if (!existsSync(join(root, 'packages', 'contracts', 'src', 'tasks.ts'))) {
+        throw new Error('canary anchor not found: packages/contracts/src/tasks.ts');
+      }
       write(
         root,
         'apps/api/src/evil-deep-probe.ts',
-        "import { taskSchema } from '@repo/contracts/src/evil-deep-target';\n\nexport const evil = taskSchema;\n",
-      ),
+        "import { TaskSchema } from '@repo/contracts/src/tasks';\n\nexport const evil = TaskSchema;\n",
+      );
+    },
   },
   {
     name: 'нарушение форматирования',
