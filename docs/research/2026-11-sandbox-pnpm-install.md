@@ -1,6 +1,6 @@
 # Песочница × `pnpm install`: где pnpm 12.21.0 держит блокировки хранилища
 
-Задача e70 (ADR 0004). Дата прогонов: 2026-11-24, 20:37–21:41 MSK. База: `b8e50d72`.
+Задача e70 (ADR 0004). Дата прогонов: 2026-11-24, 20:37–21:55 MSK. База: `b8e50d72`; прогон «P4 после правки» — на ветке после слияния `origin/main` (`6a178952`) с незакоммичённой правкой preflight.
 
 **Итог.** `allowWrite: ["~/Library/pnpm/store"]` не открывал блокировку хранилища потому, что pnpm 12.21.0 держит её не в хранилище, а в `/tmp/pnpm-store-operation-locks-<uid>` (на машине прогонов — `/private/tmp/pnpm-store-operation-locks-501`). Каталог блокировок в `allowWrite` не открывался: с ним установка проходит блокировку, но падает на записи файлов пакетов и оставляет проектный `.pnpm-store` с недособранным `node_modules`. Граница записана в ADR 0004 и architecture.md: `pnpm install` из песочечного Bash не поддерживается, зависимости ставит старт сессии агента или человек вне песочницы.
 
@@ -103,8 +103,8 @@ env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PROJECT_DIR -u CLAUDE_SESSION_ID \
 Вариант «после» отличается только `allowWrite` в `--settings`: `["~/Library/pnpm/store", "/private/tmp/pnpm-store-operation-locks-501"]`. Параметры сессий и границы метода:
 
 - Первая попытка в отдельном корне вне репозитория отказала: «this workspace has not been trusted», а режим `auto` через шлюз не работает («Auto mode can't check actions in this session. … your requests go through api.z.ai»). Доверие в `~/.claude.json` не менялось; прогоны пошли из worktree задачи с `--permission-mode default --allowedTools Bash`.
-- Семь запусков `claude -p` (модель шлюза `glm-5.4[1m]`): один отказал на старте, шесть выполнили команду — по 2 хода; `total_cost_usd` шести выполненных по оценке Claude Code в сумме ≈ 1,01, стоимость отказавшего не сохранена. Фактический счёт шлюза исполнителю не виден.
-- Побочный эффект метода: Stop-хук репозитория в каждой из шести сессий в worktree запускал `tools/verify.ts --json` (`DOCS` в `tools/hooks/stop-verify.ts:32` исключает `backlog/`, а файл задачи перенесён) — 11,1–12,8 с, статус 0. Вывод verify хук не отдаёт; сам исполнитель `pnpm verify` не запускал.
+- Восемь запусков `claude -p` (модель шлюза `glm-5.4[1m]`): один отказал на старте, семь выполнили команду — по 2 хода; `total_cost_usd` семи выполненных по оценке Claude Code в сумме ≈ 1,17, стоимость отказавшего не сохранена. Фактический счёт шлюза исполнителю не виден.
+- Побочный эффект метода: Stop-хук репозитория в каждой из семи сессий в worktree запускал `tools/verify.ts --json` (`DOCS` в `tools/hooks/stop-verify.ts:32` исключает `backlog/`, а файл задачи перенесён) — 11,1–12,8 с, статус 0. Вывод verify хук не отдаёт; сам исполнитель `pnpm verify` не запускал.
 - В отладочном логе каждой сессии три строки «[sandbox] admin sandbox mandate: ignoring … from project/local settings», в том числе «filesystem grants restricted to trusted settings tiers: ignoring 1 sandbox.filesystem.allowWrite …» — игнорируется запись `allowWrite` из `.claude/settings.json` проекта, гранты из `--settings` применяются (P1: запись в хранилище разрешена). Что происходит в доверенном рабочем пространстве владельца — не проверялось (раздел 5).
 
 ### P0. До изменения (20:58:51–20:59:21)
@@ -171,7 +171,29 @@ preflight: FAIL — 2 из 8 проверок требуют внимания
 exit=1
 ```
 
-preflight не падает, но ситуацию не объясняет: причина (`ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK`) остаётся в `result.stderr`, который `checkNodeModules` не показывает (`packages/preflight/src/checks.ts:267-274`), а предложенный фикс — ровно та команда, которая только что упала.
+До правки preflight не падает, но ситуацию не объясняет: причина (`ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK`) остаётся в `result.stderr`, который `checkNodeModules` (`packages/preflight/src/checks.ts` на `b8e50d72`, строки 267–274) не показывает, а предложенный фикс — ровно та команда, которая только что упала.
+
+### P4 после правки preflight (21:54:34–21:55:08)
+
+Правка `packages/preflight/src/checks.ts` (незакоммичённая на момент прогона), конфиг песочницы тот же, метод тот же. Контроль вне песочницы — `pnpm preflight` в том же worktree: `✓ node_modules — node_modules соответствует lockfile`, PASS 8/8. В песочнице:
+
+```text
+  ✓ node — Node v26.13.0 соответствует .nvmrc (26)
+  ✓ pnpm — pnpm 12.21.0 соответствует packageManager
+  ✗ node_modules — ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK: песочница агента не даёт pnpm открыть блокировку хранилища (/tmp/pnpm-store-operation-locks-<uid>) — это не дрейф lockfile, повтор внутри песочницы не поможет (ADR 0004)
+      → исправь: pnpm install --frozen-lockfile вне песочницы агента — в своём терминале
+  ✓ git-hooks — хуки Lefthook установлены (/Users/andreypakhomov/github.com/agentic-monorepo-template/.git/hooks)
+  ✓ docker — Docker отвечает
+  ✓ chromium — Chromium установлен (реестр Playwright)
+  ✓ maintenance-mode — режим обслуживания выключен
+  ⚠ gh — gh установлен, но не авторизован — pnpm backlog doctor неполон
+      → исправь: gh auth login
+
+preflight: FAIL — 2 из 8 проверок требуют внимания
+exit=1
+```
+
+Проверка остаётся красной (уровень `error`: сверить `node_modules` не удалось), сообщение называет причину и выход.
 
 ### P3. Жёсткие ссылки и установка с открытым каталогом блокировок (21:14:27–21:14:57)
 
@@ -217,7 +239,7 @@ WRITE_FAIL reports/e70-probe/w/a/.vscode/launch.json — Operation not permitted
 
 ## 5. Находки за рамками задачи
 
-- **«admin sandbox mandate».** В отладочном логе всех шести сессий Claude Code 2.1.330 пишет, что игнорирует из настроек проекта (project/local) гранты песочницы: `sandbox.filesystem.allowWrite`, `sandbox.network.allowedDomains`, `allowUnixSockets`, `allowLocalBinding`. Управляемых настроек на машине нет (`managed-settings.json` отсутствует). Проверено только для сессий с `--settings`; в доверенном рабочем пространстве владельца (основной каталог репозитория) не проверялось. Если подтверждается — записи `allowWrite`, `allowedDomains` и `allowUnixSockets` в `.claude/settings.json` для Claude Code 2.1.330 не действуют (в том числе `docker.sock` для `pnpm visual` и `allowLocalBinding` для e2e); это отдельная задача.
+- **«admin sandbox mandate».** В отладочном логе всех семи сессий Claude Code 2.1.330 пишет, что игнорирует из настроек проекта (project/local) гранты песочницы: `sandbox.filesystem.allowWrite`, `sandbox.network.allowedDomains`, `allowUnixSockets`, `allowLocalBinding`. Управляемых настроек на машине нет (`managed-settings.json` отсутствует). Проверено только для сессий с `--settings`; в доверенном рабочем пространстве владельца (основной каталог репозитория) не проверялось. Если подтверждается — записи `allowWrite`, `allowedDomains` и `allowUnixSockets` в `.claude/settings.json` для Claude Code 2.1.330 не действуют (в том числе `docker.sock` для `pnpm visual` и `allowLocalBinding` для e2e); это отдельная задача.
 - **Жёсткие ссылки.** Прямая проба `ln` из хранилища в проект проходит (P3), а pnpm 12.21.0 сообщает «packages cannot be hard linked from it into this project» и уходит на проектный store. Какую операцию проверяет pnpm и почему она запрещена — не установлено; в эмуляции `sandbox-exec` тот же `[WARN]` без правил для ссылок.
 - **Вложенная сессия запускает хуки проекта:** `guard-bash`, `protect-result`, `stop-verify` (с `tools/verify.ts --json`) выполняются штатно. Кто повторяет методику, должен считать, что каждая проба запускает verify в worktree.
 
