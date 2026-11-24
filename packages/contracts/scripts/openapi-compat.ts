@@ -9,15 +9,21 @@
  *
  * Правила (база → текущая):
  *  - удаление процедуры (path+method), status-code ответа, параметра;
+ *  - переименование или снятие operationId у существующей процедуры;
  *  - удаление поля во входе и в ответе (переименование ловится как удаление);
  *  - новое обязательное поле входа; новое обязательное поле ответа (новое
  *    свойство, сразу required); обязательное поле ответа стало опциональным;
- *  - сужение входа: type/enum/const/format/pattern/границы — старые валидные
- *    запросы становятся невалидными;
- *  - расширение выхода: type/enum/const/format/pattern/границы — сервер может
- *    отдать значения, которые старый клиент не разберёт.
- * Добавления (процедура, опциональное поле, новый error-код, вариант union,
- * расширение входа) проходят.
+ *  - сужение входа: type/enum/const/format/pattern/границы/
+ *    additionalProperties — старые валидные запросы становятся невалидными;
+ *  - расширение выхода: type/enum/const/format/pattern/границы/
+ *    additionalProperties — сервер может отдать значения, которые старый
+ *    клиент не разберёт.
+ * «Нет границы» — это значение «без ограничения», а не «не сравнивать» (e46):
+ * граница, появившаяся на входе, и граница, снятая с выхода, — нарушения.
+ * additionalProperties: false ловит z.object → z.strictObject (лишний ключ
+ * становится ошибкой клиента).
+ * Добавления (процедура, operationId, опциональное поле, новый error-код,
+ * вариант union, расширение входа) проходят.
  *
  * Чекер покрывает словарь ключей, который выпускает генератор
  * (scripts/openapi-spec.ts), плюс типовые ключи JSON Schema впрок; неизвестные
@@ -66,6 +72,8 @@ export interface SchemaNode {
   pattern?: string;
   minItems?: number;
   maxItems?: number;
+  /** false — ключи вне properties запрещены (z.strictObject); отсутствие и true — разрешены. */
+  additionalProperties?: boolean;
 }
 
 interface ParameterNode {
@@ -80,6 +88,7 @@ interface ContentNode {
 }
 
 interface OperationNode {
+  operationId?: string;
   parameters?: ParameterNode[];
   requestBody?: { required?: boolean; content?: Record<string, ContentNode> };
   responses?: Record<string, { content?: Record<string, ContentNode> }>;
@@ -142,6 +151,11 @@ function valuesEqual(a: unknown, b: unknown): boolean {
     );
   }
   return false;
+}
+
+/** Значение границы в сообщении: число как есть, отсутствие — «без ограничения». */
+function showBound(value: number | undefined): string {
+  return typeof value === 'number' ? String(value) : 'без ограничения';
 }
 
 // --- Ядро: сравнение схем -----------------------------------------------------------
@@ -342,7 +356,10 @@ export function diffSchema(
   }
 
   // 7. Границы: request — ужесточение, output — ослабление; направление
-  //    нарушения симметрично type/enum.
+  //    нарушения симметрично type/enum. «Нет границы» — значение «без
+  //    ограничения» (верхней нет — +∞, нижней нет — −∞), а не «не сравнивать»:
+  //    появление границы на входе сужает приём, снятие с выхода расширяет
+  //    выдачу (e46).
   const bound = (
     keyword:
       | 'minLength'
@@ -353,28 +370,34 @@ export function diffSchema(
       | 'exclusiveMaximum'
       | 'minItems'
       | 'maxItems',
+    unbounded: number,
     breaksRequest: (baseValue: number, currentValue: number) => boolean,
   ): void => {
     const from = base[keyword];
     const to = current[keyword];
-    if (typeof from !== 'number' || typeof to !== 'number' || from === to) {
+    if (from === to) {
       return;
     }
-    if (breaksRequest(from, to) === (dir === 'request')) {
-      report(
-        'bound-changed',
-        `${keyword} ${String(from)} → ${String(to)} (${dir === 'request' ? 'приём сужен' : 'выдача расширена'})`,
-      );
+    const limit = (value: number | undefined): number =>
+      typeof value === 'number' ? value : unbounded;
+    if (breaksRequest(limit(from), limit(to)) !== (dir === 'request')) {
+      return;
     }
+    const kind =
+      from === undefined ? 'bound-narrowed' : to === undefined ? 'bound-widened' : 'bound-changed';
+    report(
+      kind,
+      `${keyword} ${showBound(from)} → ${showBound(to)} (${dir === 'request' ? 'приём сужен' : 'выдача расширена'})`,
+    );
   };
-  bound('minLength', (from, to) => to > from);
-  bound('maxLength', (from, to) => to < from);
-  bound('minimum', (from, to) => to > from);
-  bound('maximum', (from, to) => to < from);
-  bound('exclusiveMinimum', (from, to) => to > from);
-  bound('exclusiveMaximum', (from, to) => to < from);
-  bound('minItems', (from, to) => to > from);
-  bound('maxItems', (from, to) => to < from);
+  bound('minLength', Number.NEGATIVE_INFINITY, (from, to) => to > from);
+  bound('maxLength', Number.POSITIVE_INFINITY, (from, to) => to < from);
+  bound('minimum', Number.NEGATIVE_INFINITY, (from, to) => to > from);
+  bound('maximum', Number.POSITIVE_INFINITY, (from, to) => to < from);
+  bound('exclusiveMinimum', Number.NEGATIVE_INFINITY, (from, to) => to > from);
+  bound('exclusiveMaximum', Number.POSITIVE_INFINITY, (from, to) => to < from);
+  bound('minItems', Number.NEGATIVE_INFINITY, (from, to) => to > from);
+  bound('maxItems', Number.POSITIVE_INFINITY, (from, to) => to < from);
 
   // 8. pattern — множество совпадений меняется непредсказуемо: появление
   //    сужает приём, снятие расширяет выдачу, замена — нарушение в обе стороны.
@@ -388,6 +411,22 @@ export function diffSchema(
     }
   } else if (base.pattern !== current.pattern) {
     report('pattern-changed', `pattern ${String(base.pattern)} → ${String(current.pattern)}`);
+  }
+
+  // 9. additionalProperties: false запрещает ключи вне properties. Появление
+  //    на входе сужает приём (z.object → z.strictObject: лишний ключ стал
+  //    ошибкой клиента), снятие с выхода расширяет выдачу — обещание «только
+  //    перечисленные поля» ослаблено. true и отсутствие — одно множество.
+  const baseClosed = base.additionalProperties === false;
+  const currentClosed = current.additionalProperties === false;
+  if (!baseClosed && currentClosed) {
+    if (dir === 'request') {
+      report('additional-properties-narrowed', 'появился additionalProperties: false');
+    }
+  } else if (baseClosed && !currentClosed) {
+    if (dir === 'output') {
+      report('additional-properties-widened', 'additionalProperties: false снят');
+    }
   }
 
   return findings;
@@ -430,6 +469,20 @@ function parameterKey(parameter: ParameterNode): string {
 
 function compareOperation(base: OperationNode, current: OperationNode, where: string): Finding[] {
   const findings: Finding[] = [];
+
+  // operationId — имя процедуры для кодогенерации клиента: переименование и
+  // снятие для старого клиента — удаление метода. Появление у операции без
+  // operationId — добавление: клиенты, привязанные к path+method, не меняются.
+  if (base.operationId !== undefined && base.operationId !== current.operationId) {
+    findings.push({
+      kind: 'operation-id-changed',
+      where,
+      message:
+        current.operationId === undefined
+          ? `operationId «${base.operationId}» снят`
+          : `operationId «${base.operationId}» → «${current.operationId}»`,
+    });
+  }
 
   // Параметры: совпадение по in:name. Удаление — нарушение; добавленный
   // обязательный параметр меняет форму вызова; добавленный опциональный —
