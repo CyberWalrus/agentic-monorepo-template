@@ -14,15 +14,26 @@ export const ERROR_MESSAGES = {
 } as const;
 
 /**
- * Общие ошибки всех процедур: FORBIDDEN (политики доступа, C2.2) и
- * INTERNAL_SERVER_ERROR (встроенный код oRPC для непойманного; декларируется
- * ради типизированного клиента и документации 500 — выбрасывает его механизм
- * oRPC, не домен). Прикрепляются на ocAccess, поэтому у каждой процедуры.
+ * Общие ошибки всех процедур: INTERNAL_SERVER_ERROR (встроенный код oRPC для
+ * непойманного; декларируется ради типизированного клиента и документации
+ * 500 — выбрасывает его механизм oRPC, не домен). Прикрепляются обоими
+ * строителями access-policy.ts, поэтому у каждой процедуры.
  */
 export const commonErrors = {
-  FORBIDDEN: { message: ERROR_MESSAGES.FORBIDDEN },
   INTERNAL_SERVER_ERROR: { message: ERROR_MESSAGES.INTERNAL },
 } as const;
+
+/**
+ * FORBIDDEN — ошибка процедур с проверкой доступа (политики owner и admin,
+ * C2.2): её бросает мидлварь авторизации, когда актора нет или он чужой, и
+ * роутер (tasks.remove вне scope, e52). Public-процедуры её не объявляют:
+ * без проверки доступа бросать её некому, а контракт описывает только
+ * достижимое (e57, ADR 0024).
+ */
+export const forbiddenError = { message: ERROR_MESSAGES.FORBIDDEN } as const;
+
+/** Ошибки процедур с проверкой доступа: общие и FORBIDDEN. */
+export const accessErrors = { ...commonErrors, FORBIDDEN: forbiddenError } as const;
 
 /**
  * NOT_FOUND для процедур, у которых «не найден» возможен и заявлен контрактом

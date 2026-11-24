@@ -1,20 +1,23 @@
 import { isContractProcedure } from '@orpc/contract';
 import { describe, expect, it } from 'vitest';
 
+import { AccessPolicySchema } from './access-policy.ts';
 import { contract } from './index.ts';
-import { commonErrors, notFoundError } from './errors.ts';
+import { commonErrors, forbiddenError, notFoundError } from './errors.ts';
 
 /** Каталог целиком: каждый объявленный где-то код обязан иметь его текст. */
 const catalogMessages: Record<string, string> = {
   ...Object.fromEntries(
     Object.entries(commonErrors).map(([code, item]) => [code, item.message ?? '']),
   ),
-  NOT_FOUND: notFoundError.message ?? '',
+  FORBIDDEN: forbiddenError.message,
+  NOT_FOUND: notFoundError.message,
 };
 
 interface ProcedureErrors {
   path: string;
   errors: Record<string, { message?: string }>;
+  meta: Record<string, unknown>;
 }
 
 function collectProcedures(node: unknown, prefix = ''): ProcedureErrors[] {
@@ -26,12 +29,26 @@ function collectProcedures(node: unknown, prefix = ''): ProcedureErrors[] {
   for (const [key, value] of Object.entries(node)) {
     const path = prefix ? `${prefix}.${key}` : key;
     if (isContractProcedure(value)) {
-      procedures.push({ path, errors: value['~orpc'].errorMap ?? {} });
+      procedures.push({
+        path,
+        errors: value['~orpc'].errorMap ?? {},
+        meta: value['~orpc'].meta ?? {},
+      });
     } else {
       procedures.push(...collectProcedures(value, path));
     }
   }
   return procedures;
+}
+
+/** Процедура с проверкой доступа: политика не public (или её нет — deny-by-default). */
+function checksAccess({ meta }: ProcedureErrors): boolean {
+  const policy = AccessPolicySchema.safeParse(meta['access']);
+  return !policy.success || policy.data.type !== 'public';
+}
+
+function declaresForbidden({ errors }: ProcedureErrors): boolean {
+  return errors['FORBIDDEN'] !== undefined;
 }
 
 describe('error catalog is the single source of taxonomy messages', () => {
@@ -61,5 +78,28 @@ describe('error catalog is the single source of taxonomy messages', () => {
     expect(withNotFound).toContain('tasks.toggle');
     // remove без NOT_FOUND: отказ fail-closed без оракула существования (C2.3)
     expect(withNotFound).not.toContain('tasks.remove');
+  });
+
+  // e57: контракт описывает только достижимое. FORBIDDEN бросает проверка
+  // доступа (мидлварь авторизации, роутер remove): public-процедуре обещать
+  // его нельзя — бросить некому; процедуре с проверкой — обязана.
+  it('FORBIDDEN is declared exactly by procedures that check access', () => {
+    const mismatched = procedures
+      .filter((p) => checksAccess(p) !== declaresForbidden(p))
+      .map((p) =>
+        checksAccess(p)
+          ? `${p.path}: checks access, FORBIDDEN is not declared`
+          : `${p.path}: public procedure declares FORBIDDEN it can never throw`,
+      );
+
+    expect(mismatched, 'FORBIDDEN declared outside procedures that check access').toEqual([]);
+
+    // Оба класса в контракте есть — иначе проверка выше прошла бы вхолостую.
+    expect(procedures.filter(checksAccess).map((p) => p.path)).toEqual(['tasks.remove']);
+    expect(procedures.filter((p) => !checksAccess(p)).map((p) => p.path)).toEqual([
+      'tasks.list',
+      'tasks.create',
+      'tasks.toggle',
+    ]);
   });
 });
