@@ -170,6 +170,7 @@ describe('канарейки шага boundaries — по правилам, а �
         !BOUNDARIES_RULE_CANARY_EXEMPT.has(rule) &&
         !boundaries.some((canary) => expectsRule(canary, rule)),
     );
+
     expect(
       uncovered,
       'правила границ без канарейки — добавь канарейку с expect на его name или запиши причину в BOUNDARIES_RULE_CANARY_EXEMPT',
@@ -181,6 +182,7 @@ describe('канарейки шага boundaries — по правилам, а �
     // на путь зонда — красный шаг test:hooks, не ночной «НЕ УПАЛ».
     const rules = dependencyRuleNames();
     const unnamed = boundaries.filter((canary) => !rules.some((rule) => expectsRule(canary, rule)));
+
     expect(
       unnamed.map((canary) => `«${canary.name}» /${canary.expect.source}/`),
       'канарейки boundaries, чей expect — не имя ни одного правила границ',
@@ -190,6 +192,7 @@ describe('канарейки шага boundaries — по правилам, а �
   it('вайтлист не растёт молча: причина названа для существующего правила', () => {
     const rules = dependencyRuleNames();
     const stale = [...BOUNDARIES_RULE_CANARY_EXEMPT.keys()].filter((rule) => !rules.includes(rule));
+
     expect(stale, 'исключённые правила, которых нет в .dependency-cruiser.cjs').toEqual([]);
   });
 });
