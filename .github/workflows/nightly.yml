@@ -297,26 +297,22 @@ jobs:
       - uses: $/.github/actions/setup
         with: { playwright: 'true' }
       - run: pnpm turbo run test --output-logs=errors-only
+      # hooks-отчёт для update (e40): `turbo run test` не гоняет корневую задачу
+      # //#test:hooks, отчёта в job не было — update молча не трогал запись
+      # reports/vitest-hooks.json (296 в базлайне при 718 тестах). Порядок
+      # шагов держит канарейка в tools/test/test-count-ratchet.test.ts.
+      - run: pnpm turbo run test:hooks --output-logs=errors-only
       - run: pnpm test:count:update
+      # Логика шага — tools/check-test-count.ts --pr (e40): либо действие
+      # выполнено, либо шаг красный с причиной дословно и действием человека.
+      # Настройка Actions «Allow GitHub Actions to create and approve pull
+      # requests» выключена (решение владельца): github.token PR не открывает —
+      # без открытого PR шаг красный, PR открывает человек. Ни `|| echo`, ни
+      # continue-on-error: текст шага исполняет та же канарейка.
       - name: PR with raised baseline
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          if git diff --quiet -- test-count-baseline.json; then
-            echo "Базлайн актуален — PR храповика не нужен."
-            exit 0
-          fi
-          git config user.name "nightly-ratchet"
-          git config user.email "nightly-ratchet@users.noreply.github.com"
-          BRANCH="chore/test-count-ratchet"
-          git checkout -b "$BRANCH"
-          git commit -am "chore: поднятие храповика числа тестов (nightly, a10)"
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ":refs/heads/$BRANCH" 2>/dev/null || true
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
-          gh pr create --base main --head "$BRANCH" \
-            --title "chore: поднятие храповика числа тестов (nightly)" \
-            --body "Автоматическое поднятие test-count-baseline.json после зелёного nightly (a10): числовой храповик поднимает автоматика, а не автор PR. Update понижать отказывается — дифф только вверх." \
-            || echo "PR храповика уже открыт — ветка обновлена."
+        run: node tools/check-test-count.ts --pr
 
   perf-trend:
     name: perf trend
@@ -548,6 +544,8 @@ jobs:
 
   report:
     name: report failure
+    # test-count-ratchet (e40): шаг публикации красный, пока PR храповика не
+    # открыт человеком, — без строки здесь issue «Nightly failed» не заводится.
     needs:
       [
         flake-hunt,
@@ -560,6 +558,7 @@ jobs:
         verify-budgets,
         backlog-doctor,
         telemetry,
+        test-count-ratchet,
       ]
     if: failure()
     runs-on: ubuntu-latest

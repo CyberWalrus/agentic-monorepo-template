@@ -28,20 +28,35 @@
  * Автоматически порог может только ужесточаться; когда человек решит сделать
  * гейт блокирующим, файл базлайна уходит в protected-paths.
  *
+ * `node tools/check-test-count.ts --pr` (e40) — вторая половина ночного
+ * храповика после --update: публикует поднятый базлайн и либо выполняет
+ * действие, либо красная с причиной дословно. Базлайн без диффа — зелёный;
+ * push прошёл и PR создан либо уже был открыт — зелёный с правдивым
+ * сообщением; любой иной отказ (list, fetch, push, create) — exit 1 с причиной
+ * и следующим действием человека. Пока выключена настройка Actions «Allow
+ * GitHub Actions to create and approve pull requests» (решение владельца),
+ * github.token PR не открывает: без открытого PR шаг красный — «ветка
+ * обновлена — PR открывает человек». Логика здесь, а не inline в nightly.yml:
+ * текст шага исполняет канарейка tools/test/test-count-ratchet.test.ts с
+ * подставным gh. Остаточный риск: под открытым PR коммит ложится на топ ветки
+ * (fast-forward) — если main менял базлайн после её основания, конфликт
+ * покажет сам PR, шаг об этом не знает.
+ *
  * Остаточные риски: гейт вызывается через скрипт в package.json, который не
  * защищён — агент может перепривязать `test:count` или подсунуть --baseline
  * на собственный файл без предупреждений (против этого — ревью правок
  * тест-скриптов; то же задокументировано в check-test-report.ts).
  *
- * Аргументы: [--cwd <dir>] [--baseline <path>] [--merge-base <ref>] [--update].
- * --cwd/--baseline/--merge-base — для тестов.
+ * Аргументы: [--cwd <dir>] [--baseline <path>] [--merge-base <ref>] [--update]
+ * [--pr]. --cwd/--baseline/--merge-base — для тестов.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { glob } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
-const BOOLEAN_FLAGS = new Set(['affected', 'update']);
+const BOOLEAN_FLAGS = new Set(['affected', 'update', 'pr']);
 const REPORT_PATTERNS = [
   'apps/*/reports/vitest.json',
   'packages/*/reports/vitest.json',
@@ -205,6 +220,308 @@ if (argv['update'] !== undefined) {
     console.log(`test count: baseline updated (${raised} raise(s))`);
   }
   process.exit(0);
+}
+
+// --pr (e40): публикация поднятого базлайна — коммит ровно с базлайном, push
+// ветки, PR — и никакого «|| echo»: каждый отказ либо объяснён «уже открыт»,
+// либо красный.
+const RATCHET_BRANCH = 'chore/test-count-ratchet';
+const TRACKING_REF = `refs/remotes/nightly-ratchet/${RATCHET_BRANCH}`;
+const COMMIT_MESSAGE = 'chore: поднятие храповика числа тестов (nightly, a10)';
+const PR_TITLE = 'chore: поднятие храповика числа тестов (nightly)';
+const PR_BODY =
+  'Автоматическое поднятие test-count-baseline.json после зелёного nightly (a10): числовой храповик поднимает автоматика, а не автор PR. Update понижать отказывается — дифф только вверх.';
+
+interface CommandResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  /** spawn не удался (нет исполняемого файла, нет прав) — сообщение запуска. */
+  spawnError: string;
+}
+
+interface OpenPullRequest {
+  number: number;
+  url: string;
+}
+
+/** Шаг красный: линии с причиной дословно и действие человека. */
+class PublishFailure extends Error {
+  // Без property-параметров конструктора: Node исполняет .ts в strip-only режиме.
+  action: string;
+
+  lines: string[];
+
+  constructor(action: string, lines: string[]) {
+    super(action);
+    this.action = action;
+    this.lines = lines;
+  }
+}
+
+function run(command: string, args: string[], env: NodeJS.ProcessEnv = process.env): CommandResult {
+  const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', env, timeout: 120_000 });
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    spawnError: result.error?.message ?? '',
+  };
+}
+
+// Токен идёт в URL remote и может вернуться в выводе git (например, «unable to
+// access …») — из вывода он вырезается.
+function redact(text: string): string {
+  const token = process.env['GH_TOKEN'] ?? '';
+  return token === '' ? text : text.replaceAll(token, '***');
+}
+
+// Вывод команды дословно, построчно: управляющие символы экранируются
+// (log/markdown injection), префикс не даёт строке начаться с `::`.
+function quote(label: string, output: string): string[] {
+  const text = redact(output).trim();
+  if (text === '') {
+    return [`${label} <пусто>`];
+  }
+  return [label, ...text.split('\n').map((line) => `  | ${clean(line.replaceAll('\r', ''))}`)];
+}
+
+function commandFailed(label: string, result: CommandResult): string[] {
+  const spawn = result.spawnError === '' ? '' : ` (${clean(result.spawnError)})`;
+  return [
+    `✗ ${label} — код ${result.status ?? 'нет'}${spawn}`,
+    ...quote(`${label}, stdout:`, result.stdout),
+    ...quote(`${label}, stderr:`, result.stderr),
+  ];
+}
+
+function must(action: string, label: string, result: CommandResult): string {
+  if (result.status !== 0) {
+    throw new PublishFailure(action, commandFailed(label, result));
+  }
+  return result.stdout.trim();
+}
+
+function parseOpenPullRequest(stdout: string): OpenPullRequest | null {
+  const parsed: unknown = JSON.parse(stdout);
+  if (!Array.isArray(parsed)) {
+    throw new Error('expected a JSON array of pull requests');
+  }
+  if (parsed.length === 0) {
+    return null;
+  }
+  const first: unknown = parsed[0];
+  if (!isRecord(first) || typeof first['number'] !== 'number' || typeof first['url'] !== 'string') {
+    throw new Error('expected {number, url}');
+  }
+  return { number: first['number'], url: first['url'] };
+}
+
+// Коммит через plumbing: рабочее дерево, индекс и HEAD не трогаются, в коммит
+// попадает ровно базлайн — дерево родителя с заменённым файлом.
+function commitBaselineOn(parent: string, baselineRelative: string): string {
+  const untouched = 'ветка не тронута';
+  const scratch = mkdtempSync(join(tmpdir(), 'test-count-ratchet-'));
+  const indexEnv: NodeJS.ProcessEnv = { ...process.env, GIT_INDEX_FILE: join(scratch, 'index') };
+  try {
+    const blob = must(
+      untouched,
+      'git hash-object',
+      run('git', ['hash-object', '-w', '--', baselineRelative]),
+    );
+    // Режим файла — как у родителя (100644); нового файла с базлайном не бывает.
+    const entry = must(
+      untouched,
+      'git ls-tree',
+      run('git', ['ls-tree', parent, '--', baselineRelative]),
+    );
+    const mode = entry.split(/\s+/)[0] ?? '100644';
+    must(untouched, 'git read-tree', run('git', ['read-tree', parent], indexEnv));
+    must(
+      untouched,
+      'git update-index',
+      run(
+        'git',
+        ['update-index', '--add', '--cacheinfo', `${mode},${blob},${baselineRelative}`],
+        indexEnv,
+      ),
+    );
+    const tree = must(untouched, 'git write-tree', run('git', ['write-tree'], indexEnv));
+    return must(
+      untouched,
+      'git commit-tree',
+      run('git', [
+        '-c',
+        'user.name=nightly-ratchet',
+        '-c',
+        'user.email=nightly-ratchet@users.noreply.github.com',
+        'commit-tree',
+        tree,
+        '-p',
+        parent,
+        '-m',
+        COMMIT_MESSAGE,
+      ]),
+    );
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+function publishRaisedBaseline(): number {
+  const baselineRelative = argv['baseline']?.[0] ?? 'test-count-baseline.json';
+  const token = process.env['GH_TOKEN'] ?? '';
+  const repository = process.env['GITHUB_REPOSITORY'] ?? '';
+  if (token === '' || repository === '') {
+    throw new PublishFailure(
+      'это шаг nightly-джобы «test count ratchet», локально его не запускают.',
+      ['✗ GH_TOKEN или GITHUB_REPOSITORY не заданы.'],
+    );
+  }
+  const remote = `https://x-access-token:${token}@github.com/${repository}.git`;
+  const ref = `refs/heads/${RATCHET_BRANCH}`;
+  const listArgs = [
+    'pr',
+    'list',
+    '--repo',
+    repository,
+    '--head',
+    RATCHET_BRANCH,
+    '--state',
+    'open',
+    '--json',
+    'number,url',
+  ];
+  const untouched = 'ветка не тронута';
+
+  // Код 1 — дифф есть; всё, кроме 0 и 1, — ошибка git, а не «диффа нет».
+  const diff = run('git', ['diff', '--quiet', '--', baselineRelative]);
+  if (diff.status === 0) {
+    console.log('Базлайн актуален — PR храповика не нужен.');
+    return 0;
+  }
+  if (diff.status !== 1) {
+    throw new PublishFailure(
+      `${untouched} — проверь состояние checkout в job.`,
+      commandFailed('git diff --quiet (ожидался код 1)', diff),
+    );
+  }
+
+  // «Уже открыт» узнаётся до create — отказ create за него не выдаётся.
+  const listed = must(
+    `${untouched} — проверь GH_TOKEN и права job (pull-requests: read).`,
+    'gh pr list',
+    run('gh', listArgs),
+  );
+  let open: OpenPullRequest | null;
+  try {
+    open = parseOpenPullRequest(listed);
+  } catch {
+    throw new PublishFailure(
+      `${untouched} — ответ gh pr list не читается.`,
+      quote('gh pr list, stdout:', listed),
+    );
+  }
+
+  // Родитель коммита: под открытым PR — топ ветки (fast-forward: удаление
+  // ветки закрыло бы PR), иначе — текущий main: PR из одного коммита поверх него.
+  let parent = 'HEAD';
+  if (open !== null) {
+    must(
+      `PR #${open.number} открыт, но топ ветки не получен; ${untouched} — проверь права job (contents: read).`,
+      'git fetch',
+      run('git', ['fetch', '--no-tags', remote, `${ref}:${TRACKING_REF}`]),
+    );
+    parent = must(
+      untouched,
+      'git rev-parse',
+      run('git', ['rev-parse', '--verify', `${TRACKING_REF}^{commit}`]),
+    );
+  }
+  const commit = commitBaselineOn(parent, baselineRelative);
+
+  // Без открытого PR ветка одноразовая: остаток прошлой ночи (create отказал,
+  // PR закрыт или смержен) заменяется новым коммитом. Код 2 у ls-remote —
+  // ветки нет (первая ночь); любой другой код — сеть или права, громко.
+  let branchState = `ветка ${RATCHET_BRANCH} обновлена`;
+  if (open === null) {
+    const existing = run('git', ['ls-remote', '--exit-code', remote, ref]);
+    if (existing.status === 0) {
+      branchState = `ветка ${RATCHET_BRANCH} удалена и не пересоздана`;
+      must(
+        `ветка ${RATCHET_BRANCH} не обновлена — на remote старый коммит; проверь права job (contents: write).`,
+        'git push --delete',
+        run('git', ['push', remote, '--delete', RATCHET_BRANCH]),
+      );
+    } else if (existing.status !== 2) {
+      must(`${untouched} — проверь права job (contents: write) и сеть.`, 'git ls-remote', existing);
+    }
+  }
+  must(
+    `${branchState}: поднятие не потеряно — ночная джоба повторит завтра; повторится — проверь права job (contents: write).`,
+    'git push',
+    run('git', ['push', remote, `${commit}:${ref}`]),
+  );
+
+  if (open !== null) {
+    console.log(
+      `PR #${open.number} уже открыт — ${branchState} (commit ${commit.slice(0, 12)}): ${clean(open.url)}`,
+    );
+    return 0;
+  }
+
+  const created = run('gh', [
+    'pr',
+    'create',
+    '--repo',
+    repository,
+    '--base',
+    'main',
+    '--head',
+    RATCHET_BRANCH,
+    '--title',
+    PR_TITLE,
+    '--body',
+    PR_BODY,
+  ]);
+  if (created.status === 0) {
+    console.log(`PR храповика создан: ${clean(created.stdout.trim())}`);
+    return 0;
+  }
+  // PR могли открыть между list и create — перепроверяем, а не гадаем.
+  const rechecked = run('gh', listArgs);
+  if (rechecked.status === 0) {
+    try {
+      const raced = parseOpenPullRequest(rechecked.stdout);
+      if (raced !== null) {
+        console.log(
+          `PR #${raced.number} уже открыт — ${branchState} (commit ${commit.slice(0, 12)}): ${clean(raced.url)}`,
+        );
+        return 0;
+      }
+    } catch {
+      // Ответ не читается — ниже честный отказ с причиной create дословно.
+    }
+  }
+  throw new PublishFailure(
+    `${branchState} — PR открывает человек:\n  gh pr create --base main --head ${RATCHET_BRANCH} --title "${PR_TITLE}"`,
+    commandFailed('gh pr create', created),
+  );
+}
+
+if (argv['pr'] !== undefined) {
+  try {
+    process.exit(publishRaisedBaseline());
+  } catch (error) {
+    if (!(error instanceof PublishFailure)) {
+      throw error;
+    }
+    for (const line of error.lines) {
+      console.log(line);
+    }
+    console.log(`Дальше человек: ${error.action}`);
+    process.exit(1);
+  }
 }
 
 // Понижение и удаление записей базлайна против merge-base: ослабление
