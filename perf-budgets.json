@@ -33,6 +33,7 @@
     }
   },
   "api": {
+    "$comment": "Продуктовый путь (e60): /rpc через прокси production-entry web — сценарий и размер фиксированного набора в e2e/perf/k6/api-smoke.js; порог применяется отдельно к list и к toggle. Прямой /api/tasks — диагностика без бюджета.",
     "maxP95Ms": 50,
     "maxErrorRate": 0.01
   },
