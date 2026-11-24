@@ -232,11 +232,26 @@ async function checkPnpm(env: PreflightEnv): Promise<CheckOutcome> {
   );
 }
 
+/** Код ошибки pnpm в stderr (`ERR_PNPM_…`); null — pnpm кода не назвал. */
+const pnpmErrorCode = (stderr: string): string | null =>
+  /\bERR_PNPM_[A-Z0-9_]+\b/.exec(stderr)?.[0] ?? null;
+
+/**
+ * `pnpm install` из песочницы агента падает на первом шаге: pnpm держит блокировки
+ * хранилища в `/tmp/pnpm-store-operation-locks-<uid>`, вне гранта песочницы, и берёт
+ * блокировку даже при установке без изменений — проверка слепа в любой песочнице
+ * (ADR 0004, «pnpm install из песочницы»). Сигнатура — код блокировки плюс EPERM:
+ * та же ошибка без «Operation not permitted» — не песочница, а права на каталог.
+ */
+const SANDBOX_STORE_LOCK = 'ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK';
+const SANDBOX_EPERM = 'Operation not permitted';
+
 async function checkNodeModules(env: PreflightEnv): Promise<CheckOutcome> {
   // Замороженная установка — собственная проверка pnpm на соответствие
   // node_modules и lockfile: при синхроне это no-op (доли секунды), при
   // дрейфе — ненулевой код без мутаций окружения. Заодно подкатывает
-  // отсутствующий node_modules на свежем клоне.
+  // отсутствующий node_modules на свежем клоне. В песочнице агента установка
+  // падает на блокировке хранилища — это сообщение о песочнице, не о дрейфе.
   const result = await env.runCommand(
     'pnpm',
     ['install', '--frozen-lockfile', '--reporter=silent'],
@@ -264,12 +279,23 @@ async function checkNodeModules(env: PreflightEnv): Promise<CheckOutcome> {
   if (result.code === 0) {
     return outcome('node_modules', 'error', true, 'node_modules соответствует lockfile');
   }
+  const errorCode = pnpmErrorCode(result.stderr);
+  if (errorCode === SANDBOX_STORE_LOCK && result.stderr.includes(SANDBOX_EPERM)) {
+    return outcome(
+      'node_modules',
+      'error',
+      false,
+      'соответствие node_modules и lockfile не проверить: pnpm install блокирует песочница агента',
+      `${errorCode}: песочница агента не даёт pnpm открыть блокировку хранилища (/tmp/pnpm-store-operation-locks-<uid>) — это не дрейф lockfile, повтор внутри песочницы не поможет (ADR 0004)`,
+      'pnpm install --frozen-lockfile вне песочницы агента — в своём терминале',
+    );
+  }
   return outcome(
     'node_modules',
     'error',
     false,
     'node_modules не соответствует lockfile',
-    `pnpm install --frozen-lockfile завершился с кодом ${result.code}`,
+    `pnpm install --frozen-lockfile завершился с кодом ${result.code}${errorCode === null ? '' : `: ${errorCode}`}`,
     'pnpm install',
   );
 }
