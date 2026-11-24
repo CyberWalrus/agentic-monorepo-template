@@ -63,13 +63,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * путей) — краснить стало на всех следующих PR, где эти пути есть. null —
  * регистрации нет, канарейка бросает «якорь не найден».
  */
-function rpcRoutes(source: string): { main: string; sub: string; before: string } | null {
-  const main = /app\.all\('\/rpc', ([^;\n]*?)proxyRpc\);/.exec(source);
-  const sub = /app\.all\('\/rpc\/\*', ([^;\n]*?)proxyRpc\);/.exec(source);
-  if (main === null || sub === null) {
-    return null;
-  }
-  return { main: main[0], sub: sub[0], before: main[1] ?? '' };
+type RpcRoute = {
+  /** Вся строка регистрации, с отступом. */
+  text: string;
+  indent: string;
+  /** Что стоит между путём и `proxyRpc` (например, middleware), с запятой. */
+  before: string;
+};
+
+function rpcRoutes(source: string): { main: RpcRoute; sub: RpcRoute } | null {
+  // Якорь — строка кода от начала строки: вхождение в комментарии не считается.
+  const route = (pattern: RegExp): RpcRoute | null => {
+    const match = pattern.exec(source);
+    return match === null
+      ? null
+      : { text: match[0], indent: match[1] ?? '', before: match[2] ?? '' };
+  };
+  const main = route(/^([ \t]*)app\.all\('\/rpc', ([^;\n]*?)proxyRpc\);/m);
+  const sub = route(/^([ \t]*)app\.all\('\/rpc\/\*', ([^;\n]*?)proxyRpc\);/m);
+  return main === null || sub === null ? null : { main, sub };
+}
+
+/** Та же регистрация под другим путём: `proxyRpc` и его middleware на месте. */
+function rpcRouteAs(route: RpcRoute, path: string): string {
+  return `${route.indent}app.all('${path}', ${route.before}proxyRpc);`;
 }
 
 export const CANARIES: GateCanary[] = [
@@ -663,8 +680,8 @@ export const CANARIES: GateCanary[] = [
       // файл остаётся линт-чистым, а /rpc уходит в '*' -обработчики (SSR) —
       // тот же режим массового падения, что у удаления vite-прокси.
       const stripped = source
-        .replace(routes.main, `app.all('/__canary_no_rpc__', ${routes.before}proxyRpc);`)
-        .replace(routes.sub, `app.all('/__canary_no_rpc__/*', ${routes.before}proxyRpc);`);
+        .replace(routes.main.text, rpcRouteAs(routes.main, '/__canary_no_rpc__'))
+        .replace(routes.sub.text, rpcRouteAs(routes.sub, '/__canary_no_rpc__/*'));
       writeFileSync(path, stripped);
     },
   },
@@ -685,18 +702,19 @@ export const CANARIES: GateCanary[] = [
       const path = join(root, 'apps/web/src/server-app.ts');
       const source = readFileSync(path, 'utf8');
       const routes = rpcRoutes(source);
-      const leaked =
-        routes === null
-          ? source
-          : source.replace(
-              routes.main,
-              `${routes.main}\n  app.all('/__test__', ${routes.before}proxyRpc);\n  app.all('/__test__/*', ${routes.before}proxyRpc);`,
-            );
-      if (leaked === source) {
+      if (routes === null) {
         throw new Error(
           'canary anchor not found: apps/web/src/server-app.ts has no /rpc route registration',
         );
       }
+      const leaked = source.replace(
+        routes.main.text,
+        [
+          routes.main.text,
+          rpcRouteAs(routes.main, '/__test__'),
+          rpcRouteAs(routes.sub, '/__test__/*'),
+        ].join('\n'),
+      );
       writeFileSync(path, leaked);
     },
   },
