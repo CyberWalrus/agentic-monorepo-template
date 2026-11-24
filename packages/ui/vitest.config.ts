@@ -21,6 +21,16 @@ const browser = () => ({
 export default defineConfig({
   plugins: [react()],
   test: {
+    // e59: пороги покрытия unit-проекта — компенсирующий контур слепой зоны мутаций (ADR 0022:
+    // StrykerJS не активирует мутантов в browser mode). Значения — факт вниз до целого минус 2 п.п.
+    // (ADR 0009): lines 100, branches 96.29, functions 100, statements 100. Считает шаг `test`
+    // verify (--coverage в скрипте test пакета); замер и саботаж — backlog/done/e59.md.
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/**/*.test.tsx'],
+      thresholds: { lines: 98, branches: 94, functions: 98, statements: 98 },
+    },
     projects: [
       {
         extends: true,
