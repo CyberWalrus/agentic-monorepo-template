@@ -259,6 +259,11 @@ jobs:
     permissions:
       contents: read
       issues: write
+      # e35: REST отдаёт bypass_actors только токену с write-доступом к ruleset.
+      # У GITHUB_TOKEN области administration нет (официальный список:
+      # docs.github.com, workflow-syntax, permissions), поэтому список
+      # обходчиков ночью не проверяется — граница названа в выводе чекера
+      # (docs/architecture.md, 3.4).
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { persist-credentials: false }
@@ -269,33 +274,9 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node tools/check-ruleset-drift.ts --create-issue --run-url "$RUN_URL"
 
-  # Сводный check здоровья workflow (e26): каждый workflow, ожидаемо
-  # стартующий на main (триггеры push/schedule из .github/workflows/**),
-  # обязан иметь зелёный прогон на свежем head-коммите main либо свежий
-  # schedule-прогон в окне. Закрывает escaped-defect 2026-11-21: workflow с
-  # битым uses не стартовал ни разу, а вне required checks main оставался
-  # зелёным. Красный прогон заводит issue через job report (needs). Незавершённый
-  # молодой прогон — не красный (окно CI на свежем коммите), старше 6 ч — красный.
-  workflow-health:
-    name: workflow health (e26)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # actions: read обязателен: чекер читает Actions API (gh api repos/…/commits,
-    # /actions/workflows, /actions/runs) — без него GITHUB_TOKEN получает 403 на
-    # /actions/* и гейт был бы красным каждый первый прогон (находка ревью e26).
-    # contents: read — commits API и checkout. Job-level permissions заменяет
-    # workflow-уровень целиком (e16).
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with: { persist-credentials: false }
-      - name: workflow health check
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: node tools/check-workflow-health.ts
+  # Сводный check здоровья workflow (e26) живёт в отдельном
+  # .github/workflows/workflow-health.yml (e39): чекер судит о nightly по
+  # прошлому schedule-прогону и, живя здесь, красил ночь за ночью сам себя.
 
   # Храповик числа тестов (a10): поднимает автоматика, не автор PR
   # (test-count-baseline.json — «горячий» файл, З9). Update refuses to lower.
@@ -578,7 +559,6 @@ jobs:
         gate-canaries,
         verify-budgets,
         backlog-doctor,
-        workflow-health,
         telemetry,
       ]
     if: failure()

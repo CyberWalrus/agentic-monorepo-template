@@ -43,6 +43,7 @@ it('проводка: audit с порогом через чекер и шаг CI
     'agent-review.yml',
     'security.yml',
     'preview.yml',
+    'workflow-health.yml',
   ];
   for (const file of workflowFiles) {
     const src = readFileSync(join(repoDir, '.github', 'workflows', file), 'utf8');
