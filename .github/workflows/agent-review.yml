@@ -80,7 +80,7 @@ jobs:
         if: env.HAS_KEY != 'true'
         run: echo "::notice::ANTHROPIC_API_KEY is not configured, agent review skipped."
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.HAS_KEY == 'true'
         with: { fetch-depth: 0, persist-credentials: false }
 
