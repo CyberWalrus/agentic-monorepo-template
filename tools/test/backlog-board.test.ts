@@ -4,17 +4,21 @@ import {
   dependencyCycles,
   DOCTOR_IDLE_HOURS,
   doctorFindings,
+  fileInTouches,
   invalidNeedsHuman,
   invalidTouch,
   isOperatorTask,
   needsHumanKind,
   openDependentsCount,
   parseTask,
+  SHARED_PATHS,
+  SOFT_OVERLAP_PATHS,
   statusOf,
   touchesOverlap,
   type BoardFacts,
   type TaskFile,
 } from '../backlog-board.ts';
+import { protectionOf } from '../protected-paths.ts';
 
 const raw = `---
 title: Пробная задача
@@ -204,6 +208,60 @@ describe('touchesOverlap', () => {
     expect(touchesOverlap(withTouches('t', ['docs/**']), [withTouches('u', [registry])])).toBe(
       false,
     );
+  });
+
+  it('мягкий путь (SOFT_OVERLAP_PATHS) пересечением не считается и не маскирует остальное (ADR 0023)', () => {
+    const laws = 'docs/architecture.md';
+    const lawA = withTouches('law-a', ['tools/verify.ts', laws]);
+    // (а) Задачи сходятся только по мягкому пути — документ обязаны объявить обе.
+    expect(touchesOverlap(withTouches('law-b', ['apps/api/src/tasks/**', laws]), [lawA])).toBe(
+      false,
+    );
+    expect(touchesOverlap(withTouches('law-b', [laws]), [withTouches('law-c', [laws])])).toBe(
+      false,
+    );
+    // (б) По любому другому общему пути — и внутри docs/ тоже — пересечение на месте.
+    expect(touchesOverlap(withTouches('law-b', [laws, 'tools/verify.ts']), [lawA])).toBe(true);
+    expect(
+      touchesOverlap(withTouches('t', ['docs/other.md']), [
+        withTouches('u', ['docs/other.md', 'tools/solo.ts']),
+      ]),
+    ).toBe(true);
+    expect(touchesOverlap(withTouches('t', ['AGENTS.md']), [withTouches('u', ['AGENTS.md'])])).toBe(
+      true,
+    );
+    // (г) Сравнение буквальное: «каталог/**», покрывающий мягкий путь, — настоящий
+    // захват, он пересекается и с мягким путём, и с остальными файлами каталога.
+    expect(touchesOverlap(withTouches('t', ['docs/**']), [withTouches('u', [laws])])).toBe(true);
+    expect(
+      touchesOverlap(withTouches('t', ['docs/**']), [withTouches('u', ['docs/other.md'])]),
+    ).toBe(true);
+  });
+});
+
+describe('SOFT_OVERLAP_PATHS: объявлен в touches, но не пересекается (ADR 0023)', () => {
+  it('(в) fileInTouches: мягкий путь вне touches — «вне touches»; объявленный — внутри', () => {
+    const laws = 'docs/architecture.md';
+    // Не общий путь (SHARED_PATHS): правка законов обязана быть объявленной — гейт
+    // branch-scope красит её в дереве задачи без этого пути в touches.
+    expect(fileInTouches(laws, ['tools/verify.ts'])).toBe(false);
+    expect(fileInTouches(laws, [])).toBe(false);
+    expect(fileInTouches(laws, [laws])).toBe(true);
+    expect(fileInTouches(laws, ['docs/**'])).toBe(true);
+    // Общий путь по-прежнему разрешён любой задаче.
+    expect(fileInTouches('docs/escaped-defects.md', ['tools/verify.ts'])).toBe(true);
+  });
+
+  it('сторожа: список непустой, пути литеральные, не общие и не под deny', () => {
+    expect(SOFT_OVERLAP_PATHS.length).toBeGreaterThan(0);
+    expect(SOFT_OVERLAP_PATHS.filter((path) => SHARED_PATHS.includes(path))).toEqual([]);
+    for (const path of SOFT_OVERLAP_PATHS) {
+      // Критерий приёма ADR 0023: конфликт в мягком пути не задевает гейт-контур.
+      expect(protectionOf(path)).not.toBe('deny');
+      // Буквальное сравнение: «каталог/**» в списке освобождал бы весь каталог.
+      expect(path.endsWith('/**')).toBe(false);
+      expect(invalidTouch(path)).toBeNull();
+    }
   });
 });
 
