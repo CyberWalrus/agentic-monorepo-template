@@ -94,9 +94,12 @@ describe('error catalog is the single source of taxonomy messages', () => {
 
     expect(mismatched, 'FORBIDDEN declared outside procedures that check access').toEqual([]);
 
-    // Оба класса в контракте есть — иначе проверка выше прошла бы вхолостую.
-    expect(procedures.filter(checksAccess).map((p) => p.path)).toEqual(['tasks.remove']);
-    expect(procedures.filter((p) => !checksAccess(p)).map((p) => p.path)).toEqual([
+    // Оба класса в контракте tasks есть — иначе проверка выше прошла бы
+    // вхолостую. Списки сверяются в пределах домена tasks: другие домены (фича,
+    // сгенерированная pnpm gen feature) добавляют процедуры любого класса.
+    const tasksProcedures = procedures.filter((p) => p.path.startsWith('tasks.'));
+    expect(tasksProcedures.filter(checksAccess).map((p) => p.path)).toEqual(['tasks.remove']);
+    expect(tasksProcedures.filter((p) => !checksAccess(p)).map((p) => p.path)).toEqual([
       'tasks.list',
       'tasks.create',
       'tasks.toggle',
