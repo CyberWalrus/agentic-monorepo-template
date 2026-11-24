@@ -1,6 +1,6 @@
 # Песочница × `pnpm install`: где pnpm 12.21.0 держит блокировки хранилища
 
-Задача e70 (ADR 0004). Дата прогонов: 2026-11-24, 20:37–21:20 MSK. База: `b8e50d72`.
+Задача e70 (ADR 0004). Дата прогонов: 2026-11-24, 20:37–21:41 MSK. База: `b8e50d72`.
 
 **Итог.** `allowWrite: ["~/Library/pnpm/store"]` не открывал блокировку хранилища потому, что pnpm 12.21.0 держит её не в хранилище, а в `/tmp/pnpm-store-operation-locks-<uid>` (на машине прогонов — `/private/tmp/pnpm-store-operation-locks-501`). Каталог блокировок в `allowWrite` не открывался: с ним установка проходит блокировку, но падает на записи файлов пакетов и оставляет проектный `.pnpm-store` с недособранным `node_modules`. Граница записана в ADR 0004 и architecture.md: `pnpm install` из песочечного Bash не поддерживается, зависимости ставит старт сессии агента или человек вне песочницы.
 
@@ -21,7 +21,15 @@
 
 > pnpm now creates its store operation locks and other per-user lock files in `$XDG_RUNTIME_DIR` when it points to a directory only the user can write to. Otherwise, pnpm still uses `/tmp` on Linux and macOS. Sandboxes that block writes to `/tmp` can point `XDG_RUNTIME_DIR` at a writable directory [#16390].
 
-То есть каталог блокировок не выводится из `store-dir`: он общий на пользователя и живёт во временном каталоге. `--store-dir`, `PNPM_HOME` и `npm_config_store_dir` на его расположение не влияют.
+То есть каталог блокировок не выводится из `store-dir`: он общий на пользователя и живёт во временном каталоге. Проверено на pnpm 12.21.0 без песочницы (21:40–21:41; минимальный проект с одной зависимостью, бинарник `.tools/pnpm/12.21.0` напрямую — shim без поля `packageManager` даёт 10.29.3):
+
+| Прогон                                                    | Хранилище               | Где появились блокировки                                  |
+| --------------------------------------------------------- | ----------------------- | --------------------------------------------------------- |
+| `--store-dir <tmp>/alt-store`                             | `<tmp>/alt-store/v11`   | `/private/tmp/pnpm-store-operation-locks-501/<hash>.lock` |
+| `XDG_RUNTIME_DIR=<tmp>/xdg` (0700) + другой `--store-dir` | `<tmp>/alt-store2/v11`  | `$XDG_RUNTIME_DIR/pnpm-store-operation-locks-501/`        |
+| `PNPM_HOME=<tmp>/pnpm-home`, без `--store-dir`            | `<PNPM_HOME>/store/v11` | `/private/tmp/pnpm-store-operation-locks-501/<hash>.lock` |
+
+Внутри каталога хранилища записей блокировок нет ни в одном прогоне; имя файла блокировки — хеш пути хранилища, поэтому для каждого нового хранилища в `/tmp/…-501` появляется новый `.lock`. `npm_config_store_dir` в окружении не задан.
 
 **Контроль без песочницы (~20:45–20:49).** В копии проекта без `node_modules`:
 
@@ -96,7 +104,7 @@ env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PROJECT_DIR -u CLAUDE_SESSION_ID \
 
 - Первая попытка в отдельном корне вне репозитория отказала: «this workspace has not been trusted», а режим `auto` через шлюз не работает («Auto mode can't check actions in this session. … your requests go through api.z.ai»). Доверие в `~/.claude.json` не менялось; прогоны пошли из worktree задачи с `--permission-mode default --allowedTools Bash`.
 - Семь запусков `claude -p` (модель шлюза `glm-5.4[1m]`): один отказал на старте, шесть выполнили команду — по 2 хода; `total_cost_usd` шести выполненных по оценке Claude Code в сумме ≈ 1,01, стоимость отказавшего не сохранена. Фактический счёт шлюза исполнителю не виден.
-- Побочный эффект метода: Stop-хук репозитория в каждой вложенной сессии запускал `tools/verify.ts --json` (`DOCS` в `tools/hooks/stop-verify.ts:32` исключает `backlog/`, а файл задачи перенесён) — 11,1–12,8 с, статус 0. Вывод verify хук не отдаёт; сам исполнитель `pnpm verify` не запускал.
+- Побочный эффект метода: Stop-хук репозитория в каждой из шести сессий в worktree запускал `tools/verify.ts --json` (`DOCS` в `tools/hooks/stop-verify.ts:32` исключает `backlog/`, а файл задачи перенесён) — 11,1–12,8 с, статус 0. Вывод verify хук не отдаёт; сам исполнитель `pnpm verify` не запускал.
 - В отладочном логе каждой сессии три строки «[sandbox] admin sandbox mandate: ignoring … from project/local settings», в том числе «filesystem grants restricted to trusted settings tiers: ignoring 1 sandbox.filesystem.allowWrite …» — игнорируется запись `allowWrite` из `.claude/settings.json` проекта, гранты из `--settings` применяются (P1: запись в хранилище разрешена). Что происходит в доверенном рабочем пространстве владельца — не проверялось (раздел 5).
 
 ### P0. До изменения (20:58:51–20:59:21)
