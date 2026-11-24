@@ -48,10 +48,14 @@ test.describe('tasks page', () => {
     // меняющееся по рантайм-данным (b12). Запрос блокируется до клика:
     // оптимистичная галочка откатывается, остаётся баннер role="alert".
     // Кликается неотмеченная задача: makeTasks отмечает каждую третью (index % 3 === 0),
-    // check() по уже отмеченному чекбоксу — no-op без мутации.
+    // клик по уже отмеченному чекбоксу — no-op без мутации.
+    // Именно click(), не check(): check() после клика ждёт отмеченного состояния, а откат
+    // неудачного toggle (onError мутации, e54) успевает вернуть галочку раньше — тогда
+    // «Clicking the checkbox did not change its state» (e73). Состояние галочки после
+    // отката тест не утверждает: утверждение — баннер role="alert".
     await page.route('**/rpc/tasks/toggle', (route) => route.abort());
     await openHydrated(page);
-    await page.getByRole('checkbox', { name: 'Seeded task #2' }).check();
+    await page.getByRole('checkbox', { name: 'Seeded task #2' }).click();
     await expect(page.getByRole('alert')).toHaveText('Could not update the task. Try again.');
 
     await expect(page).toHaveScreenshot('tasks-page-error.webp', { fullPage: true });
