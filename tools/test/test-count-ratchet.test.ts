@@ -363,10 +363,11 @@ it('create отказал, и это не «уже открыт» (настро�
 
   expect(run.status).toBe(1);
   expect(run.output).toContain(REFUSED);
-  expect(run.output).toContain('ветка chore/test-count-ratchet обновлена — PR открывает человек');
+  // Первая ночь: ветки на remote не было — действие человека называет «создана».
+  expect(run.output).toContain('ветка chore/test-count-ratchet создана — PR открывает человек');
   expect(run.output).toContain('gh pr create --base main --head chore/test-count-ratchet');
   expect(run.output).not.toContain('уже открыт');
-  // Сообщение говорит правду: ветка и правда обновлена.
+  // Сообщение говорит правду: ветка и правда создана — с поднятым базлайном.
   expect(repo.remoteBaseline()).toEqual({ 'reports/vitest-hooks.json': 718 });
   // PR откроет человек — событие opened запустит CI: предупреждения про CI нет.
   expect(run.output).not.toContain('CI на новый коммит не запустится');
@@ -431,6 +432,10 @@ it('push отклонён — шаг красный с причиной досл
   expect(run.status).toBe(1);
   expect(run.output).toContain('rejected by test pre-receive');
   expect(run.output).not.toContain('уже открыт');
+  // Сообщение говорит правду о ветке (находка ревью): ветки на remote нет, и
+  // действие человека называет её состояние — «обновлена» была бы ложью.
+  expect(run.output).toContain('ветка chore/test-count-ratchet не создана: поднятие не потеряно');
+  expect(run.output).not.toContain('ветка chore/test-count-ratchet обновлена');
   expect(repo.remoteTip()).toBe('');
   expect(repo.ghCalls().join('\n')).not.toContain('pr create');
 }, 30_000);
@@ -448,11 +453,81 @@ it('ветка прошлой ночи осталась без PR — замен
   gitText(repo.dir, ['commit', '-qm', 'main moved']);
   const mainHead = gitText(repo.dir, ['rev-parse', 'HEAD']);
   repo.night(320);
-  expect(repo.runStep().status).toBe(1);
+  const run = repo.runStep();
+
+  expect(run.status).toBe(1);
+  // Сообщение говорит правду (находка ревью): действие человека называет
+  // состояние ветки по факту — «удалена и не пересоздана» рядом с командой на
+  // эту же ветку читалось бы как потерянное поднятие.
+  expect(run.output).toContain(
+    'ветка chore/test-count-ratchet заменена коммитом поверх main — PR открывает человек',
+  );
+  expect(run.output).not.toContain('не пересоздана');
 
   const tip = repo.remoteTip();
   expect(tip).not.toBe(nightOne);
   expect(gitText(repo.dir, ['rev-parse', '--verify', `${tip}^`])).toBe(mainHead);
+}, 30_000);
+
+it('ветка прошлой ночи без PR: удаление прошло, push отклонён — «удалена и не пересоздана»', () => {
+  const repo = ratchetRepo();
+  writeFileSync(join(repo.ghState, 'create-refused'), '');
+  repo.night(300);
+  expect(repo.runStep().status).toBe(1);
+  expect(repo.remoteTip()).not.toBe('');
+  const callsAfterNightOne = repo.ghCalls().length;
+
+  // Ночь 2: remote принимает удаление (новое значение ссылки — нули) и
+  // отклоняет любое иное.
+  const deleted = '0'.repeat(40);
+  writeFileSync(
+    join(repo.remote, 'hooks', 'pre-receive'),
+    `#!/bin/sh\nwhile read -r old new ref; do [ "$new" = ${deleted} ] || exit 1; done\n`,
+    { mode: 0o755 },
+  );
+  repo.night(320);
+
+  const run = repo.runStep();
+
+  expect(run.status).toBe(1);
+  // Сообщение говорит правду (находка ревью): старая ветка удалена, новая не
+  // прошла — действие человека называет ровно это состояние.
+  expect(run.output).toContain(
+    'ветка chore/test-count-ratchet удалена и не пересоздана: поднятие не потеряно',
+  );
+  expect(repo.remoteTip()).toBe('');
+  // Журнал вызовов накопительный: смотрим только на ночь 2.
+  expect(repo.ghCalls().slice(callsAfterNightOne).join('\n')).not.toContain('pr create');
+}, 30_000);
+
+it('PR уже открыт, push отклонён — «не обновлена», шаг красный без create', () => {
+  const repo = ratchetRepo();
+  writeFileSync(join(repo.ghState, 'create-refused'), '');
+  repo.night(300);
+  expect(repo.runStep().status).toBe(1);
+  const nightOne = repo.remoteTip();
+
+  // Ночь 2: человек открыл PR, remote отклоняет push.
+  writeFileSync(
+    join(repo.remote, 'hooks', 'pre-receive'),
+    '#!/bin/sh\necho "remote: rejected by test pre-receive" >&2\nexit 1\n',
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    join(repo.ghState, 'pr-list.json'),
+    JSON.stringify([{ number: 7, url: 'https://github.com/org/repo/pull/7' }]),
+  );
+  const callsAfterNightOne = repo.ghCalls().length;
+  repo.night(320);
+
+  const run = repo.runStep();
+
+  expect(run.status).toBe(1);
+  // Сообщение говорит правду (находка ревью): push отклонён — ветка не
+  // обновлена, и действие человека не утверждает обратное.
+  expect(run.output).toContain('ветка chore/test-count-ratchet не обновлена: поднятие не потеряно');
+  expect(repo.remoteTip()).toBe(nightOne);
+  expect(repo.ghCalls().slice(callsAfterNightOne).join('\n')).not.toContain('pr create');
 }, 30_000);
 
 it('gh pr list не ответил — шаг красный, ветка не тронута, create не вызывался', () => {

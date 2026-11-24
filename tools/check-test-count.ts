@@ -36,7 +36,10 @@
  * и следующим действием человека. Пока выключена настройка Actions «Allow
  * GitHub Actions to create and approve pull requests» (решение владельца),
  * github.token PR не открывает: без открытого PR шаг красный — «ветка
- * обновлена — PR открывает человек». Логика здесь, а не inline в nightly.yml:
+ * создана — PR открывает человек» (ветка прошлой ночи без PR — «заменена
+ * коммитом поверх main»). Состояние ветки в тексте — по факту, после успеха
+ * команды: отказ push называет ветку до него («не создана», «удалена и не
+ * пересоздана», «не обновлена»). Логика здесь, а не inline в nightly.yml:
  * текст шага исполняет канарейка tools/test/test-count-ratchet.test.ts с
  * подставным gh. Остаточный риск: под открытым PR коммит ложится на топ ветки
  * (fast-forward) — если main менял базлайн после её основания, конфликт
@@ -462,28 +465,41 @@ function publishRaisedBaseline(): number {
   }
   const commit = commitBaselineOn(parent, baselineRelative);
 
+  // Состояние ветки в тексте — по факту, а не по намерению: текст уходит
+  // человеку вместе с причиной отказа, и «обновлена» рядом с отклонённым push
+  // или «удалена и не пересоздана» рядом с командой на уже пересозданную ветку
+  // — ложь о состоянии ветки (тот же класс, что исходный дефект e40).
+  // unpushedState описывает ветку на случай отказа push; pushedState читается
+  // только после успеха push.
+  const branch = `ветка ${RATCHET_BRANCH}`;
+  let unpushedState = `${branch} не обновлена`;
+  let pushedState = `${branch} обновлена`;
   // Без открытого PR ветка одноразовая: остаток прошлой ночи (create отказал,
   // PR закрыт или смержен) заменяется новым коммитом. Код 2 у ls-remote —
   // ветки нет (первая ночь); любой другой код — сеть или права, громко.
-  let branchState = `ветка ${RATCHET_BRANCH} обновлена`;
   if (open === null) {
     const existing = run('git', ['ls-remote', '--exit-code', remote, ref]);
     if (existing.status === 0) {
-      branchState = `ветка ${RATCHET_BRANCH} удалена и не пересоздана`;
       must(
         `ветка ${RATCHET_BRANCH} не обновлена — на remote старый коммит; проверь права job (contents: write).`,
         'git push --delete',
         run('git', ['push', remote, '--delete', RATCHET_BRANCH]),
       );
+      unpushedState = `${branch} удалена и не пересоздана`;
+      pushedState = `${branch} заменена коммитом поверх main`;
     } else if (existing.status !== 2) {
       must(`${untouched} — проверь права job (contents: write) и сеть.`, 'git ls-remote', existing);
+    } else {
+      unpushedState = `${branch} не создана`;
+      pushedState = `${branch} создана`;
     }
   }
   must(
-    `${branchState}: поднятие не потеряно — ночная джоба повторит завтра; повторится — проверь права job (contents: write).`,
+    `${unpushedState}: поднятие не потеряно — ночная джоба повторит завтра; повторится — проверь права job (contents: write).`,
     'git push',
     run('git', ['push', remote, `${commit}:${ref}`]),
   );
+  const branchState = pushedState;
 
   if (open !== null) {
     console.log(
