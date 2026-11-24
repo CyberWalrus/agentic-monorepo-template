@@ -23,21 +23,29 @@
  * workflow_dispatch-воркфлоу вне области: их здоровье видно в check-ах PR.
  * workflow в состоянии не active — вне области.
  *
- * Известная граница (находка ревью e26): чекер живёт внутри nightly.yml и не
- * может засветить собственный хост — если nightly перестал стартовать (класс
- * escaped-defect), ни один его job не исполнится и сводный check не увидит
- * пробела. Внешний контур (шаг в ci.yml или dispatch-воркфлоу вне ночи) —
- * кандидат в задачи; в строке docs/escaped-defects.md покрытие сформулировано
- * с учётом этой границы.
+ * Самоссылка (e39): чекер живёт в .github/workflows/workflow-health.yml и
+ * судит о schedule-workflow по последнему завершённому schedule-прогону, то
+ * есть о прошлой ночи. Живя внутри nightly.yml, красная джоба health делала
+ * ночь N красной, ночь N+1 видела красную ночь N и краснела снова — цикл не
+ * рвался и после фикса. Поэтому собственный хост (SELF_HOST_WORKFLOW) выведен
+ * из области сверки: вердикт чекера не становится входом следующего прогона.
+ * Граница (находка ревью e26) осталась и названа честно: если workflow-health.yml
+ * перестанет стартовать (класс escaped-defect), пробел увидит только человек в
+ * списке Actions — файл минимальный (checkout и один run-шаг); хост — ровно
+ * один, держит тест проводки в tools/test/check-workflow-health.test.ts.
  *
- * Джоба nightly.yml (workflow-health) зовёт чекер с GH_TOKEN; красный прогон
- * заводит issue через job report (needs), дублировать issue-логику здесь не
- * нужно. Незавершённый прогон на head SHA — не красный, пока он молодой
- * (--pending-hours, по умолчанию 6: ночной прогон мог попасть в окно CI на
- * свежем коммите); старше окна — красный «застрял» (fail-closed, З11: висящий
- * незавершённый прогон — дефект очереди или раннера). Хвостовая краснота
- * докрашивается следующим ночным прогоном: failures на head SHA остаются в
- * данных API, пока head не ушёл вперёд.
+ * Хост зовёт чекер с GH_TOKEN (push на main — сигнал о сломанном main в день
+ * поломки; schedule — ночной контур); красный прогон заводит issue через job
+ * report хоста (needs), дублировать issue-логику здесь не нужно. В
+ * push-прогоне (--own-event push) отсутствие соседнего прогона на head SHA —
+ * «ещё не создан», а не «не стартовал»: все прогоны на этом SHA создаёт тот же
+ * push, что и прогон чекера. Класс «не стартовал» на том же head SHA ловит
+ * schedule-прогон (соседние прогоны давно созданы). Незавершённый прогон на
+ * head SHA — не красный, пока он молодой (--pending-hours, по умолчанию 6:
+ * ночной прогон мог попасть в окно CI на свежем коммите); старше окна — красный
+ * «застрял» (fail-closed, З11: висящий незавершённый прогон — дефект очереди
+ * или раннера). Хвостовая краснота докрашивается следующим прогоном: failures
+ * на head SHA остаются в данных API, пока head не ушёл вперёд.
  *
  * Коды выходов: 0 — зелёный; 1 — нарушения (список в stderr); 2 — fail-loud:
  * gh api недоступен/ошибся, каталог workflows пуст/нечитаем, неожиданная форма
@@ -290,8 +298,20 @@ export function scopeOfWork(parsed: ParsedWorkflow, file: string): WorkflowScope
   return { file, pushHeadSha, pushPaths, schedule };
 }
 
-/** Читает область из каталога workflow-файлов; пусто/нечитаемо — fail-loud. */
-export function loadScope(dir: string): { scope: WorkflowScope[] } {
+/**
+ * Собственный хост чекера (e39): workflow, в котором живёт шаг
+ * `node tools/check-workflow-health.ts`. В область сверки не входит — чекер не
+ * судит о файле, в котором сам живёт: красный вердикт прошлой ночи иначе
+ * становится «красным schedule-прогоном» следующей, и цикл не рвётся.
+ */
+export const SELF_HOST_WORKFLOW = '.github/workflows/workflow-health.yml';
+
+/**
+ * Читает область из каталога workflow-файлов; пусто/нечитаемо — fail-loud.
+ * selfHosted — workflow, попавшие в область по триггерам, но выведенные из
+ * сверки как собственный хост.
+ */
+export function loadScope(dir: string): { scope: WorkflowScope[]; selfHosted: string[] } {
   if (!existsSync(dir)) {
     die(`workflow-health: каталог workflows не найден: ${dir} (fail-loud, З11)`);
   }
@@ -302,17 +322,24 @@ export function loadScope(dir: string): { scope: WorkflowScope[] } {
     die(`workflow-health: в ${dir} нет workflow-файлов (fail-loud, З11)`);
   }
   const scope: WorkflowScope[] = [];
+  const selfHosted: string[] = [];
   for (const name of files) {
     const parsed = parseWorkflowTriggers(readFileSync(join(dir, name), 'utf8'));
     if (parsed === null) {
       continue;
     }
-    const scoped = scopeOfWork(parsed, `.github/workflows/${name}`);
-    if (scoped !== null) {
-      scope.push(scoped);
+    const file = `.github/workflows/${name}`;
+    const scoped = scopeOfWork(parsed, file);
+    if (scoped === null) {
+      continue;
     }
+    if (file === SELF_HOST_WORKFLOW) {
+      selfHosted.push(file);
+      continue;
+    }
+    scope.push(scoped);
   }
-  return { scope };
+  return { scope, selfHosted };
 }
 
 // --- Данные прогонов -------------------------------------------------------------
@@ -536,6 +563,13 @@ export interface EvaluateOptions {
   freshnessMs: number;
   /** Незавершённые прогоны старше этого окна — «застрял» (красный). */
   pendingMs: number;
+  /**
+   * Событие собственного прогона чекера (e39): 'push' | 'schedule' |
+   * 'workflow_dispatch' | '' (неизвестно — судим строго). В push-прогоне
+   * отсутствие соседнего прогона на head SHA — «ещё не создан», а не «не
+   * стартовал»: все прогоны на этом SHA создаёт тот же push.
+   */
+  ownEvent?: string;
 }
 
 const RUN_SORT = (a: RunInfo, b: RunInfo): number =>
@@ -588,6 +622,17 @@ export function evaluateHealth(
       const onHead = (headByPath.get(entry.file) ?? []).filter((run) => run.event === 'push');
       const completed = onHead.filter((run) => run.status === 'completed').toSorted(RUN_SORT);
       if (onHead.length === 0) {
+        if (options.ownEvent === 'push') {
+          // e39: все прогоны на этом SHA создаёт тот же push, что и прогон
+          // чекера, — сосед может быть ещё не создан. Красить это — ложный шум
+          // на каждом мерже; класс «не стартовал» на том же head SHA ловит
+          // schedule-прогон.
+          checked.push({
+            workflow: entry.file,
+            summary: 'в области, прогон ещё не создан (push-прогон чекера)',
+          });
+          continue;
+        }
         violations.push({
           workflow: entry.file,
           reason: `не стартовал на head SHA ${data.headSha.slice(0, 7)} — push-прогонов нет (escaped-defect 2026-11-21: workflow существует, но не запускается)`,
@@ -730,7 +775,14 @@ function main(): void {
     );
   }
 
-  const { scope } = loadScope(workflowsDir);
+  // Событие собственного прогона (e39); '' — неизвестно, судим строго.
+  const ownEvent = flag('--own-event');
+  const { scope, selfHosted } = loadScope(workflowsDir);
+  for (const file of selfHosted) {
+    console.log(
+      `workflow-health: ${file} — собственный хост чекера, вне области (самоссылка, e39)`,
+    );
+  }
   if (scope.length === 0) {
     die(
       `workflow-health: в ${workflowsDir} нет workflow в области (push main / schedule) — fail-loud (З11)`,
@@ -744,6 +796,7 @@ function main(): void {
     now: new Date(),
     freshnessMs: freshnessDays * 24 * 60 * 60_000,
     pendingMs: pendingHours * 60 * 60_000,
+    ownEvent,
   });
   for (const entry of report.checked) {
     console.log(`workflow-health: ${entry.workflow} — ${entry.summary}`);
