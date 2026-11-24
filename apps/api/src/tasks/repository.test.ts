@@ -40,6 +40,23 @@ describe('InMemoryTaskRepository', () => {
     expect(titles).toEqual(['third', 'second', 'first']);
   });
 
+  // e60: список без пагинации — выше 20 задач он не проверялся ни на одном
+  // уровне. Пятьдесят созданных задач возвращаются целиком, newest first:
+  // обрезка и сбой порядка видны по невозвращённым и переставленным id.
+  it('returns all 50 created tasks, newest first', async () => {
+    const repo = createRepository();
+    // create синхронен до первого await: часы тикают в порядке вызовов, даже
+    // когда обещания ждутся вместе.
+    const created = await Promise.all(
+      Array.from({ length: 50 }, (_, index) => repo.create(`Task ${index + 1}`)),
+    );
+
+    const listed = await repo.list();
+
+    expect(listed).toHaveLength(50);
+    expect(listed.map((task) => task.id)).toEqual(created.map((task) => task.id).toReversed());
+  });
+
   // e52: комбинация дефекта — задача с владельцем в одном рабочем
   // пространстве, remove из другого. Домен задачу не трогает и отвечает
   // undefined (отказ из этого делает роутер), владелец остаётся на месте.
