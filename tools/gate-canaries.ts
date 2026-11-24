@@ -249,6 +249,26 @@ export const CANARIES: GateCanary[] = [
       ),
   },
   {
+    // e63: e2e тянет из tools/ только модули из списка (правило
+    // e2e-tools-allow-list) — иначе импорт из e2e в код гейтов проходил без
+    // сигнала. Зонд — гейт-модуль вне списка. Якорь проверяется: модуль исчезнет
+    // — прогон упадёт здесь, а не сменит причину на not-to-unresolvable.
+    name: 'e2e импортирует модуль гейтов',
+    steps: 'boundaries',
+    failedStep: 'boundaries',
+    expect: /e2e-tools-allow-list/,
+    apply: (root) => {
+      if (!existsSync(join(root, 'tools', 'check-docs.ts'))) {
+        throw new Error('canary anchor not found: tools/check-docs.ts');
+      }
+      write(
+        root,
+        'e2e/evil-tools-probe.ts',
+        "import '../tools/check-docs.ts';\n\nexport const evil = 0;\n",
+      );
+    },
+  },
+  {
     // Опечатка в пути, переименованный или удалённый файл.
     name: 'неразрешимый импорт',
     steps: 'boundaries',

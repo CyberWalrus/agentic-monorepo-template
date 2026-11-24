@@ -4,6 +4,22 @@
  *
  * @type {import('dependency-cruiser').IConfiguration}
  */
+
+/**
+ * Модули tools/, которые вправе импортировать e2e (e63): тестовая
+ * инфраструктура, не код гейтов. Новый модуль вносится сюда именем файла —
+ * каталогом не разрешать (правило e2e-tools-allow-list).
+ */
+const E2E_ALLOWED_TOOLS = [
+  'e2e-select',
+  'instance',
+  'perf-budgets',
+  'perf-lock',
+  'perf-metrics',
+  'ports',
+  'visual-guard',
+];
+
 module.exports = {
   forbidden: [
     {
@@ -13,6 +29,17 @@ module.exports = {
         'Продуктовый код не импортирует гейты и обвязку (tools/): порты и окружение приходят через запуск (ADR 0005, З9). tools/ — потребитель приложений, не зависимость. Скоуп — весь пакет, не только src/: конфиги (vite.config.ts) — место, где порты запекаются при сборке.',
       from: { path: '^(apps|packages)/[^/]+/' },
       to: { path: '^tools/' },
+    },
+    {
+      name: 'e2e-tools-allow-list',
+      severity: 'error',
+      comment:
+        'E2e импортирует из tools/ только модули тестовой инфраструктуры из списка (E2E_ALLOWED_TOOLS): остальное — код гейтов, и импорт из e2e тянул бы его в чужой контур без сигнала (e63). Новый импорт начинается со строки в списке и ревьюится вместе с правилом.',
+      from: { path: '^e2e/' },
+      to: {
+        path: '^tools/',
+        pathNot: `^tools/(${E2E_ALLOWED_TOOLS.join('|')})\\.ts$`,
+      },
     },
     {
       name: 'no-circular',
