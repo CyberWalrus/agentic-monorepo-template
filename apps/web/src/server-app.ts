@@ -2,6 +2,13 @@ import { Hono, type Context } from 'hono';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { gzipSync } from 'node:zlib';
+import {
+  REQUEST_BODY_LIMIT_BYTES,
+  REQUEST_TIMEOUT_MS,
+  requestGuards,
+  requestShapeGuard,
+  type RequestGuardsOptions,
+} from './lib/request-guards.ts';
 
 /**
  * Production-сервер web (C3.2): тонкий Node-entry поверх сборки TanStack Start.
@@ -11,7 +18,9 @@ import { gzipSync } from 'node:zlib';
  *      в свой origin, сборка не зависит от адреса API;
  *   3. статика клиентской сборки из `staticRoot` (dist/client);
  *   4. всё остальное — fetch-обработчик серверной сборки TanStack Start
- *      (dist/server/server.js экспортирует `{ default: { fetch } }`).
+ *      (dist/server/server.js экспортирует `{ default: { fetch } }`); не-GET/HEAD
+ *      идут в него под ограждениями `requestGuards` (форма запроса, таймаут,
+ *      лимит тела; e55).
  * Логика — здесь (unit-тесты без сети и файлов приложения), проводка — в
  * `server.ts` в корне пакета.
  */
@@ -39,7 +48,11 @@ export function isStartEntry(value: unknown): value is StartEntry {
   return typeof mod.fetch === 'function';
 }
 
-export interface WebServerAppOptions {
+/**
+ * Опции сервера. `bodyLimitBytes` и `requestTimeoutMs` — контур ограждений
+ * не-GET/HEAD мимо статики (e55), тот же, что у API.
+ */
+export interface WebServerAppOptions extends RequestGuardsOptions {
   /** Адрес API: единственная цель прокси `/rpc` (ADR 0005). */
   apiUrl: string;
   /** Корень статики клиентской сборки (dist/client), абсолютный путь. */
@@ -138,7 +151,10 @@ export interface StaticFile {
   /** Копия файла в свежем ArrayBuffer: BodyInit требует ArrayBufferView<ArrayBuffer>. */
   body: Uint8Array<ArrayBuffer>;
   contentType: string;
-  /** `/assets/*` — хешированные имена клиентской сборки: кэш навсегда. */
+  /**
+   * Файл лежит внутри каталога ассетов сборки (`resolvedPath` под
+   * `<staticRoot>/assets`) — хешированные имена клиентской сборки: кэш навсегда.
+   */
   cacheable: boolean;
   /** Расширение файла в нижнем регистре — вход в решение о gzip-сжатии. */
   ext: string;
@@ -150,6 +166,12 @@ export interface StaticFile {
    */
   resolvedPath: string;
 }
+
+/**
+ * Каталог хешированных ассетов клиентской сборки: `assetsDir` Vite по
+ * умолчанию. Только файлы из него кэшируются навсегда.
+ */
+const ASSETS_DIR = 'assets';
 
 /**
  * Резолвит путь запроса в файл внутри `staticRoot`. Возвращает null, если
@@ -191,7 +213,11 @@ export async function resolveStaticFile(
   return {
     body: new Uint8Array(await fs.readFile(resolved)),
     contentType,
-    cacheable: decoded.startsWith('/assets/'),
+    // Кэш навсегда — по разрешённому файлу внутри каталога ассетов, а не по
+    // префиксу URL: `/assets/../x.js` (закодированный разделитель URL-парсер
+    // не нормализует) разрешается в корневой файл — нехешированный, immutable
+    // замораживал бы его копию в кэшах (e55).
+    cacheable: resolved.startsWith(path.resolve(staticRoot, ASSETS_DIR) + path.sep),
     ext: path.extname(resolved).toLowerCase(),
     resolvedPath: resolved,
   };
@@ -225,6 +251,59 @@ function filterResponseHeaders(headers: Headers): Headers {
   return filtered;
 }
 
+/** Тело запроса не дочитано за срок: клиент начал загрузку и не закончил. */
+class ProxyBodyStalled extends Error {}
+/** Тело запроса превысило потолок прокси. */
+class ProxyBodyTooLarge extends Error {}
+
+/**
+ * Читает тело проксируемого запроса с потолком и сроком. Буферизуется не всё,
+ * что прислал клиент, а до первой строки, на которой сумма превысила потолок:
+ * чтение останавливается, поток дальше никто не тянет. Срок тот же, что у
+ * вызова API: тело, которое клиент не дочитал, не держит соединение дольше
+ * `PROXY_TIMEOUT_MS`. Остаток запроса после ответа сбрасывает сам слушатель
+ * `@hono/node-server` (`drainIncoming`: до 500 мс и 64 МиБ, затем сокет
+ * закрывается). Сбой самого потока не перехватывается — это не «слишком
+ * велико» и не «не дочитал», маскировать его под ответы ограждений нельзя.
+ */
+async function readProxyBody(body: ReadableStream<Uint8Array>): Promise<Uint8Array<ArrayBuffer>> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stalled = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ProxyBodyStalled()), PROXY_TIMEOUT_MS);
+  });
+  // Рекурсия, а не цикл: каждый чанк ждётся отдельно, до него — гонка со сроком.
+  const readNext = async (): Promise<void> => {
+    const { done, value } = await Promise.race([reader.read(), stalled]);
+    if (done) {
+      return;
+    }
+    chunks.push(value);
+    received += value.byteLength;
+    if (received > MAX_RPC_BODY_BYTES) {
+      // Не дожидаемся cancel: на остановленном потоке он мог бы не разрешиться
+      // и задержать ответ. Его отказ — не наша ошибка.
+      reader.cancel().catch(() => undefined);
+      throw new ProxyBodyTooLarge();
+    }
+    await readNext();
+  };
+  try {
+    await readNext();
+  } finally {
+    clearTimeout(timer);
+  }
+  const buffered = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buffered.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return buffered;
+}
+
 export function createWebServerApp(options: WebServerAppOptions): Hono {
   const { apiUrl, staticRoot, handler } = options;
   const proxyFetch = options.proxyFetch ?? fetch;
@@ -253,17 +332,33 @@ export function createWebServerApp(options: WebServerAppOptions): Hono {
     target.host = api.host;
 
     // Тело буферизуется: RPC-запросы — небольшие JSON, стриминг не нужен, а
-    // ArrayBuffer избавляет от требований undici к duplex у стримов. Потолок
-    // отбивает дешёвый memory-DoS большими телами (413 до буферизации — по
-    // content-length, после — по фактическим байтам, e.g. chunked).
+    // буфер избавляет от требований undici к duplex у стримов. Потолок отбивает
+    // дешёвый memory-DoS большими телами: по content-length — до чтения, по
+    // фактическим байтам — во время чтения, не дальше потолка и одного чанка
+    // (chunked без content-length раньше буферизовался целиком и только потом
+    // получал 413 — память процесса росла до конца загрузки, e55).
     const hasBody = incoming.method !== 'GET' && incoming.method !== 'HEAD';
     const declaredLength = Number(incoming.headers.get('content-length') ?? 0);
     if (hasBody && declaredLength > MAX_RPC_BODY_BYTES) {
       return c.json({ error: 'RPC request body is too large' }, 413);
     }
-    const buffered = hasBody ? await incoming.arrayBuffer() : undefined;
-    if (buffered !== undefined && buffered.byteLength > MAX_RPC_BODY_BYTES) {
-      return c.json({ error: 'RPC request body is too large' }, 413);
+    // После проверки формы `body === null` значит «тела нет»: TRACE и запрос с
+    // объявленным телом без потока до сюда не доходят.
+    let buffered: Uint8Array<ArrayBuffer> | undefined;
+    if (hasBody && incoming.body !== null) {
+      try {
+        buffered = await readProxyBody(incoming.body);
+      } catch (error) {
+        if (error instanceof ProxyBodyTooLarge) {
+          return c.json({ error: 'RPC request body is too large' }, 413);
+        }
+        if (error instanceof ProxyBodyStalled) {
+          // 408 — сервер не дождался полного запроса. Не 502: это отказ API;
+          // не 504: в этом сервере так отвечает срок обработчика SSR.
+          return c.json({ error: 'Request timed out' }, 408);
+        }
+        throw error;
+      }
     }
     const init: RequestInit = {
       method: incoming.method,
@@ -290,8 +385,10 @@ export function createWebServerApp(options: WebServerAppOptions): Hono {
       return c.json({ error: 'API is unreachable' }, 502);
     }
   };
-  app.all('/rpc', proxyRpc);
-  app.all('/rpc/*', proxyRpc);
+  // Проверка формы запроса — раньше чтения тела: TRACE и «тело объявлено,
+  // потока нет» не должны доходить ни до потолка прокси, ни до API.
+  app.all('/rpc', requestShapeGuard, proxyRpc);
+  app.all('/rpc/*', requestShapeGuard, proxyRpc);
 
   app.on(['GET', 'HEAD'], '*', async (c) => {
     const pathname = new URL(c.req.raw.url).pathname;
@@ -324,7 +421,17 @@ export function createWebServerApp(options: WebServerAppOptions): Hono {
   });
 
   // Не-GET/HEAD (server functions TanStack Start, POST-маршруты) мимо статики.
-  app.all('*', (c) => handler(c.req.raw));
+  // Ограждения стоят на классе запросов — на этом единственном catch-all, куда
+  // попадает каждая следующая server function, а не на маршруте: иначе новая
+  // будет забытым исключением. Контур тот же, что у API (c1.7): 1 МиБ, 30 с.
+  app.all(
+    '*',
+    ...requestGuards({
+      bodyLimitBytes: options.bodyLimitBytes ?? REQUEST_BODY_LIMIT_BYTES,
+      requestTimeoutMs: options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS,
+    }),
+    (c) => handler(c.req.raw),
+  );
 
   return app;
 }
