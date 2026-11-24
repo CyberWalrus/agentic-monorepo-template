@@ -41,6 +41,46 @@ import type { TaskRepository } from './tasks/repository.ts';
 export const REQUEST_BODY_LIMIT_BYTES = 1_048_576;
 export const REQUEST_TIMEOUT_MS = 30_000;
 
+/** Мидлварь Hono в той же сигнатуре, что у остальных ограждений. */
+type Guard = (c: Context, next: Next) => Promise<Response | void>;
+
+/** Тело заявлено заголовками — независимо от того, построил ли адаптер поток. */
+const declaresBody = (headers: Headers): boolean =>
+  headers.has('transfer-encoding') || Number(headers.get('content-length') ?? 0) > 0;
+
+/**
+ * Проверка формы запроса (e74) — fail-closed: не верит `request.body`.
+ *
+ * `bodyLimit` запрос без потока пропускает не читая, а `@hono/node-server`
+ * собирает Request не так, как запрос пришёл по проводу: `TRACE` получает
+ * GET без потока и подменённый геттер `method` — у него `request.body ===
+ * null`, хотя `text()` и `arrayBuffer()` тело читают. Ограждение, которое
+ * смотрит только на `request.body`, пропускает такой запрос мимо лимита:
+ * до правки TRACE с телом сверх потолка доходил до процедуры. Поэтому форма
+ * проверяется по тому, что запрос сам о себе заявил, — по методу и заголовкам:
+ *   - `TRACE` → 405: шаблонного сценария с ним нет, а собрать его честно
+ *     адаптер не может;
+ *   - тело объявлено (`content-length` больше 0 или есть `transfer-encoding`),
+ *     а потока нет → 400: читать нечего, пропустить — значит пропустить мимо
+ *     лимита тело, которое клиент шлёт.
+ * Запрос без объявления тела (POST с `content-length: 0`) проходит как прежде.
+ *
+ * Своя копия `requestShapeGuard` из `apps/web/src/lib/request-guards.ts` —
+ * импорт между приложениями закрыт границей (e55, «Решение 3»: общий модуль
+ * в `packages/` — при третьем потребителе). Тела 405 и 400 — той же формы,
+ * что 413 и 504 ниже: статичный текст без данных запроса (C4.1).
+ */
+const requestShapeGuard: Guard = async (c, next) => {
+  const request = c.req.raw;
+  if (request.method === 'TRACE') {
+    return c.json({ error: 'Method not allowed' }, 405);
+  }
+  if (request.body === null && declaresBody(request.headers)) {
+    return c.json({ error: 'Request body is not readable' }, 400);
+  }
+  return next();
+};
+
 /**
  * Гонка «обработчик vs таймер»: ответ ограничен по времени, даже если
  * обработчик завис. Сам обработчик при победе таймера не прерывается —
@@ -48,6 +88,10 @@ export const REQUEST_TIMEOUT_MS = 30_000;
  * statement_timeout пула (tasks/database.ts), так что вечно не висит (c1.7).
  * Проигравшая гонкой ветка продолжает слушаться Promise.race: её поздний
  * отказ не становится unhandledRejection.
+ * Гонка накрывает и чтение тела (e74): в тройке ограждений срок стоит раньше
+ * потолка, и медленное тело получает 504 за срок запроса, а не держит
+ * соединение до requestTimeout Node. Дочитанное после 504 тело та же граница:
+ * шаги ниже всё равно выполнятся.
  */
 function requestTimeout(ms: number) {
   return async (c: Context, next: Next): Promise<Response | void> => {
@@ -226,11 +270,18 @@ export function createApp({
   // Без CORS (ADR 0005): браузер ходит в `/rpc` своего web-сервера (один
   // origin), остальные клиенты API (k6, фикстуры, OpenAPI) — не браузерные.
 
-  // Границы произвольного JSON (c1.7): тело сверх потолка — 413 до чтения
-  // (hono-мидлварь проверяет content-length и стрим), зависший обработчик —
-  // 504 по таймеру. Тексты статичные, без данных запроса — как каталог
-  // ошибок (C4.1); операции oRPC эти ответы не объявляют — это слой HTTP
-  // до транспорта.
+  // Границы произвольного JSON (c1.7, e74) — тройка в порядке «форма → срок →
+  // потолок» на каждом классе запросов:
+  //   - форма (`requestShapeGuard`) — раньше всех: то, что нижние проверить не
+  //     могут (метод, объявленное тело без потока), отбивается здесь;
+  //   - срок: гонка «обработчик vs таймер» (504) раньше потолка, потому что
+  //     `bodyLimit` без content-length читает тело до конца раньше, чем вызовет
+  //     следующий шаг: поставь его первым — и срок не накроет чтение
+  //     медленного тела, соединение держится до requestTimeout Node;
+  //   - потолок: тело сверх потолка — 413 до чтения (по content-length) или по
+  //     фактическим байтам.
+  // Тексты статичные, без данных запроса — как каталог ошибок (C4.1); операции
+  // oRPC эти ответы не объявляют — это слой HTTP до транспорта.
   const bodyLimitGuard = bodyLimit({
     maxSize: bodyLimitBytes,
     onError: (c) => c.json({ error: 'Payload too large' }, 413),
@@ -239,8 +290,8 @@ export function createApp({
 
   app.get('/health', (c) => c.json({ status: 'ok', instance: instanceId ?? null }));
 
-  app.use('/rpc/*', bodyLimitGuard, timeoutGuard);
-  app.use('/api/*', bodyLimitGuard, timeoutGuard);
+  app.use('/rpc/*', requestShapeGuard, timeoutGuard, bodyLimitGuard);
+  app.use('/api/*', requestShapeGuard, timeoutGuard, bodyLimitGuard);
 
   app.use('/rpc/*', async (c, next) => {
     const { matched, response } = await rpcHandler.handle(c.req.raw, {
@@ -277,7 +328,7 @@ export function createApp({
       .min(1)
       .refine((ids) => ids.every(isSafeRequestId));
 
-    app.use('/__test__/*', bodyLimitGuard, timeoutGuard);
+    app.use('/__test__/*', requestShapeGuard, timeoutGuard, bodyLimitGuard);
 
     app.post('/__test__/reset', async (c) => {
       const body: unknown = await c.req.json().catch(() => undefined);

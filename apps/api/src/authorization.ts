@@ -1,6 +1,5 @@
-import type { ORPCError } from '@orpc/client';
-import { isProcedure, type AnyProcedure, type MiddlewareResult } from '@orpc/server';
-import { AccessPolicySchema } from '@repo/contracts';
+import { isProcedure, ORPCError, type AnyProcedure, type MiddlewareResult } from '@orpc/server';
+import { AccessPolicySchema, ERROR_MESSAGES } from '@repo/contracts';
 import * as z from 'zod';
 
 import type { TaskRepository } from './tasks/repository.ts';
@@ -84,13 +83,26 @@ export function proceduresWithoutAuthorization(router: unknown): readonly string
 
 /**
  * Структурные части опций мидлвари oRPC, которые использует авторизация.
- * Остальные опции (path, signal, …) мидлварь не трогает, поэтому не объявляет.
+ * Остальные опции (path, signal, errors, …) мидлварь не трогает, поэтому
+ * не объявляет.
  */
 interface AuthorizationOptions {
   context: AppContext;
-  procedure: { '~orpc': { meta: unknown } };
-  errors: { FORBIDDEN: () => ORPCError<'FORBIDDEN', unknown> };
+  /** meta и карта ошибок процедуры: по ним мидлварь читает политику и объявлен ли FORBIDDEN. */
+  procedure: { '~orpc': { meta: unknown; errorMap?: Record<string, unknown> } };
   next: (options: { context: AppContext }) => MiddlewareResult<AppContext, unknown>;
+}
+
+/**
+ * Отказ доступа — своя ошибка мидлвари, а не конструктор `errors` процедуры.
+ * После снятия 403 с public-процедур (e57, ADR 0024) конструктор FORBIDDEN
+ * есть не у каждой процедуры, а отказать мидлварь обязана любую — в том числе
+ * без политики (deny-by-default). Код, статус (403 oRPC выводит из кода) и
+ * текст из каталога контракта (C4.1) — те же, что даёт объявленный
+ * `errors.FORBIDDEN()`; `defined` честен: объявлен ли код процедуре.
+ */
+function forbid(declared: boolean): ORPCError<'FORBIDDEN', unknown> {
+  return new ORPCError('FORBIDDEN', { defined: declared, message: ERROR_MESSAGES.FORBIDDEN });
 }
 
 /**
@@ -101,15 +113,16 @@ interface AuthorizationOptions {
  * политикой отвергается (deny-by-default).
  */
 export async function authorizationMiddleware(
-  { context, procedure, errors, next }: AuthorizationOptions,
+  { context, procedure, next }: AuthorizationOptions,
   input: unknown,
 ): Promise<Awaited<MiddlewareResult<AppContext, unknown>>> {
   const policy = accessPolicyFromMeta(procedure['~orpc'].meta);
+  const forbiddenDeclared = procedure['~orpc'].errorMap?.['FORBIDDEN'] !== undefined;
 
   if (!policy) {
     // Расхождение «контракт объявил — роутер построил мимо контракта»:
     // отказ безопаснее пропуска, диагностику даёт router-divergence.test.
-    throw errors.FORBIDDEN();
+    throw forbid(forbiddenDeclared);
   }
 
   if (policy.type === 'public') {
@@ -119,17 +132,17 @@ export async function authorizationMiddleware(
   if (policy.type === 'admin') {
     // Ролей в системе ещё нет, источника админ-акторов тоже: отказ до их
     // появления (условие возврата — в журнале задачи C2.2).
-    throw errors.FORBIDDEN();
+    throw forbid(forbiddenDeclared);
   }
 
   if (!context.actor) {
-    throw errors.FORBIDDEN();
+    throw forbid(forbiddenDeclared);
   }
 
   const owner = await context.ownerOf(input);
   // null (ресурса нет или владелец неизвестен) — тоже отказ: null !== id.
   if (owner !== context.actor.id) {
-    throw errors.FORBIDDEN();
+    throw forbid(forbiddenDeclared);
   }
 
   return next({ context });
