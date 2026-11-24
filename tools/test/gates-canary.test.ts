@@ -9,11 +9,11 @@
  * (e47): покрытие «шаг покрыт» не замечало, что правил без канарейки всё больше.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { gzipSync } from 'node:zlib';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BLOAT, BLOAT_DELTA, CANARIES, type GateCanary } from '../gate-canaries.ts';
 import { allStepNames, fast, post, serialFast, slow } from '../verify-steps.ts';
@@ -366,5 +366,73 @@ describe('дельта-канарейка и инвариант порогов (
       wireCeiling - page['jsWireKb'],
       `запас wire-байт (${wireCeiling} − ${page['jsWireKb'].toFixed(1)}) больше дельта-порога ${threshold}`,
     ).toBeGreaterThan(threshold);
+  });
+});
+
+describe('якоря канареек живы на текущем дереве (правка регистрации /rpc, 2026-11-24)', () => {
+  // Канарейки идут по фильтру путей (canaries.yml): PR, меняющий файл-якорь вне
+  // фильтра, их не запускает. e55 переписала регистрацию /rpc в server-app.ts —
+  // якоря двух канареек исчезли, мерж прошёл зелёным, а краснить стало на всех
+  // следующих PR, где пути фильтра есть, и в ночной. Здесь каждая канарейка
+  // применяется к копии дерева: пропавший якорь красит test:hooks в том же PR.
+  const repoRoot = resolve(import.meta.dirname, '..', '..');
+  // Канарейки, которым нужна настоящая ветка (создают task/evil-*): без
+  // репозитория apply бросает «canary setup failed»; их держит раннер канареек.
+  const needGit: ReadonlySet<string> = new Set([
+    'файл задачи не перенесён в done/',
+    'дифф вне touches задачи',
+  ]);
+  // Копируется только дерево исходников: зависимости, сборка и отчёты канарейкам не нужны
+  const notCopied = new Set([
+    'node_modules',
+    '.git',
+    'dist',
+    '.turbo',
+    '.stryker-tmp',
+    'reports',
+    'playwright-report',
+    'test-results',
+    '.cache',
+  ]);
+
+  it('apply каждой канарейки не бросает на копии дерева', () => {
+    const root = mkdtempSync(join(tmpdir(), 'canary-anchors-'));
+    const pristine = join(root, 'pristine');
+    const depth = repoRoot.split(sep).length;
+    try {
+      cpSync(repoRoot, pristine, {
+        recursive: true,
+        filter: (source) =>
+          !source
+            .split(sep)
+            .slice(depth)
+            .some((part) => notCopied.has(part)),
+      });
+      const failures: string[] = [];
+      let applied = 0;
+      for (const canary of CANARIES) {
+        if (needGit.has(canary.name)) {
+          continue;
+        }
+        const copy = join(root, 'copy');
+        rmSync(copy, { recursive: true, force: true });
+        cpSync(pristine, copy, { recursive: true });
+        try {
+          canary.apply(copy);
+          applied += 1;
+        } catch (e) {
+          failures.push(`${canary.name}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      expect(applied, 'сколько канареек проверено').toBe(CANARIES.length - needGit.size);
+      expect(failures, 'канарейки, чей якорь не найден в дереве').toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('список канареек, требующих git, называет существующие канарейки', () => {
+    const names = new Set(CANARIES.map((canary) => canary.name));
+    expect([...needGit].filter((name) => !names.has(name))).toEqual([]);
   });
 });
