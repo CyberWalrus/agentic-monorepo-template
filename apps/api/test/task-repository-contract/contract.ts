@@ -93,6 +93,29 @@ export const taskRepositoryContractChecks: readonly TaskRepositoryContractCheck[
     },
   },
   {
+    // e60: список без пагинации, выше 20 задач он не проверялся ни на одном
+    // уровне. Сидируется вперемешку (чётные, затем нечётные): вернуться
+    // должны все 50 и строго по убыванию createdAt — обрезка и сбой порядка
+    // видны по невозвращённым и переставленным задачам.
+    name: 'list returns all 50 tasks, newest first',
+    check: async (repository) => {
+      const tasks = Array.from({ length: 50 }, (_, index) =>
+        seededTask({
+          title: `task ${index + 1}`,
+          createdAt: `2026-02-01T00:${String(index).padStart(2, '0')}:00.000Z`,
+        }),
+      );
+      const evens = tasks.filter((_, index) => index % 2 === 0);
+      const odds = tasks.filter((_, index) => index % 2 === 1);
+
+      await repository.reset([...evens, ...odds]);
+
+      expect((await repository.list()).map((task) => task.title)).toEqual(
+        tasks.toReversed().map((task) => task.title),
+      );
+    },
+  },
+  {
     name: 'toggle flips completion and persists it in the list',
     check: async (repository) => {
       const { id } = await repository.create('Toggle me');

@@ -1,4 +1,4 @@
-import { API_URL, expect, test, WORKSPACE_HEADER } from '../../fixtures.ts';
+import { API_URL, expect, makeTasks, test, WORKSPACE_HEADER } from '../../fixtures.ts';
 
 test.describe('tasks', () => {
   test('creates a task and shows it in the list [AC-1] @critical', async ({
@@ -50,6 +50,20 @@ test.describe('tasks', () => {
 
     await expect(page.getByRole('alert')).toHaveText('Title is required');
     await expect(page.getByLabel('New task')).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  // e60: список без пагинации — страница показывает целиком и тот набор, что
+  // длиннее привычных двадцати; обрезка видна по счётчику чекбоксов.
+  test('shows every task of a list longer than 20 [e60]', async ({
+    page,
+    seedTasks,
+    workspace,
+  }) => {
+    await seedTasks(makeTasks(30, workspace));
+    await page.goto('/');
+
+    const list = page.getByRole('list', { name: 'Tasks' });
+    await expect(list.getByRole('checkbox')).toHaveCount(30);
   });
 
   test.describe('without JavaScript', () => {
