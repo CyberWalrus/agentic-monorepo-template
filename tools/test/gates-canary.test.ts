@@ -9,7 +9,7 @@
  * (e47): покрытие «шаг покрыт» не замечало, что правил без канарейки всё больше.
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { gzipSync } from 'node:zlib';
@@ -382,11 +382,13 @@ describe('якоря канареек живы на текущем дереве 
     'файл задачи не перенесён в done/',
     'дифф вне touches задачи',
   ]);
-  // Копируется только дерево исходников: зависимости, сборка и отчёты канарейкам не нужны
+  // Копируется только дерево исходников: зависимости, сборка, отчёты и покрытия
+  // (apps/api/coverage после прогона тестов) канарейкам не нужны
   const notCopied = new Set([
     'node_modules',
     '.git',
     'dist',
+    'coverage',
     '.turbo',
     '.stryker-tmp',
     'reports',
@@ -394,20 +396,21 @@ describe('якоря канареек живы на текущем дереве 
     'test-results',
     '.cache',
   ]);
+  const depth = repoRoot.split(sep).length;
+  // Симлинк не копируется: в копии он вёл бы в настоящее дерево, и канарейка,
+  // пишущая через него, поправила бы оригинал
+  const copyFilter = (source: string): boolean =>
+    !lstatSync(source).isSymbolicLink() &&
+    !source
+      .split(sep)
+      .slice(depth)
+      .some((part) => notCopied.has(part));
 
   it('apply каждой канарейки не бросает на копии дерева', () => {
     const root = mkdtempSync(join(tmpdir(), 'canary-anchors-'));
     const pristine = join(root, 'pristine');
-    const depth = repoRoot.split(sep).length;
     try {
-      cpSync(repoRoot, pristine, {
-        recursive: true,
-        filter: (source) =>
-          !source
-            .split(sep)
-            .slice(depth)
-            .some((part) => notCopied.has(part)),
-      });
+      cpSync(repoRoot, pristine, { recursive: true, filter: copyFilter });
       const failures: string[] = [];
       let applied = 0;
       for (const canary of CANARIES) {

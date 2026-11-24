@@ -64,6 +64,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * регистрации нет, канарейка бросает «якорь не найден».
  */
 type RpcRoute = {
+  /** Смещение строки регистрации в файле. */
+  index: number;
   /** Вся строка регистрации, с отступом. */
   text: string;
   indent: string;
@@ -71,22 +73,53 @@ type RpcRoute = {
   before: string;
 };
 
+// Якорь — строка кода от начала строки: вхождение в комментарии и чужая
+// `subapp.all(...)` не считаются.
+const RPC_MAIN_LINE = /^([ \t]*)app\.all\('\/rpc', ([^;\n]*?)proxyRpc\);/m;
+const RPC_SUB_LINE = /^([ \t]*)app\.all\('\/rpc\/\*', ([^;\n]*?)proxyRpc\);/m;
+/**
+ * Регистрация `/rpc` в строке кода — любым `….all('/rpc'` (и `subapp.all`), но
+ * не в строке комментария: осталась после переименования — якорь её не знает.
+ */
+const RPC_ANY = /^[ \t]*(?!\/\/)\S*app\.all\('\/rpc(?:'|\*)/m;
+
 function rpcRoutes(source: string): { main: RpcRoute; sub: RpcRoute } | null {
-  // Якорь — строка кода от начала строки: вхождение в комментарии не считается.
   const route = (pattern: RegExp): RpcRoute | null => {
     const match = pattern.exec(source);
-    return match === null
+    return match === null || match.index === undefined
       ? null
-      : { text: match[0], indent: match[1] ?? '', before: match[2] ?? '' };
+      : {
+          index: match.index,
+          text: match[0],
+          indent: match[1] ?? '',
+          before: match[2] ?? '',
+        };
   };
-  const main = route(/^([ \t]*)app\.all\('\/rpc', ([^;\n]*?)proxyRpc\);/m);
-  const sub = route(/^([ \t]*)app\.all\('\/rpc\/\*', ([^;\n]*?)proxyRpc\);/m);
+  const main = route(RPC_MAIN_LINE);
+  const sub = route(RPC_SUB_LINE);
   return main === null || sub === null ? null : { main, sub };
 }
 
-/** Та же регистрация под другим путём: `proxyRpc` и его middleware на месте. */
-function rpcRouteAs(route: RpcRoute, path: string): string {
-  return `${route.indent}app.all('${path}', ${route.before}proxyRpc);`;
+/** Строка регистрации под другим путём: отступ и middleware (`before` — с запятой) на месте. */
+function rpcRouteLine(indent: string, before: string, path: string): string {
+  return `${indent}app.all('${path}', ${before}proxyRpc);`;
+}
+
+/**
+ * Все регистрации `/rpc` и `/rpc/*` под другими путями — не только первая:
+ * оставленная вторая сохраняла бы `/rpc`, и канарейка удаления стала бы пустой.
+ * Замена функцией: `$` в строке замены не интерпретируются.
+ */
+function renameRpcRoutes(source: string, mainPath: string, subPath: string): string {
+  return source
+    .replace(
+      new RegExp(RPC_MAIN_LINE.source, 'gm'),
+      (_match: string, indent: string, before: string) => rpcRouteLine(indent, before, mainPath),
+    )
+    .replace(
+      new RegExp(RPC_SUB_LINE.source, 'gm'),
+      (_match: string, indent: string, before: string) => rpcRouteLine(indent, before, subPath),
+    );
 }
 
 export const CANARIES: GateCanary[] = [
@@ -679,9 +712,12 @@ export const CANARIES: GateCanary[] = [
       // Роуты переименовываются, а не удаляются: proxyRpc остаётся занятым,
       // файл остаётся линт-чистым, а /rpc уходит в '*' -обработчики (SSR) —
       // тот же режим массового падения, что у удаления vite-прокси.
-      const stripped = source
-        .replace(routes.main.text, rpcRouteAs(routes.main, '/__canary_no_rpc__'))
-        .replace(routes.sub.text, rpcRouteAs(routes.sub, '/__canary_no_rpc__/*'));
+      const stripped = renameRpcRoutes(source, '/__canary_no_rpc__', '/__canary_no_rpc__/*');
+      if (RPC_ANY.test(stripped)) {
+        throw new Error(
+          'canary anchor not found: apps/web/src/server-app.ts keeps a /rpc registration the anchor does not know',
+        );
+      }
       writeFileSync(path, stripped);
     },
   },
@@ -707,14 +743,17 @@ export const CANARIES: GateCanary[] = [
           'canary anchor not found: apps/web/src/server-app.ts has no /rpc route registration',
         );
       }
-      const leaked = source.replace(
-        routes.main.text,
+      // Вставка по позиции найденной строки, а не по подстроке: тот же текст с
+      // отступом может встретиться раньше — в комментарии над регистрацией.
+      const afterMain = routes.main.index + routes.main.text.length;
+      const leaked =
+        source.slice(0, afterMain) +
         [
-          routes.main.text,
-          rpcRouteAs(routes.main, '/__test__'),
-          rpcRouteAs(routes.sub, '/__test__/*'),
-        ].join('\n'),
-      );
+          '',
+          rpcRouteLine(routes.main.indent, routes.main.before, '/__test__'),
+          rpcRouteLine(routes.sub.indent, routes.sub.before, '/__test__/*'),
+        ].join('\n') +
+        source.slice(afterMain);
       writeFileSync(path, leaked);
     },
   },
