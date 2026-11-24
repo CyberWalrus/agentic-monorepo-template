@@ -128,6 +128,28 @@ const MUST_DENY: string[] = [
   "cat <<'EOF' | $SHELL\ngit commit --no-verify\nEOF",
   // e45 (ревью, раунд 3): обёртке передана оболочка по ссылке
   "sudo $SHELL <<'EOF'\ngit commit --no-verify\nEOF",
+  // e50: формы мимо буквальных правил
+  // базлайны: флаг обновления в хвосте после `--` (там аргументы вызываемого скрипта) и без разделителя
+  'pnpm test -- -u',
+  'pnpm vitest run -- --update-snapshots',
+  'pnpm test -u',
+  'pnpm --filter @repo/ui test -- -u',
+  'npx vitest -- -u',
+  'cd apps/web && pnpm test -- -u',
+  // force-push, пропуск хуков и сброс, когда между `git` и подкомандой стоит глобальная опция
+  'git -C ../other push -f',
+  'git -C dir push --force',
+  'git -c user.name=x push origin +HEAD:main',
+  'git -C dir commit -n -m x',
+  'git -C dir reset --hard',
+  // checkout путей отбрасывает изменения файлов: `--` с любыми аргументами до него и форма без `--`
+  'git checkout HEAD -- tools/protected-paths.json',
+  'git checkout main -- file',
+  'git -C dir checkout HEAD -- tools/protected-paths.json',
+  'git checkout main file',
+  // разделитель в кавычках и `2>&1` команду не разрывают
+  'git checkout -m "a; b" -- file',
+  'git checkout main file 2>&1',
 ];
 
 for (const command of MUST_DENY) {
@@ -174,6 +196,20 @@ const MUST_PASS: string[] = [
   'cat <<\'EOF\' | grep "$PATTERN"\nLEFTHOOK=0 is forbidden\nEOF',
   'cat <<\'EOF\' > "$OUT"\nLEFTHOOK=0 is forbidden\nEOF',
   "cat <<'EOF' $(pwd) *.md\nLEFTHOOK=0 is forbidden\nEOF",
+  // e50: глобальная опция git сама по себе, смена ветки и upstream (`push -u`) — не запретны
+  'git -C dir status',
+  'git -C ../other push origin task/e50',
+  'git -C dir log -n 5',
+  'git -c user.name=x commit -m "e50: fix"',
+  'git push -u origin task/e50',
+  'git checkout other-branch',
+  'git checkout -b task/e50',
+  'git checkout -b task/e50 origin/main',
+  'git checkout --detach origin/main',
+  'git diff --stat -- tools/analyze-command.ts',
+  'pnpm test -- --reporter=verbose',
+  'pnpm --filter @repo/ui test',
+  'pnpm test:count:update',
 ];
 
 for (const command of MUST_PASS) {

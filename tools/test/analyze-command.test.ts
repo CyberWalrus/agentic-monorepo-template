@@ -1,7 +1,17 @@
 /** Unit-тесты разбора shell-команд (tools/analyze-command.ts): цели записи и учёт cd. */
 import { describe, expect, it } from 'vitest';
 
-import { repoWriteTargets, stripHeredocs, tokenize, writeTargets } from '../analyze-command.ts';
+import {
+  checkoutOverwritesPaths,
+  commandWords,
+  repoWriteTargets,
+  splitCommands,
+  stripHeredocs,
+  tokenize,
+  updatesSnapshots,
+  withoutGitGlobalOptions,
+  writeTargets,
+} from '../analyze-command.ts';
 
 const REPO = '/repo';
 
@@ -408,4 +418,97 @@ describe('stripHeredocs', () => {
     const piled = `cat${'<<EOF '.repeat(400)}${'$('.repeat(400)}${'\n'.repeat(2_000)}git commit --no-verify`;
     expect(stripHeredocs(piled)).toBe(piled);
   });
+});
+
+describe('splitCommands: кавычки и `&` перенаправления не разрывают команду (e50)', () => {
+  const cases: [string, string[]][] = [
+    ['pnpm test -- -u', ['pnpm test -- -u']],
+    ['cd apps/web && pnpm test -- -u', ['cd apps/web ', ' pnpm test -- -u']],
+    ['pnpm test || pnpm test -- -u', ['pnpm test ', ' pnpm test -- -u']],
+    ['pnpm test -- -u | tee log', ['pnpm test -- -u ', ' tee log']],
+    ['git checkout main file 2>&1', ['git checkout main file 2>&1']],
+    ['git checkout main file &>log', ['git checkout main file &>log']],
+    ['git checkout -m "a; b" -- file', ['git checkout -m "a; b" -- file']],
+    ['git checkout -m "a; b" -- file; echo done', ['git checkout -m "a; b" -- file', ' echo done']],
+    [
+      "git commit -m 'a | b' && git checkout main -- file",
+      ["git commit -m 'a | b' ", ' git checkout main -- file'],
+    ],
+    ['git checkout main \\\n -- file', ['git checkout main \\\n -- file']],
+  ];
+  for (const [command, expected] of cases) {
+    it(`"${command}" → ${JSON.stringify(expected)}`, () => {
+      expect(splitCommands(command)).toEqual(expected);
+    });
+  }
+
+  it('commandWords: «клей» оболочки по краям слова — не часть слова', () => {
+    expect(splitCommands('{ pnpm test -- -u; }').map(commandWords)).toEqual([
+      ['pnpm', 'test', '--', '-u'],
+      [],
+    ]);
+    expect(commandWords('$(git checkout main -- file)')).toEqual([
+      'git',
+      'checkout',
+      'main',
+      '--',
+      'file',
+    ]);
+  });
+});
+
+describe('withoutGitGlobalOptions (e50)', () => {
+  const cases: [string, string][] = [
+    ['git -C ../other push -f', 'git push -f'],
+    ['git -C "my dir" -c user.name=x push --force', 'git push --force'],
+    ['git --git-dir=. push -f', 'git push -f'],
+    ['git --work-tree . status', 'git status'],
+    ['/usr/bin/git -C dir commit -n -m x', '/usr/bin/git commit -n -m x'],
+    ['git status', 'git status'],
+    ['git commit -m "task/e50"', 'git commit -m "task/e50"'],
+  ];
+  for (const [command, expected] of cases) {
+    it(`"${command}" → "${expected}"`, () => {
+      expect(withoutGitGlobalOptions(command)).toBe(expected);
+    });
+  }
+});
+
+describe('updatesSnapshots (e50)', () => {
+  const cases: [string, boolean][] = [
+    ['pnpm test -- -u', true],
+    ['pnpm test -u', true],
+    ['pnpm --filter @repo/ui test -- -u', true],
+    ['./node_modules/.bin/playwright test -u', true],
+    ['npm test -- --updateSnapshot', true],
+    ['pnpm test -- --reporter=verbose', false],
+    ['git push -u origin task/e50', false],
+    ['curl -sSf -u "$USER:$TOKEN" https://example.com', false],
+    ['sort -u test', false],
+    ['pnpm test:count:update', false],
+  ];
+  for (const [command, expected] of cases) {
+    it(`"${command}" → ${expected}`, () => {
+      expect(updatesSnapshots(commandWords(command))).toBe(expected);
+    });
+  }
+});
+
+describe('checkoutOverwritesPaths (e50)', () => {
+  const cases: [string, boolean][] = [
+    ['git checkout -- file', true],
+    ['git checkout HEAD -- tools/protected-paths.json', true],
+    ['git checkout main file', true],
+    ['git checkout HEAD --pathspec-from-file=list.txt', true],
+    ['git checkout main --', false],
+    ['git checkout -b task/e50 origin/main', false],
+    ['git checkout --orphan new main', false],
+    ['git checkout --detach origin/main', false],
+    ['git checkout other-branch', false],
+  ];
+  for (const [command, expected] of cases) {
+    it(`"${command}" → ${expected}`, () => {
+      expect(checkoutOverwritesPaths(commandWords(command))).toBe(expected);
+    });
+  }
 });
