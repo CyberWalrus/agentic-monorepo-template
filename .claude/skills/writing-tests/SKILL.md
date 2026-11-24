@@ -39,6 +39,7 @@ description: Testing policy for this repo — which level to test at (unit, comp
 - Тестам, которым нужны фиксированные данные (visual, perf), нужны `seedTasks()` и `{ lock: SHARED_DATA_LOCK }`.
 - Никаких `waitForTimeout`. Жди состояние: `expect(...).toBeVisible()`, `toBeEnabled()`.
 - `@critical` в названии означает продуктовый инвариант. Такие тесты идут и в merge queue.
+- Тег файловый: `@critical` в названии теста помечает весь файл — при выборе `E2E_FEATURES` файл с тегом гоняется целиком. Хотя бы один критичный тест в файле — файл помечен (`@critical` у каждого критичного теста); сценарии, которые должны выпадать из такого PR, клади в отдельный файл без тега.
 - Видео прогона как доказательство: `VIDEO=on pnpm e2e`.
 
 ## Запрещено
