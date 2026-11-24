@@ -7,16 +7,18 @@
 Создайте в UI (Settings → Rules → Rulesets) по снимку [`.github/rulesets/main.json`](../.github/rulesets/main.json):
 
 - merge только через PR;
-- обязательные check-и — **`gate`** (агрегирует job-ы CI) и **`gate-integrity`** ([ADR 0002](adr/0002-gate-integrity.md): доверенный workflow на `pull_request_target` из базовой ветки, код PR не читается и не исполняется). Третий обязательный check — **`bundle-approval`** ([ADR 0013](adr/0013-bundle-delta-gate.md): доверенное одобрение роста бандла) — в снимке сознательно отсутствует и добавляется вручную шагом 3 чек-листа ниже, после создания label;
+- обязательные check-и — **`gate`** (агрегирует job-ы CI), **`gate-integrity`** ([ADR 0002](adr/0002-gate-integrity.md): доверенный workflow на `pull_request_target` из базовой ветки, код PR не читается и не исполняется) и **`bundle-approval`** ([ADR 0013](adr/0013-bundle-delta-gate.md): доверенное одобрение роста бандла). Все три — в снимке: без `bundle-approval` среди обязательных рост бандла сверх 5 КБ не блокирует merge — красный job `bundle-delta` виден в PR, но не обязателен;
 - 1 апрув, обязательное ревью **CODEOWNERS**, сброс апрува при новом push, апрув последнего push, разрешённые треды;
 - запрет force-push и удаления ветки, линейная история; merge-метод — только squash;
 - **строгая база** (`Require branches to be up to date before merging`, в снимке — `strict_required_status_checks_policy: true`): PR сливается только с веткой, обновлённой до текущего `main` — главный эффект L4: `gate` проходит на смёрженном состоянии, и два PR, зелёных по отдельности, не дают вместе красный `main` (A9). Полный эффект L4 («всё то же без affected-сокращений») даёт только merge queue: интерференции вне affected-наборов по-прежнему ловит CI на `push: main`.
 
 Чек-лист обязательных check (согласованность снимка и этого списка держит канарейка `tools/test/setup-docs-consistency.test.ts`):
 
-1. Создать ruleset из снимка: в нём два обязательных check — `gate` и `gate-integrity`.
-2. Создать label `bundle-growth-approved` (раздел 2).
-3. Добавить `bundle-approval` в required checks того же ruleset (Edit ruleset → Required status checks → `bundle-approval`). Без этого шага рост бандла сверх 5 КБ не блокирует merge вообще — окно ADR 0013 закрывается именно здесь.
+1. Создать label `bundle-growth-approved` (раздел 2) — до ruleset: им человек снимает блокировку `bundle-approval`, когда PR растит бандл сверх порога.
+2. Создать ruleset из снимка: в нём три обязательных check — `gate`, `gate-integrity` и `bundle-approval`.
+3. Для проекта, настроенного по прежней версии снимка с двумя check: добавить `bundle-approval` в required checks существующего ruleset (Edit ruleset → Required status checks → `bundle-approval`). Без этого шага рост бандла сверх 5 КБ не блокирует merge вообще.
+
+Живое правило проверяйте сверкой со снимком, а не по чек-листу: `node tools/check-ruleset-drift.ts` (exit 0 — живой ruleset равен снимку; в шаблоне репозитория его ведёт ночной чек «ruleset drift (a11)»). Правка живого ruleset через API — только полным payload: GET → правка нужных полей → PUT всего документа → GET-after-PUT со сверкой полей; частичный PUT молча сбрасывает неприсланные параметры правил к дефолтам ([реестр пропущенных дефектов](escaped-defects.md), 2026-11-22).
 
 Merge queue, если доступна на вашем тарифе, стоит включить: все обязательные workflow уже слушают `merge_group` (no-op job с тем же именем check), так что очередь не зависнет. Два режима:
 
