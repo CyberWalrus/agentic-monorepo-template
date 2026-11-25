@@ -16,12 +16,15 @@ describe('TaskItem', () => {
   });
 
   it('reflects the completed state', async () => {
+    // Как в продукте — внутри списка: role="listitem" у <li> гарантирован спецификацией.
     const screen = await render(
-      <TaskItem task={{ ...task, completed: true }} onToggle={() => {}} />,
+      <ul>
+        <TaskItem task={{ ...task, completed: true }} onToggle={() => {}} />
+      </ul>,
     );
 
     await expect.element(screen.getByRole('checkbox')).toBeChecked();
-    await expect.element(screen.getByTestId('task-item')).toHaveAttribute('data-completed', 'true');
+    await expect.element(screen.getByRole('listitem')).toHaveAttribute('data-completed', 'true');
   });
 
   it('calls onToggle with the task id when the title is clicked', async () => {
