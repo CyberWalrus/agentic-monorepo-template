@@ -127,7 +127,9 @@ export default defineConfig({
       // Гейты всегда стартуют свой сервер (З9, A5 PR-3); ручной reuse — только
       // через REUSE_SERVER=1 и токен этого worktree (см. INSTANCE_ID выше).
       reuseExistingServer: reuseManualServer,
-      env: { PORT: String(ports.api), ENABLE_TEST_API: '1', INSTANCE_ID },
+      // NODE_ENV=test — вторая половина явного включения (e69): сервер открывает
+      // тестовый API только при NODE_ENV=development|test, иначе отказывает в старте.
+      env: { PORT: String(ports.api), ENABLE_TEST_API: '1', INSTANCE_ID, NODE_ENV: 'test' },
     },
     {
       // Production-способ запуска — тот же entry, что деплоится (C3.2, C3.4):
