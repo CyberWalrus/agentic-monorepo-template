@@ -8,7 +8,11 @@
 # Диспатч — по образцу visual-approve (b3.1, ADR 0015): ci.yml запускается на
 # ref head-ветки PR — на тот же head SHA, с определением ci.yml из ветки. Прогон
 # идёт с workflow_dispatch-семантикой: всё дерево, без merge-ref и bundle-delta.
-# Полные гейты на новой базе — synchronize (Update branch) и merge queue.
+# На новой базе PR проверяют synchronize (Update branch) и merge queue — всё,
+# кроме bundle-delta: в очереди и на push его нет. Поэтому доверенный
+# bundle-approval (gate-integrity.yml) блокирует замер, сделанный до смены base,
+# до следующего synchronize: без этого retarget уходил бы в merge с зелёным
+# замером против прежней базы (находка security-ревью e78).
 #
 # Код PR не исполняется: ни checkout, ни скриптов — один вызов gh API с
 # константами и именем head-ветки из события. Права — минимум на диспатч.

@@ -1139,6 +1139,59 @@ export const CANARIES: GateCanary[] = [
     },
   },
   {
+    // Хвост e78 (security-ревью): ci.yml на edited больше не пересматривает
+    // bundle-delta — прогон по диспатчу его не делает, synchronize смена base
+    // не порождает. Доверенный bundle-approval блокирует замер, чей run создан
+    // не позже последней смены base (tools/check-bundle-gate.ts). Плохое
+    // изменение — блок снят: retarget с зелёным замером против прежней базы
+    // ушёл бы в merge без label. Логику чекера держит его тест: bad-change
+    // краснит шаг test:hooks. Якорь — заголовок теста «замер до смены base».
+    name: 'bundle-approval доверяет замеру до смены base',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /замер до смены base/,
+    expects: [{ file: 'tools/test/check-bundle-gate.test.ts', text: 'замер до смены base — FAIL' }],
+    apply: (root) => {
+      const path = join(root, 'tools', 'check-bundle-gate.ts');
+      const source = readFileSync(path, 'utf8');
+      const unblocked = source.replace('  } else if (stale) {\n', '  } else if (false) {\n');
+      if (unblocked === source) {
+        throw new Error('canary anchor not found: check-bundle-gate.ts has no stale branch');
+      }
+      writeFileSync(path, unblocked);
+    },
+  },
+  {
+    // Проводка той же блокировки: gate-integrity.yml добывает время смены base
+    // из таймлайна PR и передаёт чекеру base-change.json и suites.json. Плохое
+    // изменение — тип события убран из запроса: смену base чекер не увидит и
+    // замер против прежней базы пройдёт зелёным; wiring-тест e78 в
+    // tools/test/gates-canary.test.ts краснеет. Якорь — заголовок того же
+    // wiring-теста: третья половина проводки e78.
+    name: 'bundle-approval не видит смену base',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /проводка: ci\.yml не слушает edited, смену base держит ci-base-change\.yml/,
+    expects: [
+      {
+        file: 'tools/test/gates-canary.test.ts',
+        text: 'проводка: ci.yml не слушает edited, смену base держит ci-base-change.yml (e78)',
+      },
+    ],
+    apply: (root) => {
+      const path = join(root, '.github/workflows/gate-integrity.yml');
+      const source = readFileSync(path, 'utf8');
+      const blinded = source.replace(
+        'itemTypes: [BASE_REF_CHANGED_EVENT], last: 1',
+        'itemTypes: [], last: 1',
+      );
+      if (blinded === source) {
+        throw new Error('canary anchor not found: gate-integrity.yml does not read base changes');
+      }
+      writeFileSync(path, blinded);
+    },
+  },
+  {
     // Классы защиты tools/ (ADR 0014, e9): шаг verify → pnpm tool-class:check.
     // Плохое изменение — срыв проводки script→гейт (tool-class:check удалён из
     // package.json): шаг verify ломается, замыкание tools/ перестаёт

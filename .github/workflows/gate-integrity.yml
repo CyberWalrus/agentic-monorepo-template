@@ -151,7 +151,8 @@ jobs:
   # Определение из base (pull_request_target), код PR не исполняется — по
   # образцу ADR 0002: замер делает ci-job bundle-delta (untrusted, merge-ref),
   # решение — здесь, по GitHub API. Fail-closed: check-run не найден, не
-  # завершён, отменён или одобрение невалидно — красный.
+  # завершён, отменён или одобрение невалидно — красный. Замер, чей run создан
+  # не позже последней смены base-ветки PR, — тоже красный (e78).
   bundle-approval:
     name: bundle-approval
     if: always() && github.event_name == 'pull_request_target'
@@ -238,9 +239,41 @@ jobs:
           gh api --paginate "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > check-runs-pages.json
           jq -s '{total_count: length, check_runs: [.[].check_runs[]]}' check-runs-pages.json > check-runs.json
 
+      # e78 (хвост, security-ревью): ci.yml на edited больше не пересматривает
+      # bundle-delta — ci-base-change.yml диспатчит его с семантикой
+      # workflow_dispatch (без merge-ref), в merge queue и на push его нет.
+      # После retarget на head SHA остаётся замер против прежней базы. Чекер
+      # сверяет время последней смены base со временем создания замера; оба —
+      # только GitHub API, код PR не читается.
+      #   base-change.json — таймлайн PR: тип события отфильтрован до пагинации,
+      #     last: 1 — последнее событие; «[]» — смен не было, тогда время
+      #     замера чекеру не нужно.
+      #   suites.json — check suite каждого check-run bundle-delta: по id suite
+      #     check-run связывается с run'ом, created_at suite равен created_at
+      #     run'а. Без suite чекер при смене base блокирует (fail-closed).
+      - name: Fetch base change and bundle-delta suites
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh api graphql -f query="{
+            repository(owner: \"${GITHUB_REPOSITORY_OWNER}\", name: \"${GITHUB_REPOSITORY#*/}\") {
+              pullRequest(number: $PR_NUMBER) {
+                timelineItems(itemTypes: [BASE_REF_CHANGED_EVENT], last: 1) {
+                  nodes { ... on BaseRefChangedEvent { createdAt previousRefName currentRefName } }
+                }
+              }
+            }
+          }" --jq '.data.repository.pullRequest.timelineItems.nodes' > base-change.json
+          : > suites-pages.jsonl
+          for SUITE in $(jq -r '[.check_runs[] | select(.name == "bundle-delta" and .check_suite.id? != null) | .check_suite.id] | unique | .[]' check-runs.json); do
+            gh api "repos/${GITHUB_REPOSITORY}/check-suites/$SUITE" --jq '{id, created_at}' >> suites-pages.jsonl
+          done
+          jq -s '.' suites-pages.jsonl > suites.json
+
       - name: Bundle growth gate
         # Кандидаты CODEOWNERS в порядке приоритета GitHub (как в integrity).
-        run: node tools/check-bundle-gate.ts check-runs.json pr.json events.json head-commit.json .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS
+        run: node tools/check-bundle-gate.ts check-runs.json pr.json events.json head-commit.json base-change.json suites.json .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS
 
   # Job'ы merge_group. В очереди определение workflow — из временной
   # ветки с изменениями PR, повторная проверка не из доверенной базы; PR попадает

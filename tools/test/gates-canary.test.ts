@@ -755,7 +755,9 @@ describe('проводка: CI перезапускается на новый he
   // диспатчит ci.yml на head-ветку PR (по образцу visual-approve, ADR 0015).
   // Проводка живёт в CI, отдельного шага verify у неё нет (З6): обе половины
   // держат канарейки «ci.yml снова слушает edited» и «смену base никто не
-  // перезапускает» — их bad-change краснит этот шаг test:hooks.
+  // перезапускает» — их bad-change краснит этот шаг test:hooks. Третью половину
+  // — блокировку замера против прежней базы в bundle-approval — держит
+  // канарейка «bundle-approval не видит смену base» на том же заголовке.
   const repoRoot = resolve(import.meta.dirname, '..', '..');
 
   it('проводка: ci.yml не слушает edited, смену base держит ci-base-change.yml (e78)', () => {
@@ -792,5 +794,19 @@ describe('проводка: CI перезапускается на новый he
     );
     expect(source, 'без actions: write токен диспатч не примет').toMatch(/^ {2}actions: write$/m);
     expect(source, 'идущий диспатч отменяется').toMatch(/cancel-in-progress: false/);
+
+    // Третья половина (хвост e78, security-ревью): прогон по диспатчу
+    // bundle-delta не пересматривает, в merge queue и на push его нет. Замер
+    // против прежней базы обязан блокировать доверенный bundle-approval —
+    // иначе retarget уходит в merge без label.
+    const integrity = readFileSync(join(repoRoot, '.github/workflows/gate-integrity.yml'), 'utf8');
+
+    expect(
+      integrity,
+      'bundle-approval не читает смену base из таймлайна PR: замер против прежней базы пройдёт зелёным',
+    ).toMatch(/timelineItems\(itemTypes: \[BASE_REF_CHANGED_EVENT\], last: 1\)/);
+    expect(integrity, 'bundle-approval не передаёт чекеру время смены base и время замера').toMatch(
+      /node tools\/check-bundle-gate\.ts check-runs\.json pr\.json events\.json head-commit\.json base-change\.json suites\.json \.github\/CODEOWNERS CODEOWNERS docs\/CODEOWNERS/,
+    );
   });
 });

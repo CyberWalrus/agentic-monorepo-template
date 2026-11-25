@@ -1,8 +1,9 @@
 /**
  * Тесты доверенного чекера дельта-гейта бандла (A6 PR-2, ADR 0013): успешный
  * замер — PASS; красный замер без label / с невалидным одобрением — FAIL
- * (fail-closed); нет check-run, не завершён, отменён — FAIL; при retarget
- * берётся последний завершённый по completed_at.
+ * (fail-closed); нет check-run, не завершён, отменён — FAIL; на одном head SHA
+ * берётся последний завершённый по completed_at; замер, сделанный до последней
+ * смены base-ветки PR, — FAIL (e78).
  */
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -32,6 +33,10 @@ interface Fixture {
   labeledActor?: string;
   labeledAt?: string;
   codeowners?: string;
+  /** Узлы timelineItems(itemTypes: [BASE_REF_CHANGED_EVENT], last: 1); по умолчанию смен base не было. */
+  baseChange?: unknown;
+  /** check suite каждого check-run bundle-delta: [{ id, created_at }]. */
+  suites?: unknown;
 }
 
 function run(fixture: Fixture): { status: number | null; output: string } {
@@ -57,12 +62,23 @@ function run(fixture: Fixture): { status: number | null; output: string } {
     join(dir, 'head-commit.json'),
     JSON.stringify({ commit: { committer: { date: PUSH_AT } } }),
   );
+  writeFileSync(join(dir, 'base-change.json'), JSON.stringify(fixture.baseChange ?? []));
+  writeFileSync(join(dir, 'suites.json'), JSON.stringify(fixture.suites ?? []));
   const owners = fixture.codeowners ?? OWNERS;
   mkdirSync(join(dir, 'docs'));
   writeFileSync(join(dir, 'docs/CODEOWNERS'), owners);
   const result = spawnSync(
     process.execPath,
-    [checker, 'check-runs.json', 'pr.json', 'events.json', 'head-commit.json', ...CANDIDATES],
+    [
+      checker,
+      'check-runs.json',
+      'pr.json',
+      'events.json',
+      'head-commit.json',
+      'base-change.json',
+      'suites.json',
+      ...CANDIDATES,
+    ],
     { cwd: dir, encoding: 'utf8', timeout: 30_000 },
   );
   if (result.error) {
@@ -170,7 +186,7 @@ it('cancelled conclusion — FAIL (fail-closed)', () => {
   expect(result.output).toMatch(/cancelled/);
 });
 
-it('retarget: берётся последний завершённый по completed_at', () => {
+it('несколько завершённых check-run на одном head (перезапуск, reopen): берётся последний по completed_at', () => {
   const result = run({
     checkRuns: {
       check_runs: [failureRun('2026-11-17T01:00:00Z'), successRun('2026-11-17T02:00:00Z')],
@@ -181,7 +197,7 @@ it('retarget: берётся последний завершённый по comp
   expect(result.output).toMatch(/PASS/);
 });
 
-it('инверсный retarget: старее success, новее failure без label — FAIL', () => {
+it('инверсный: старее success, новее failure без label — FAIL', () => {
   const result = run({
     checkRuns: {
       check_runs: [successRun('2026-11-17T01:00:00Z'), failureRun('2026-11-17T02:00:00Z')],
@@ -191,6 +207,93 @@ it('инверсный retarget: старее success, новее failure без
   expect(result.status).toBe(1);
   expect(result.output).toMatch(/FAIL/);
   expect(result.output).toMatch(/не стоит/);
+});
+
+// e78: ci.yml больше не слушает edited, а ci-base-change.yml диспатчит ci.yml с
+// семантикой workflow_dispatch — без merge-ref и bundle-delta. После retarget на
+// head SHA остаётся замер против прежней базы; bundle-approval обязан его
+// заблокировать, иначе PR с ростом на новой базе проходит без label. Замер
+// связан с временем создания через check suite run'а.
+const SUITE = 7;
+const inSuite = (checkRun: {
+  name: string;
+  status: string;
+  conclusion: string;
+  completed_at: string;
+}) => ({ ...checkRun, check_suite: { id: SUITE } });
+const measuredAt = (createdAt: string) => [{ id: SUITE, created_at: createdAt }];
+const baseChangedAt = (createdAt: string) => [
+  { createdAt, previousRefName: 'task/other', currentRefName: 'main' },
+];
+const RETARGETED_AT = '2026-11-17T03:00:00Z';
+
+it('замер до смены base — FAIL (retarget не пересматривает bundle-delta, e78)', () => {
+  const result = run({
+    checkRuns: { check_runs: [inSuite(successRun('2026-11-17T02:00:00Z'))] },
+    suites: measuredAt('2026-11-17T01:00:00Z'),
+    baseChange: baseChangedAt(RETARGETED_AT),
+    labels: [],
+  });
+  expect(result.status).toBe(1);
+  expect(result.output).toMatch(/FAIL/);
+  expect(result.output).toMatch(/прежней базе/);
+  expect(result.output).toMatch(/task\/other → main/);
+  expect(result.output).toMatch(/Update branch/);
+});
+
+it('замер после смены base (close → reopen на том же head) — PASS', () => {
+  const result = run({
+    checkRuns: { check_runs: [inSuite(successRun('2026-11-17T05:00:00Z'))] },
+    suites: measuredAt('2026-11-17T04:00:00Z'),
+    baseChange: baseChangedAt(RETARGETED_AT),
+    labels: [],
+  });
+  expect(result.status).toBe(0);
+  expect(result.output).toMatch(/PASS/);
+});
+
+it('замер и смена base в одну секунду — FAIL: порядок не известен', () => {
+  const result = run({
+    checkRuns: { check_runs: [inSuite(successRun('2026-11-17T05:00:00Z'))] },
+    suites: measuredAt(RETARGETED_AT),
+    baseChange: baseChangedAt(RETARGETED_AT),
+    labels: [],
+  });
+  expect(result.status).toBe(1);
+  expect(result.output).toMatch(/прежней базе/);
+});
+
+it('замер до смены base + свежий label — FAIL: одобрение прежней базы не переносится', () => {
+  const result = run({
+    checkRuns: { check_runs: [inSuite(failureRun('2026-11-17T02:00:00Z'))] },
+    suites: measuredAt('2026-11-17T01:00:00Z'),
+    baseChange: baseChangedAt(RETARGETED_AT),
+    labels: ['bundle-growth-approved'],
+  });
+  expect(result.status).toBe(1);
+  expect(result.output).toMatch(/прежней базе/);
+});
+
+it('смена base есть, время замера неизвестно (suite не найден) — FAIL (fail-closed)', () => {
+  const result = run({
+    checkRuns: { check_runs: [successRun('2026-11-17T05:00:00Z')] },
+    suites: measuredAt('2026-11-17T04:00:00Z'),
+    baseChange: baseChangedAt(RETARGETED_AT),
+    labels: [],
+  });
+  expect(result.status).toBe(1);
+  expect(result.output).toMatch(/время создания замера .* неизвестно/);
+});
+
+it('смена base есть, время смены не читается — FAIL (fail-closed)', () => {
+  const result = run({
+    checkRuns: { check_runs: [inSuite(successRun('2026-11-17T05:00:00Z'))] },
+    suites: measuredAt('2026-11-17T04:00:00Z'),
+    baseChange: [{ createdAt: 'не дата', previousRefName: 'task/other', currentRefName: 'main' }],
+    labels: [],
+  });
+  expect(result.status).toBe(1);
+  expect(result.output).toMatch(/время смены не читается/);
 });
 
 it('timed_out conclusion — FAIL (fail-closed)', () => {
@@ -246,9 +349,20 @@ it('pushedAt из pr.json главнее committer.date: label старше ре
   );
   mkdirSync(join(dir, 'docs'));
   writeFileSync(join(dir, 'docs/CODEOWNERS'), OWNERS);
+  writeFileSync(join(dir, 'base-change.json'), '[]');
+  writeFileSync(join(dir, 'suites.json'), '[]');
   const result = spawnSync(
     process.execPath,
-    [checker, 'check-runs.json', 'pr.json', 'events.json', 'head-commit.json', ...CANDIDATES],
+    [
+      checker,
+      'check-runs.json',
+      'pr.json',
+      'events.json',
+      'head-commit.json',
+      'base-change.json',
+      'suites.json',
+      ...CANDIDATES,
+    ],
     { cwd: dir, encoding: 'utf8', timeout: 30_000 },
   );
   if (result.error) {
