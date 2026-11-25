@@ -119,11 +119,28 @@ describe('router divergence from contract', () => {
       status: validationFailed.status,
       message: validationFailed.message,
     };
-    expect(answered).toEqual({
-      'tasks.create': invalidInput,
-      'tasks.remove': { code: 'FORBIDDEN', status: 403, message: ERROR_MESSAGES.FORBIDDEN },
-      'tasks.toggle': invalidInput,
-    });
+    const forbidden = { code: 'FORBIDDEN', status: 403, message: ERROR_MESSAGES.FORBIDDEN };
+
+    // Ожидание выводится из политики каждой проверенной процедуры — тот же
+    // признак, что в operationsWithInputValidation, — а не перечисляется по
+    // именам: `pnpm gen feature` добавляет домен в роутер, этот файл не трогая.
+    const expected = Object.fromEntries(
+      [...collectProcedures(router)]
+        .filter(({ procedure }) => hasValidatedInput(procedure))
+        .map(
+          ({ path, procedure }) =>
+            [
+              path.join('.'),
+              accessPolicyFromMeta(procedure['~orpc'].meta)?.type === 'public'
+                ? invalidInput
+                : forbidden,
+            ] as const,
+        ),
+    );
+
+    // Перечень не пуст: иначе порядок доказывался бы впустую
+    expect(Object.keys(expected), 'no procedure validates its input').not.toEqual([]);
+    expect(answered).toEqual(expected);
   });
 
   // e52: проверка владельца сквозная между рабочими пространствами (ADR 0020),
@@ -269,56 +286,84 @@ describe('spec on the wire', () => {
     );
   }
 
-  /** Статусы на проводе по каждому телу SENT — для операций, которым адаптер передаёт тело. */
-  async function statuses(): Promise<Record<string, Sent>> {
+  /** Ответы операции на проводе: `sent` — по каждому телу SENT, `noBody` — на запрос без тела. */
+  interface WireAnswers {
+    sent: Sent;
+    noBody: number;
+  }
+
+  /**
+   * Ответы на проводе — для операций, которым адаптер передаёт тело. Запрос без
+   * тела — контроль: ответ самой операции на отсутствие входа.
+   */
+  async function answers(): Promise<Record<string, WireAnswers>> {
     const app = createApp({ tasks: new InMemoryTaskRepository(), bodyLimitBytes: 1024 });
     const rows = await Promise.all(
       (await operationsOfSpec())
         // GET и HEAD с телом собирает только настоящий адаптер — app.test.ts, «on a real HTTP server»
         .filter(({ method }) => method !== 'get' && method !== 'head')
         .map(async ({ key, method, url }) => {
-          const answer = async (body: string) =>
+          const statusOf = async (body?: string) =>
             (
               await app.request(url, {
                 method: method.toUpperCase(),
                 headers: JSON_HEADERS,
-                body,
+                ...(body === undefined ? {} : { body }),
               })
             ).status;
-          const row: Sent = {
-            malformed: await answer(SENT.malformed),
-            overTheLimit: await answer(SENT.overTheLimit),
-            array: await answer(SENT.array),
-            null: await answer(SENT.null),
-            object: await answer(SENT.object),
-          };
-          return [key, row] as const;
+          return [
+            key,
+            {
+              sent: {
+                malformed: await statusOf(SENT.malformed),
+                overTheLimit: await statusOf(SENT.overTheLimit),
+                array: await statusOf(SENT.array),
+                null: await statusOf(SENT.null),
+                object: await statusOf(SENT.object),
+              },
+              noBody: await statusOf(),
+            },
+          ] as const;
         }),
     );
     return Object.fromEntries(rows);
   }
 
-  // Ожидание записано руками с провода. toggle и remove тела в спеке не
-  // объявляют — и всё же получают 400 на битое тело и 413; remove на вход,
-  // не прошедший валидацию, отвечает FORBIDDEN: проверка доступа раньше.
+  // Ограждения отвечают по форме байтов, а не по операции: битое тело — 400,
+  // тело сверх потолка — 413 на каждой операции, которой адаптер передаёт
+  // тело, — и на тех, что тела в спеке не объявляют (toggle, remove).
+  // Корректное тело в пределах потолка ограждение не отбивает — отвечает сама
+  // операция: с проверкой доступа — FORBIDDEN (проверка доступа раньше
+  // валидации и раньше домена); public — как на запрос без тела: массив, null
+  // и пустой объект входа не несут. Ожидание строится из роутера для каждой
+  // операции спеки, без перечня по именам: `pnpm gen feature` добавляет домен
+  // в роутер, этот файл не трогая.
   it('answers a body sent to an operation that declares none with the guard responses', async () => {
-    expect(await statuses()).toEqual({
-      'DELETE /tasks/{id}': {
-        malformed: 400,
-        overTheLimit: 413,
-        array: 403,
-        null: 403,
-        object: 403,
-      },
-      'POST /tasks': { malformed: 400, overTheLimit: 413, array: 400, null: 400, object: 400 },
-      'POST /tasks/{id}/toggle': {
-        malformed: 400,
-        overTheLimit: 413,
-        array: 404,
-        null: 404,
-        object: 404,
-      },
-    });
+    // Ключи «METHOD /path» операций с проверкой доступа: политика не public —
+    // та же политика, по которой спека решает, каким обещать 400 валидации
+    const accessChecked = new Set(
+      [...collectProcedures(router)]
+        .filter(({ procedure }) => accessPolicyFromMeta(procedure['~orpc'].meta)?.type !== 'public')
+        .map(({ procedure }) => {
+          const route = procedure['~orpc'].route;
+          return `${route?.method?.toUpperCase()} ${route?.path}`;
+        }),
+    );
+    const rows = await answers();
+
+    const guard = { malformed: 400, overTheLimit: 413 };
+    const expected = Object.fromEntries(
+      Object.entries(rows).map(([key, { noBody }]) => {
+        const own = accessChecked.has(key) ? 403 : noBody;
+        return [key, { ...guard, array: own, null: own, object: own }] as const;
+      }),
+    );
+
+    // Перечень не пуст: иначе инвариант доказывался бы впустую
+    expect(Object.keys(rows), 'no operation receives a body on the wire').not.toEqual([]);
+    expect(
+      Object.fromEntries(Object.entries(rows).map(([key, { sent }]) => [key, sent] as const)),
+    ).toEqual(expected);
   });
 
   // Красный, когда операция отвечает статусом, которого спека не описывает, —
@@ -327,8 +372,8 @@ describe('spec on the wire', () => {
     const documented = new Map(
       (await operationsOfSpec()).map(({ key, documented: codes }) => [key, codes] as const),
     );
-    const undocumented = Object.entries(await statuses()).flatMap(([key, row]) =>
-      Object.entries(row)
+    const undocumented = Object.entries(await answers()).flatMap(([key, { sent }]) =>
+      Object.entries(sent)
         .filter(([, status]) => !documented.get(key)?.includes(String(status)))
         .map(([name, status]) => `${key}: ${name} → ${status}`),
     );

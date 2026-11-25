@@ -800,8 +800,12 @@ describe('on a real HTTP server', () => {
     );
     const gets = Object.entries(spec.paths ?? {}).filter(([, item]) => item?.get !== undefined);
 
+    // Инвариант — на каждой GET-операции, без перечня путей: `pnpm gen feature`
+    // добавляет в контракт публичный `GET /<name>`, общие тесты не трогая.
+    // Перечень не пуст — иначе проверки ниже прошли бы впустую.
+    expect(gets.length, 'the contract has no GET operation').toBeGreaterThan(0);
+
     try {
-      expect(gets.map(([path]) => path)).toEqual(['/tasks']);
       await Promise.all(
         gets.map(async ([path, item]) => {
           const { raw } = await rawExchange(
