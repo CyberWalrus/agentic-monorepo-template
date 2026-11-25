@@ -38,7 +38,8 @@
                       },
                       "createdAt": {
                         "type": "string",
-                        "format": "date-time"
+                        "format": "date-time",
+                        "description": "Creation instant in UTC: RFC 3339 with the `Z` suffix, a UTC offset is rejected. Answers always carry the canonical form of JavaScript Date#toISOString(), milliseconds included (for example 2026-11-01T10:00:00.000Z), from every storage implementation."
                       }
                     },
                     "required": [
@@ -150,7 +151,19 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "x-workspace-id",
+            "in": "header",
+            "required": false,
+            "description": "Workspace of the request — the isolation scope of E2E scenarios. 1 to 64 characters: letters, digits, underscore or hyphen. Optional: without the header, or when its value is not of this form, the request runs in the ownerless scope and only lists and changes the tasks that belong to no workspace; no error is answered, so a misspelled header name silently selects another scope. Tasks of another workspace are out of reach: toggle answers 404, remove answers 403.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[\\w-]{1,64}$"
+            }
+          }
+        ]
       },
       "post": {
         "operationId": "tasks.create",
@@ -198,7 +211,8 @@
                     },
                     "createdAt": {
                       "type": "string",
-                      "format": "date-time"
+                      "format": "date-time",
+                      "description": "Creation instant in UTC: RFC 3339 with the `Z` suffix, a UTC offset is rejected. Answers always carry the canonical form of JavaScript Date#toISOString(), milliseconds included (for example 2026-11-01T10:00:00.000Z), from every storage implementation."
                     }
                   },
                   "required": [
@@ -405,7 +419,19 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "x-workspace-id",
+            "in": "header",
+            "required": false,
+            "description": "Workspace of the request — the isolation scope of E2E scenarios. 1 to 64 characters: letters, digits, underscore or hyphen. Optional: without the header, or when its value is not of this form, the request runs in the ownerless scope and only lists and changes the tasks that belong to no workspace; no error is answered, so a misspelled header name silently selects another scope. Tasks of another workspace are out of reach: toggle answers 404, remove answers 403.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[\\w-]{1,64}$"
+            }
+          }
+        ]
       }
     },
     "/tasks/{id}/toggle": {
@@ -420,6 +446,16 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "x-workspace-id",
+            "in": "header",
+            "required": false,
+            "description": "Workspace of the request — the isolation scope of E2E scenarios. 1 to 64 characters: letters, digits, underscore or hyphen. Optional: without the header, or when its value is not of this form, the request runs in the ownerless scope and only lists and changes the tasks that belong to no workspace; no error is answered, so a misspelled header name silently selects another scope. Tasks of another workspace are out of reach: toggle answers 404, remove answers 403.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[\\w-]{1,64}$"
             }
           }
         ],
@@ -445,7 +481,8 @@
                     },
                     "createdAt": {
                       "type": "string",
-                      "format": "date-time"
+                      "format": "date-time",
+                      "description": "Creation instant in UTC: RFC 3339 with the `Z` suffix, a UTC offset is rejected. Answers always carry the canonical form of JavaScript Date#toISOString(), milliseconds included (for example 2026-11-01T10:00:00.000Z), from every storage implementation."
                     }
                   },
                   "required": [
@@ -728,6 +765,16 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "x-workspace-id",
+            "in": "header",
+            "required": false,
+            "description": "Workspace of the request — the isolation scope of E2E scenarios. 1 to 64 characters: letters, digits, underscore or hyphen. Optional: without the header, or when its value is not of this form, the request runs in the ownerless scope and only lists and changes the tasks that belong to no workspace; no error is answered, so a misspelled header name silently selects another scope. Tasks of another workspace are out of reach: toggle answers 404, remove answers 403.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[\\w-]{1,64}$"
             }
           }
         ],
