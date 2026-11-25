@@ -705,3 +705,92 @@ describe('якоря канареек живы на текущем дереве 
     }
   });
 });
+
+/** Блок `on:` workflow — от строки `on:` до следующего ключа верхнего уровня. */
+function triggers(source: string): string {
+  const lines = source.split('\n');
+  const start = lines.indexOf('on:');
+  if (start === -1) {
+    return '';
+  }
+  const end = lines.findIndex((line, index) => index > start && /^[^\s#]/.test(line));
+  return lines.slice(start + 1, end === -1 ? undefined : end).join('\n');
+}
+
+/**
+ * `types: [...]` события в блоке `on:` — по строкам: YAML-парсера в tools нет.
+ * Комментарии между ключом события и его типами пропускаются.
+ */
+function eventTypes(block: string, event: string): string[] {
+  const lines = block.split('\n');
+  const key = lines.find((line) => line.trim() === `${event}:`);
+  if (key === undefined) {
+    return [];
+  }
+  const indent = key.length - key.trimStart().length;
+  const body = lines.slice(lines.indexOf(key) + 1);
+  for (const line of body) {
+    const text = line.trim();
+    if (text === '' || text.startsWith('#')) {
+      continue;
+    }
+    if (line.length - line.trimStart().length <= indent) {
+      break;
+    }
+    const list = /^types:\s*\[([^\]]*)\]$/.exec(text)?.[1];
+    if (list !== undefined) {
+      return list.split(',').map((type) => type.trim().replaceAll("'", ''));
+    }
+  }
+  return [];
+}
+
+describe('проводка: CI перезапускается на новый head, а не на правку тела PR (e78)', () => {
+  // Смена base-ветки не порождает synchronize (check привязан к head SHA), а
+  // edited срабатывает на любую правку PR: пока ci.yml слушал edited, правка
+  // тела создала второй прогон CI и отменила идущий (PR #239, 24.11.2026).
+  // Условие уровня job не годится: запуск всё равно создаётся, а concurrency
+  // отменяет предыдущий до вычисления условий. Поэтому ci.yml слушает только
+  // новый head, а смену base держит ci-base-change.yml — edited с changes.base
+  // диспатчит ci.yml на head-ветку PR (по образцу visual-approve, ADR 0015).
+  // Проводка живёт в CI, отдельного шага verify у неё нет (З6): обе половины
+  // держат канарейки «ci.yml снова слушает edited» и «смену base никто не
+  // перезапускает» — их bad-change краснит этот шаг test:hooks.
+  const repoRoot = resolve(import.meta.dirname, '..', '..');
+
+  it('проводка: ci.yml не слушает edited, смену base держит ci-base-change.yml (e78)', () => {
+    const on = triggers(readFileSync(join(repoRoot, '.github/workflows/ci.yml'), 'utf8'));
+
+    expect(
+      eventTypes(on, 'pull_request'),
+      'ci.yml слушает edited: правка тела PR создаст прогон CI, а concurrency отменит идущий — смену base держит ci-base-change.yml',
+    ).not.toContain('edited');
+    expect(eventTypes(on, 'pull_request'), 'ci.yml не слушает новый head PR').toEqual(
+      expect.arrayContaining(['opened', 'synchronize', 'reopened']),
+    );
+    expect(
+      on,
+      'ci.yml без workflow_dispatch: диспатч ci-base-change.yml на смену base не пройдёт',
+    ).toMatch(/^ {2}workflow_dispatch:\s*$/m);
+
+    // Вторая половина — смена base: её держит ci-base-change.yml.
+    const source = readFileSync(join(repoRoot, '.github/workflows/ci-base-change.yml'), 'utf8');
+
+    expect(
+      eventTypes(triggers(source), 'pull_request'),
+      'ci-base-change.yml слушает не только edited',
+    ).toEqual(['edited']);
+    expect(
+      source,
+      'ci-base-change.yml не проверяет смену base: правка тела PR диспатчит CI',
+    ).toMatch(/if: github\.event\.changes\.base != null/);
+    expect(source, 'ci-base-change.yml не диспатчит ci.yml').toMatch(
+      /actions\/workflows\/ci\.yml\/dispatches" -f ref="\$\{BRANCH\}"/,
+    );
+    expect(source, 'диспатч уходит не на head-ветку PR').toMatch(
+      /BRANCH: \$\{\{ github\.event\.pull_request\.head\.ref \}\}/,
+    );
+    expect(source, 'без actions: write токен диспатч не примет').toMatch(/^ {2}actions: write$/m);
+    expect(source, 'идущий диспатч отменяется').toMatch(/cancel-in-progress: false/);
+  });
+});
