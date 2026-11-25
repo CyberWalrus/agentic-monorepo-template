@@ -32,13 +32,57 @@ on:
       - tools/copier-version.txt
       - .github/CODEOWNERS.jinja
       - docs/CODEOWNERS
+  # Push в main (e79): PR с согласованными breaking changes держит negative control
+  # красным по замыслу (шаг openapi), и отдельные канарейки на нём не судятся —
+  # они судятся здесь, на main после мержа, где negative control зелёный.
+  # Необязательный check: вне needs у gate и required checks.
+  #
+  # Пути — суперсет PR-фильтра + apps/**, packages/**, e2e/**: канарейки судят
+  # verify по всему дереву, и сломать их может мерж, тронувший только код
+  # (24.11 — e57, тест с точным списком процедур в packages/contracts). Мержи
+  # только с docs/backlog прогон не запускают. Оба списка сверяет
+  # tools/test/check-workflow-health.test.ts.
+  push:
+    branches: [main]
+    paths:
+      - tools/**
+      - .claude/**
+      - .github/actions/**
+      - turbo.json
+      - pnpm-workspace.yaml
+      - package.json
+      - pnpm-lock.yaml
+      - .oxlintrc.json
+      - .oxfmtrc.json
+      - .dependency-cruiser.cjs
+      - knip.json
+      - lefthook.yml
+      - tsconfig.base.json
+      - tsconfig.json
+      - '**/vitest.config.ts'
+      - e2e/playwright.config.ts
+      - '**/stryker.config.json'
+      - .nvmrc
+      - copier.yml
+      - .copier-answers.yml.jinja
+      - .github/rulesets/**
+      - tools/copier-version.txt
+      - .github/CODEOWNERS.jinja
+      - docs/CODEOWNERS
+      - apps/**
+      - packages/**
+      - e2e/**
   # Правки самих workflow (.github/workflows/**) канарейки не перезапускают —
   # их защиту обеспечивает gate-integrity (pull_request_target из base, З2).
   workflow_dispatch:
 
 concurrency:
-  group: canaries-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # PR: группа на номер PR, устаревший прогон отменяется. Push в main (e79):
+  # группа на SHA и без отмены — каждый мерж получает свой вердикт (~14 мин).
+  # Отменённый прогон чекер здоровья счёл бы красным: для push с paths-фильтром
+  # красный conclusion последнего завершённого прогона — нарушение.
+  group: canaries-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
