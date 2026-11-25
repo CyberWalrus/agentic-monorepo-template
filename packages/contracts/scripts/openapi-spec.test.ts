@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 
+import { oc } from '@orpc/contract';
 import type { OpenAPI } from '@orpc/contract';
 import { describe, expect, it } from 'vitest';
 import * as z from 'zod';
@@ -17,6 +18,7 @@ import {
 // e58: заголовок рабочего пространства — имя, параметр и список операций,
 // которые его читают, из единственного источника
 import {
+  readsWorkspace,
   WORKSPACE_HEADER,
   WORKSPACE_HEADER_PARAMETER,
   workspaceScopedOperations,
@@ -910,6 +912,44 @@ describe('workspace header in the spec', () => {
         declaresWorkspaceHeader(operation) ? WORKSPACE_HEADER_PARAMETER : undefined,
       );
     }
+  });
+
+  // e81: слепое место двух тестов выше — оба сверяют спеку с набором из того же
+  // обхода (readerOperations): читатель, потерянный обходом, исчезает из обеих
+  // сторон, и равенство держится. Ожидание здесь литеральное — операции задач из
+  // tasks.test.ts: потеря хотя бы одного читателя настоящего контракта красит.
+  it('documents the header on the real contract against a literal list of operations', async () => {
+    const spec = await generateSpec(contract);
+
+    expect(keysWithWorkspaceHeader(spec)).toEqual([
+      'DELETE /tasks/{id}',
+      'GET /tasks',
+      'POST /tasks',
+      'POST /tasks/{id}/toggle',
+    ]);
+  });
+
+  // e81: метка переживает строитель каталога. oc.router прогоняет роутер через
+  // enhanceContractRouter и заменяет каждую процедуру новым экземпляром из её
+  // `~orpc`; реестр по экземпляру метку терял — читатель выходил в спеку без
+  // заголовка и без ошибки. Ожидание литеральное: набор из того же обхода был бы
+  // стороной дефекта, а не свидетелем.
+  it('documents the header on the readers of a router rebuilt by the oc.router builder', async () => {
+    const spec = await generateSpec(
+      oc.router({
+        tasks: {
+          list: readsWorkspace(oc.route({ method: 'GET', path: '/rebuilt' }).output(z.void())),
+        },
+        health: { ping: oc.route({ method: 'GET', path: '/ping' }).output(z.void()) },
+      }),
+    );
+
+    expect(
+      operationsOf(spec)
+        .map(({ key }) => key)
+        .toSorted(),
+    ).toEqual(['GET /ping', 'GET /rebuilt']);
+    expect(keysWithWorkspaceHeader(spec)).toEqual(['GET /rebuilt']);
   });
 
   it('describes createdAt as the canonical UTC form the answers carry', async () => {
