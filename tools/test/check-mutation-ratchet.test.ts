@@ -33,6 +33,7 @@ import {
   scoreFromReport,
   STATE_ARTIFACT_NAME,
   STATE_FILE_NAME,
+  StrykerThresholdsSchema,
   validateProposals,
 } from '../check-mutation-ratchet.ts';
 
@@ -575,35 +576,53 @@ it('apply: формат конфига сохраняется — меняетс
   // JSON.stringify их разворачивал бы и красил format:check PR храповика
   // (находка ревью PR #142).
   const original = readFileSync(join(repoDir, 'apps', 'web', 'stryker.conf.json'), 'utf8');
-  const configWeb = writeReport(dir, 'web.conf.json', original);
+  // Порог прочитанного конфига — из файла (той же схемой, что читает его CLI),
+  // а не литералом: 67 был верен, пока храповик не поднял порог (PR #289), и
+  // apply отказывал «ровно одно значение break=67 … найдено 0» — тест красил
+  // собственный PR храповика (e83).
+  const current = StrykerThresholdsSchema.parse(JSON.parse(original)).thresholds.break;
   const configContracts = writeReport(
     dir,
     'contracts.conf.json',
     JSON.stringify({ thresholds: { break: 80 } }),
   );
-  const proposalPath = writeReport(
-    dir,
-    'proposal.json',
-    JSON.stringify({
-      schema: 'mutation-ratchet-proposal/1',
-      sha: SHA_B,
-      runId: 222,
-      proposals: [{ domain: 'web', configPath: 'apps/web/stryker.conf.json', from: 67, to: 69 }],
-    }),
-  );
-  const result = runCli([
-    'apply',
-    '--proposal',
-    proposalPath,
-    '--config-web',
-    configWeb,
-    '--config-contracts',
-    configContracts,
-  ]);
-  expect(result.status).toBe(0);
-  const applied = readFileSync(configWeb, 'utf8');
-  expect(applied).toBe(original.replace('"break": 67', '"break": 69'));
-  const oxfmt = spawnSync('pnpm', ['exec', 'oxfmt', '--check', configWeb], { encoding: 'utf8' });
+  // Тот же прогон на двух порогах: фактическом и на два зубца выше (ветка
+  // храповика после первого срабатывания). Литерал, равный порогу main, красит
+  // тест уже на main, а не на следующем поднятии порога.
+  const appliedConfigs: string[] = [];
+  for (const raised of [0, 2]) {
+    const from = current + raised;
+    const to = from + 2;
+    const base = original.replace(`"break": ${current}`, `"break": ${from}`);
+    const configWeb = writeReport(dir, `web-${raised}.conf.json`, base);
+    const proposalPath = writeReport(
+      dir,
+      `proposal-${raised}.json`,
+      JSON.stringify({
+        schema: 'mutation-ratchet-proposal/1',
+        sha: SHA_B,
+        runId: 222,
+        proposals: [{ domain: 'web', configPath: 'apps/web/stryker.conf.json', from, to }],
+      }),
+    );
+    const result = runCli([
+      'apply',
+      '--proposal',
+      proposalPath,
+      '--config-web',
+      configWeb,
+      '--config-contracts',
+      configContracts,
+    ]);
+    expect(result.status).toBe(0);
+    expect(readFileSync(configWeb, 'utf8')).toBe(
+      base.replace(`"break": ${from}`, `"break": ${to}`),
+    );
+    appliedConfigs.push(configWeb);
+  }
+  const oxfmt = spawnSync('pnpm', ['exec', 'oxfmt', '--check', ...appliedConfigs], {
+    encoding: 'utf8',
+  });
   expect(oxfmt.status).toBe(0);
 });
 
