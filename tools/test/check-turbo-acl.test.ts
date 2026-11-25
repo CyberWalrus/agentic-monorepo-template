@@ -157,6 +157,14 @@ function jobBlocks(workflow: string): JobBlock[] {
   return blocks;
 }
 
+/** Тело job без комментариев, условий и пустых строк: сверяет два описания одной джобы. */
+function normalizedJob(body: string): string {
+  return body
+    .split('\n')
+    .filter((line) => line.trim() !== '' && !/^\s*(#|if:)/.test(line))
+    .join('\n');
+}
+
 function objectFile(path: string): Record<string, unknown> {
   const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
@@ -442,7 +450,31 @@ it('проводка: всюду, где workflow зовёт чекер, ток�
       expect(job.body).not.toContain('cache-write');
     }
   }
-  expect(hosts).toContain('canaries.yml:turbo-acl');
+  // Два хоста: push в main и ручной прогон (canaries.yml) и расписание
+  // (nightly.yml) — без ночного канарейка не периодическая.
+  expect(hosts).toEqual(['canaries.yml:turbo-acl', 'nightly.yml:turbo-acl']);
+});
+
+it('проводка: ночной прогон — job turbo-acl в nightly.yml безусловный и в needs у report failure', () => {
+  const wfDir = join(repoDir, '.github', 'workflows');
+  const nightly = readFileSync(join(wfDir, 'nightly.yml'), 'utf8');
+  // Расписание — сам смысл ночного хоста.
+  expect(nightly.slice(0, nightly.indexOf('\njobs:\n'))).toMatch(/\n {2}schedule:\n {4}- cron: /);
+  const jobs = jobBlocks(nightly);
+  const job = jobs.find((entry) => entry.id === 'turbo-acl');
+  expect(job).toBeDefined();
+  expect(job?.body).toContain('run: node tools/check-turbo-acl.ts\n');
+  expect(job?.body).not.toMatch(/\n {4}if:/);
+  // Красный ночной прогон обязан завести issue: вне job report он молчал бы
+  // до следующего взгляда человека (тот же класс, что закрыл e26).
+  const report = jobs.find((entry) => entry.id === 'report');
+  expect(report?.body).toContain('gh issue create');
+  expect(report?.body).toMatch(/\n {4}needs:[\s\S]*\n {8}turbo-acl,\n/);
+  // Та же джоба, что в canaries.yml, минус пропуск PR и комментарии: два
+  // описания не разъезжаются (environment, переменные, шаги).
+  const canaries = readFileSync(join(wfDir, 'canaries.yml'), 'utf8');
+  const canaryJob = jobBlocks(canaries).find((entry) => entry.id === 'turbo-acl');
+  expect(normalizedJob(job?.body ?? '')).toBe(normalizedJob(canaryJob?.body ?? ''));
 });
 
 it('ci.yml: каждый job с TURBO_TOKEN берёт его из environment, вне push — cache-read', () => {

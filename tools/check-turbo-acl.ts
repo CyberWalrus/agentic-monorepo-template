@@ -26,9 +26,11 @@
  * пришло от сервера или из ошибки, проходит через маскировку. Один повтор на
  * сбой сети, таймаут и 5xx.
  *
- * Гоняет CI с environment `cache-read` — тот же токен, что у PR-job'ов ci.yml;
- * какие workflow зовут чекер и с каким environment, сверяет тест проводки
- * (tools/test/check-turbo-acl.test.ts).
+ * Гоняет CI с environment `cache-read` — тот же токен, что у PR-job'ов ci.yml:
+ * job `turbo-acl` в canaries.yml (push в `main`, ручной прогон; на PR пропущен —
+ * вердикт исполнял бы сам код PR) и в nightly.yml (расписание: серверная
+ * гарантия может сломаться без изменений в репозитории). Какой workflow как
+ * зовёт чекер, сверяет тест проводки (tools/test/check-turbo-acl.test.ts).
  */
 import { randomBytes } from 'node:crypto';
 import { gzipSync } from 'node:zlib';

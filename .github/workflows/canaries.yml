@@ -121,7 +121,8 @@ jobs:
   turbo-acl:
     name: turbo cache-read token is read-only (e27)
     # На PR вердикту не доверяем: проверку исполнял бы сам код PR, а токен
-    # PR-коду лишний раз не выдаётся. Значимы push в main и ручной прогон.
+    # PR-коду лишний раз не выдаётся. Значимы push в main и ручной прогон;
+    # ночной (расписание) — job turbo-acl в nightly.yml.
     if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
