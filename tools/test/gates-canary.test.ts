@@ -10,20 +10,25 @@
  */
 import { spawnSync } from 'node:child_process';
 import {
+  copyFileSync,
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
+  symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { gzipSync } from 'node:zlib';
-import { join, normalize, resolve, sep } from 'node:path';
+import { dirname, join, normalize, relative, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BLOAT, BLOAT_DELTA, CANARIES, type GateCanary } from '../gate-canaries.ts';
 import { allStepNames, fast, post, serialFast, slow } from '../verify-steps.ts';
@@ -39,6 +44,70 @@ const slowNames = new Set(slow.map((step) => step.name));
 // фикстурами tools/test/check-tool-class, а проводка — wiring-канарейкой на
 // test:hooks (ADR 0014, e9).
 const CANARY_EXEMPT_STEPS = new Set(['test-count', 'e2e-report', 'tool-class']);
+
+/** Отпечаток файла: размер, время изменения и индекс (символическая ссылка не раскрывается). */
+type FileStamp = { size: number; mtimeMs: number; ino: number };
+
+function stampOf(abs: string): FileStamp {
+  const s = lstatSync(abs);
+  return { size: s.size, mtimeMs: s.mtimeMs, ino: s.ino };
+}
+
+/** Файлы каталога рекурсивно: путь относительно корня и абсолютный. Символическая ссылка — как файл. */
+function filesUnder(root: string): { rel: string; abs: string }[] {
+  const out: { rel: string; abs: string }[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs);
+      } else {
+        out.push({ rel: relative(root, abs), abs });
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+/** Ошибка файловой системы с таким кодом (например, «каталог не пуст»). */
+function isErrno(e: unknown, code: string): boolean {
+  return typeof e === 'object' && e !== null && 'code' in e && e.code === code;
+}
+
+/** Отсортированные относительные пути файлов — для сравнения списков двух деревьев. */
+function namesOf(files: { rel: string }[]): string[] {
+  return files.map((f) => f.rel).toSorted();
+}
+
+/** Размер файла по пути, без раскрытия символической ссылки. */
+function sizeOf(f: { abs: string }): number {
+  return lstatSync(f.abs).size;
+}
+
+/** Относительные пути каталогов под корнем (без самого корня). */
+function dirsUnder(root: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        const abs = join(dir, entry.name);
+        out.push(relative(root, abs));
+        walk(abs);
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+/**
+ * Время изменения каждого файла нетронутой копии. Одна и та же далёкая дата, а не
+ * «время копирования»: любое изменение файла ставит текущее время, и изменение
+ * видно даже тогда, когда размер тот же, а запись пришлась на тот же тик часов,
+ * что и копирование (гранулярность mtime зависит от файловой системы и часов ядра).
+ */
+const PRISTINE_MTIME = new Date('2000-01-01T00:00:00Z');
 
 describe('таблица канареек гейтов', () => {
   const known = new Set(allStepNames);
@@ -430,21 +499,185 @@ describe('якоря канареек живы на текущем дереве 
       .slice(depth)
       .some((part) => notCopied.has(part));
 
-  /** Нетронутая копия дерева и функция, размножающая его по одной копии на канарейку. */
-  function treeCopies(): { fresh: () => string; dispose: () => void } {
+  /**
+   * Нетронутая копия дерева и функция, дающая её же к каждой канарейке.
+   *
+   * Контракт `fresh()`: тот же каталог; имена, содержимое файлов и список
+   * каталогов — как у эталона, время изменения каждого файла — `PRISTINE_MTIME`.
+   * Права файлов и пустые каталоги эталона не возвращаются. Предположение о
+   * канарейке: она создаёт и перезаписывает обычные файлы (все `apply` таблицы
+   * так и делают).
+   *
+   * Первое обращение копирует дерево целиком, следующие возвращают копию по
+   * отпечатку — размер, время изменения и индекс файла: канарейка правит
+   * несколько файлов, и копировать ради этого всё дерево (≈640 файлов × 64
+   * канарейки) не нужно. Пока копировалось целиком, тест на полном шаге под
+   * нагрузкой машины подходил к таймауту вплотную (25.11) — дорожка конвейера
+   * приняла таймаут за «флак в защищённом файле».
+   */
+  function treeCopies(): { fresh: () => string; pristine: string; dispose: () => void } {
     const root = mkdtempSync(join(tmpdir(), 'canary-anchors-'));
     const pristine = join(root, 'pristine');
     cpSync(repoRoot, pristine, { recursive: true, filter: copyFilter });
+    const copy = join(root, 'copy');
+    const stamps: Map<string, FileStamp> = new Map();
+    let dirs: Set<string> | null = null;
+    const stampPristine = (rel: string): void => {
+      const abs = join(copy, rel);
+      utimesSync(abs, PRISTINE_MTIME, PRISTINE_MTIME);
+      stamps.set(rel, stampOf(abs));
+    };
+    // Восстановленный файл получает то же время изменения, что и вся нетронутая копия
+    const restore = (rel: string): void => {
+      const target = join(copy, rel);
+      mkdirSync(dirname(target), { recursive: true });
+      copyFileSync(join(pristine, rel), target);
+      stampPristine(rel);
+    };
     return {
       fresh: () => {
-        const copy = join(root, 'copy');
-        rmSync(copy, { recursive: true, force: true });
-        cpSync(pristine, copy, { recursive: true });
+        if (dirs === null) {
+          cpSync(pristine, copy, { recursive: true });
+          for (const f of filesUnder(copy)) {
+            stampPristine(f.rel);
+          }
+          dirs = new Set(dirsUnder(copy));
+          return copy;
+        }
+        const present = new Set<string>();
+        for (const { rel, abs } of filesUnder(copy)) {
+          present.add(rel);
+          const was = stamps.get(rel);
+          // Файла не было в нетронутой копии: его создала канарейка (или это переименованная цель зонда)
+          if (was === undefined) {
+            rmSync(abs, { force: true });
+            continue;
+          }
+          // Симлинков в эталоне нет: ссылка в копии — чужая, снимается сама, не идя по ней
+          const now = lstatSync(abs);
+          if (
+            now.isSymbolicLink() ||
+            now.size !== was.size ||
+            now.mtimeMs !== was.mtimeMs ||
+            now.ino !== was.ino
+          ) {
+            rmSync(abs, { force: true });
+            restore(rel);
+          }
+        }
+        // Каталоги, созданные канарейкой, убираются — сначала вложенные, потом ставшие пустыми
+        const known = dirs;
+        const foreign = dirsUnder(copy)
+          .filter((dir) => !known.has(dir))
+          .toSorted((a, b) => b.split(sep).length - a.split(sep).length);
+        for (const dir of foreign) {
+          try {
+            rmdirSync(join(copy, dir));
+          } catch (e) {
+            // Не пустый: внутри ещё лежат файлы эталона, их вернёт следующий шаг
+            if (!isErrno(e, 'ENOTEMPTY')) {
+              throw e;
+            }
+          }
+        }
+        // Исчезнувший файл (переименован или удалён канарейкой) возвращается на место
+        for (const rel of stamps.keys()) {
+          if (!present.has(rel)) {
+            restore(rel);
+          }
+        }
         return copy;
       },
+      pristine,
       dispose: () => rmSync(root, { recursive: true, force: true }),
     };
   }
+
+  it('fresh() после apply всех канареек возвращает нетронутую копию байт в байт', () => {
+    // Возврат по отпечатку, а не полным копированием: утечка правок между канарейками
+    // сделала бы проверку живости слепой к правке предыдущей канарейки
+    const expectPristine = (tree: ReturnType<typeof treeCopies>): void => {
+      const copy = tree.fresh();
+      const expected = filesUnder(tree.pristine);
+      expect(namesOf(filesUnder(copy)), 'список файлов после fresh()').toEqual(namesOf(expected));
+      const differ = expected
+        .filter((f) => !readFileSync(join(copy, f.rel)).equals(readFileSync(f.abs)))
+        .map((f) => f.rel);
+      expect(differ, 'файлы, не возвращённые к нетронутой копии').toEqual([]);
+      // Изменение видно по времени, даже если размер тот же: у всей копии одна дата
+      const mtimes = filesUnder(copy).map((f) => lstatSync(f.abs).mtimeMs);
+      expect(new Set(mtimes), 'время изменения файлов после fresh()').toEqual(
+        new Set([PRISTINE_MTIME.getTime()]),
+      );
+      expect(dirsUnder(copy).toSorted(), 'каталоги после fresh()').toEqual(
+        dirsUnder(tree.pristine).toSorted(),
+      );
+    };
+    const tree = treeCopies();
+    try {
+      let applied = 0;
+      for (const canary of CANARIES) {
+        if (needGit.has(canary.name)) {
+          continue;
+        }
+        canary.apply(tree.fresh());
+        applied += 1;
+      }
+      expect(applied).toBe(CANARIES.length - needGit.size);
+      expectPristine(tree);
+      // Три случая возврата: изменённый, добавленный и переименованный файл
+      const copy = tree.fresh();
+      const [first, second] = filesUnder(tree.pristine);
+      if (first === undefined || second === undefined) {
+        throw new Error(
+          'в копии дерева меньше двух файлов — проверка возврата ничего не доказывает',
+        );
+      }
+      writeFileSync(join(copy, first.rel), 'изменено проверкой возврата');
+      writeFileSync(join(copy, '__restore-probe__.txt'), 'новый файл');
+      renameSync(join(copy, second.rel), join(copy, second.rel + '.renamed'));
+      expectPristine(tree);
+      // Файл той же длины, записанный сразу после возврата, и новые каталоги
+      const again = tree.fresh();
+      const source = readFileSync(join(again, first.rel));
+      writeFileSync(join(again, first.rel), Buffer.alloc(source.length, 0x78));
+      const created = join(again, '__restore-probe-dir__', 'nested');
+      mkdirSync(created, { recursive: true });
+      writeFileSync(join(created, 'file.txt'), 'файл в новом каталоге');
+      expect(dirsUnder(again).length, 'каталоги, созданные проверкой').toBeGreaterThan(
+        dirsUnder(tree.pristine).length,
+      );
+      expectPristine(tree);
+      // Файл эталона, перенесённый поверх другого файла той же длины: размер и время совпадают,
+      // отличается только содержимое — узнаётся по индексу файла. Пара файлов одной длины — любая
+      const bySize = new Map<number, { rel: string }[]>();
+      for (const f of filesUnder(tree.pristine)) {
+        const group = bySize.get(sizeOf(f)) ?? [];
+        group.push(f);
+        bySize.set(sizeOf(f), group);
+      }
+      const pair = [...bySize.values()].find((group) => group.length >= 2);
+      const [x, y] = pair ?? [];
+      if (x === undefined || y === undefined) {
+        throw new Error('в эталоне нет двух файлов одной длины — случай не проверен');
+      }
+      renameSync(join(tree.fresh(), x.rel), join(copy, y.rel));
+      expectPristine(tree);
+      const linked = tree.fresh();
+      rmSync(join(linked, first.rel));
+      symlinkSync(second.rel, join(linked, first.rel));
+      expectPristine(tree);
+      // Файл, удалённый вместе со своим каталогом
+      const nested = filesUnder(tree.pristine).find((f) => f.rel.includes(sep));
+      if (nested === undefined) {
+        throw new Error('в эталоне нет файла в подкаталоге — случай не проверен');
+      }
+      rmSync(dirname(join(tree.fresh(), nested.rel)), { recursive: true, force: true });
+      expectPristine(tree);
+    } finally {
+      tree.dispose();
+    }
+  }, 30_000);
 
   it('apply каждой канарейки не бросает на копии дерева', () => {
     const tree = treeCopies();
