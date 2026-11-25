@@ -302,20 +302,76 @@ describe('проводка гейта action-pins', () => {
   });
 });
 
+/** Все matchStrings правила обновления сканера (depNameTemplate — zizmorcore/zizmor). */
+function scannerRulePatterns(): string[] {
+  const config = readJson('.github', 'renovate.json');
+  const managers = isRecord(config) ? config['customManagers'] : undefined;
+  const rules = Array.isArray(managers) ? managers : [];
+  return rules.flatMap((item) => {
+    if (!isRecord(item) || item['depNameTemplate'] !== 'zizmorcore/zizmor') {
+      return [];
+    }
+    const patterns = item['matchStrings'];
+    const strings = Array.isArray(patterns) ? patterns : [];
+    return strings.filter((pattern): pattern is string => typeof pattern === 'string');
+  });
+}
+
 describe('путь обновления версии сканера (Renovate)', () => {
   it('regex-правило renovate.json матчит security.yml и снимает ту же версию', () => {
-    const config = readJson('.github', 'renovate.json');
-    const managers = isRecord(config) ? config['customManagers'] : undefined;
-    const rule = (Array.isArray(managers) ? managers : []).find(
-      (item) => isRecord(item) && item['depNameTemplate'] === 'zizmorcore/zizmor',
-    );
-    const patterns = isRecord(rule) ? rule['matchStrings'] : undefined;
-    const pattern = Array.isArray(patterns) ? patterns[0] : undefined;
-    expect(pattern).toBeTypeOf('string');
+    const patterns = scannerRulePatterns();
+    expect(patterns).not.toHaveLength(0);
     const workflow = readFileSync(join(repoDir, SCANNER_PIN.file), 'utf8');
-    const match = typeof pattern === 'string' ? new RegExp(pattern, 'g').exec(workflow) : null;
-    expect(match?.groups?.['currentValue']).toBe(scannerVersion(workflow).version);
-    expect(match?.groups?.['currentValue']).toMatch(/^v\d+\.\d+\.\d+$/);
+    for (const pattern of patterns) {
+      const match = new RegExp(pattern, 'g').exec(workflow);
+      expect(match?.groups?.['currentValue']).toBe(scannerVersion(workflow).version);
+      expect(match?.groups?.['currentValue']).toMatch(/^v\d+\.\d+\.\d+$/);
+    }
+  });
+
+  it('matchStrings — синтаксис RE2: без lookaround и обратных ссылок', () => {
+    // Renovate компилирует регексы движком RE2 (lib/util/regex.ts; RegExp — только
+    // аварийный отказ при неработающем бинарнике). Lookaround и обратные ссылки RE2
+    // не поддерживает: правило падает на компиляции, и PR обновления не открывается.
+    // new RegExp(...) в соседнем тесте этого не видит — V8 поддерживает и то, и другое.
+    const patterns = scannerRulePatterns();
+    expect(patterns).not.toHaveLength(0);
+    for (const pattern of patterns) {
+      expect(pattern).not.toMatch(/\(\?<?[=!]/); // (?=…), (?!…), (?<=…), (?<!…)
+      expect(pattern).not.toMatch(/\\[1-9]/); // обратные ссылки \1 … \9
+    }
+  });
+
+  it('граница правила — начало следующего шага: version чужого шага не снимается', () => {
+    // Строка следующего шага начинается с дефиса после отступа; строки-продолжение
+    // шага (with:, входы, комментарии) — с отступа и не с дефиса.
+    const patterns = scannerRulePatterns();
+    expect(patterns).not.toHaveLength(0);
+    const own = [
+      '      - uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1',
+      '        with:',
+      '          advanced-security: false',
+    ];
+    const nextSteps = [
+      [
+        '      # комментарий уровня шага',
+        `      - uses: actions/checkout@${SHA} # v7.0.1`,
+        '        with:',
+        '          version: v9.9.9',
+      ],
+      [
+        '      - name: Следующий шаг без uses',
+        '        run: echo',
+        '        env:',
+        '          version: v9.9.9',
+      ],
+    ];
+    for (const pattern of patterns) {
+      for (const nextStep of nextSteps) {
+        const workflow = [...own, ...nextStep, ''].join('\n');
+        expect(new RegExp(pattern, 'g').exec(workflow)).toBeNull();
+      }
+    }
   });
 });
 
