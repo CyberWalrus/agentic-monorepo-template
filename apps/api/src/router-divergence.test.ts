@@ -1,7 +1,18 @@
 import { ORPCError } from '@orpc/client';
 import type { OpenAPI } from '@orpc/contract';
+import { OpenAPIGenerator } from '@orpc/openapi';
+import { ZodToJsonSchemaConverter } from '@orpc/zod/zod4';
 import { createProcedureClient } from '@orpc/server';
-import { contract, ERROR_MESSAGES, TaskIdInputSchema } from '@repo/contracts';
+import {
+  contract,
+  documentErrorResponses,
+  ERROR_MESSAGES,
+  errorResponses,
+  hasValidatedInput,
+  operationsWithInputValidation,
+  TaskIdInputSchema,
+  voidSchemaConverter,
+} from '@repo/contracts';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -11,12 +22,11 @@ import {
   type AppContext,
 } from './authorization.ts';
 // e56: признак «вход валидируется» — тот же, по которому спека решает, каким
-// операциям обещать 400 валидации; спека настоящего контракта — для сверки с
-// ответами HTTP-слоя на проводе (packages/contracts/scripts/openapi-spec.ts).
-import {
-  generateSpec,
-  hasValidatedInput,
-} from '../../../packages/contracts/scripts/openapi-spec.ts';
+// операциям обещать 400 валидации; конвертер void-вывода и ответы HTTP-слоя
+// спеки — для сверки с проводом. Всё это — публичный экспорт `@repo/contracts`
+// (packages/contracts/src/openapi-spec.ts): скрипты пакета публичным импортом
+// недоступны, а относительный путь к соседнему пакету не существует в
+// песочнице мутаций API (копируется только apps/api).
 import { createApp } from './app.ts';
 import { router } from './router.ts';
 import { InMemoryTaskRepository } from './tasks/repository.ts';
@@ -101,10 +111,18 @@ describe('router divergence from contract', () => {
     );
     const answered = Object.fromEntries(checked);
 
+    // Ответ валидации — код, статус и текст фикстуры провода (тот же источник,
+    // из которого строится спека), а не списанный руками
+    const validationFailed = errorResponses.validationFailed.body;
+    const invalidInput = {
+      code: validationFailed.code,
+      status: validationFailed.status,
+      message: validationFailed.message,
+    };
     expect(answered).toEqual({
-      'tasks.create': { code: 'BAD_REQUEST', status: 400, message: 'Input validation failed' },
+      'tasks.create': invalidInput,
       'tasks.remove': { code: 'FORBIDDEN', status: 403, message: ERROR_MESSAGES.FORBIDDEN },
-      'tasks.toggle': { code: 'BAD_REQUEST', status: 400, message: 'Input validation failed' },
+      'tasks.toggle': invalidInput,
     });
   });
 
@@ -219,9 +237,21 @@ describe('spec on the wire', () => {
   /**
    * Операции спеки настоящего контракта. В path подставлен id несуществующей
    * задачи: процедуры ничего не меняют, а 404 и 403 — их собственные ответы.
+   *
+   * Спека собирается теми же конвертерами генератора и тем же правилом
+   * ответов HTTP-слоя, что и `generateSpec` контрактов
+   * (packages/contracts/scripts/openapi-spec.ts). Композиция повторена здесь,
+   * а не импортирована: generateSpec — скрипт пакета, а вынести его в
+   * публичный экспорт контрактов нельзя без `@orpc/openapi` и `@orpc/zod`
+   * в корневом entry (его импортирует web).
    */
   async function operationsOfSpec() {
-    const spec: OpenAPI.Document = await generateSpec(contract);
+    const spec: OpenAPI.Document = documentErrorResponses(
+      await new OpenAPIGenerator({
+        schemaConverters: [voidSchemaConverter, new ZodToJsonSchemaConverter()],
+      }).generate(contract),
+      operationsWithInputValidation(contract),
+    );
     return Object.entries(spec.paths ?? {}).flatMap(([path, pathItem]) =>
       HTTP_METHODS.flatMap((method) => {
         const operation = pathItem?.[method];

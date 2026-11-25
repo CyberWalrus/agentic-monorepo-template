@@ -7,17 +7,26 @@ import { oc } from '@orpc/contract';
 import { implement } from '@orpc/server';
 import type { ContractRouterClient } from '@orpc/contract';
 import { serve } from '@hono/node-server';
-import { contract, ocAccess, type Contract } from '@repo/contracts';
+import {
+  contract,
+  documentErrorResponses,
+  errorResponses,
+  ocAccess,
+  operationsWithInputValidation,
+  type Contract,
+  voidSchemaConverter,
+  type WireResponse,
+} from '@repo/contracts';
+import { OpenAPIGenerator } from '@orpc/openapi';
+import { ZodToJsonSchemaConverter } from '@orpc/zod/zod4';
 import * as z from 'zod';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-// e56: фикстуры провода, из которых строится спека. Скрипт контрактов, а не
-// публичный экспорт: фикстуры описывают HTTP-слой, в контракт процедур не входят.
-import {
-  errorResponses,
-  generateSpec,
-  type WireResponse,
-} from '../../../packages/contracts/scripts/openapi-spec.ts';
+// e56: фикстуры провода, из которых строится спека, и правила ответов
+// HTTP-слоя — публичный экспорт `@repo/contracts`
+// (packages/contracts/src/openapi-spec.ts). Скрипты пакета публичным импортом
+// недоступны, а относительный путь к соседнему пакету не существует в
+// песочнице мутаций API (копируется только apps/api).
 import { createApp, REQUEST_BODY_LIMIT_BYTES, REQUEST_TIMEOUT_MS } from './app.ts';
 import { authorizationMiddleware, type Actor, type AppContext } from './authorization.ts';
 import type { LogRecord, LogSink } from './observability.ts';
@@ -652,7 +661,7 @@ describe('request guards', () => {
 });
 
 // e56: формы ответов на проводе — дословно. Из этих же фикстур строится спека
-// (packages/contracts/scripts/openapi-spec.ts): расходится рантайм — красный
+// (packages/contracts/src/openapi-spec.ts): расходится рантайм — красный
 // здесь, расходится спека — красный в openapi-spec.test.ts. Операция — та, что
 // документирована: POST /api/tasks.
 describe('error responses on the wire', () => {
@@ -779,7 +788,16 @@ describe('on a real HTTP server', () => {
   it('answers a GET with a declared body with the 400 the spec documents', async () => {
     const app = createApp({ tasks: new InMemoryTaskRepository(), bodyLimitBytes: 64 });
     const { port, close } = await listen(app);
-    const spec = await generateSpec(contract);
+    // Спека операций — та же композиция, что в generateSpec контрактов
+    // (packages/contracts/scripts/openapi-spec.ts; здесь и в
+    // router-divergence.test.ts, operationsOfSpec): те же конвертеры и то же
+    // правило ответов HTTP-слоя
+    const spec = documentErrorResponses(
+      await new OpenAPIGenerator({
+        schemaConverters: [voidSchemaConverter, new ZodToJsonSchemaConverter()],
+      }).generate(contract),
+      operationsWithInputValidation(contract),
+    );
     const gets = Object.entries(spec.paths ?? {}).filter(([, item]) => item?.get !== undefined);
 
     try {

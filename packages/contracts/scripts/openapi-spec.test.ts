@@ -3,15 +3,49 @@ import { describe, expect, it } from 'vitest';
 import * as z from 'zod';
 
 import { contract, ocAccess, ocPublic } from '../src/index.ts';
+// e56: фикстуры провода, правила ответов и конвертер void-вывода — чистый
+// модуль контрактов (экспорт `@repo/contracts`)
 import {
-  API_VERSION,
   documentErrorResponses,
   errorResponses,
-  generateSpec,
   hasValidatedInput,
   operationsWithInputValidation,
   voidSchemaConverter,
-} from './openapi-spec.ts';
+} from '../src/openapi-spec.ts';
+import { API_VERSION, generateSpec } from './openapi-spec.ts';
+
+describe('errorResponses', () => {
+  // Фикстуры провода — дословно: из них строится спека, ими тесты API сверяют
+  // провод (apps/api/src/app.test.ts, «error responses on the wire»). Эталон
+  // записан руками, чтобы правка фикстуры была видна и здесь
+  it('records the wire bodies verbatim', () => {
+    expect(errorResponses).toEqual({
+      validationFailed: {
+        status: 400,
+        body: {
+          defined: false,
+          code: 'BAD_REQUEST',
+          status: 400,
+          message: 'Input validation failed',
+          data: { issues: [{ path: ['title'], message: 'Title is required' }] },
+        },
+      },
+      malformedBody: {
+        status: 400,
+        body: {
+          defined: false,
+          code: 'BAD_REQUEST',
+          status: 400,
+          message:
+            "Malformed request. Ensure the request body is properly formatted and the 'Content-Type' header is set correctly.",
+        },
+      },
+      payloadTooLarge: { status: 413, body: { error: 'Payload too large' } },
+      requestTimedOut: { status: 504, body: { error: 'Request timed out' } },
+      unreadableBody: { status: 400, body: { error: 'Request body is not readable' } },
+    });
+  });
+});
 
 describe('voidSchemaConverter', () => {
   it('recognises void and undefined schemas', () => {
@@ -222,6 +256,24 @@ describe('documentErrorResponses', () => {
     expect(answers400(spec)['GET /tasks']).toEqual(['unreadableBody', 'validationFailed']);
   });
 
+  // HEAD — как GET: адаптер не передаёт ему поток тела, поэтому потолок тела
+  // недостижим, а на объявленное тело отвечает ограждение формы
+  it('treats HEAD like GET: no 413, and the form-guard 400', () => {
+    const spec = specFixture();
+    if (spec.paths?.['/tasks']) {
+      spec.paths['/tasks'].head = { responses: { '200': { description: 'OK' } } };
+    }
+
+    const documented = documentErrorResponses(spec, VALIDATED);
+
+    expect(Object.keys(documented.paths?.['/tasks']?.head?.responses ?? {})).toEqual([
+      '200',
+      '400',
+      '504',
+    ]);
+    expect(answers400(documented)['HEAD /tasks']).toEqual(['unreadableBody']);
+  });
+
   it('documents 413 on every method that carries a body, declared or not, and 504 on every operation', () => {
     const spec = documentErrorResponses(specFixture(), VALIDATED);
 
@@ -288,11 +340,217 @@ describe('documentErrorResponses', () => {
 
     expect(twice).toEqual(once);
   });
+
+  // Ответы HTTP-слоя — публикуемая часть openapi.json, и меняются они только
+  // вместе с этим эталоном. Он записан руками, без ссылок на errorResponses:
+  // иначе правка фикстуры или схемы не была бы видна.
+  it('documents the HTTP-layer responses verbatim', () => {
+    const paths = documentErrorResponses(specFixture(), VALIDATED).paths;
+
+    expect(paths?.['/tasks']?.post?.responses).toEqual({
+      '200': { description: 'OK' },
+      '400': {
+        description: '400: input validation failed or the request body is malformed',
+        content: {
+          'application/json': {
+            schema: {
+              oneOf: [
+                {
+                  type: 'object',
+                  properties: {
+                    defined: { const: false },
+                    code: { const: 'BAD_REQUEST' },
+                    status: { const: 400 },
+                    message: { type: 'string', default: 'Input validation failed' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        issues: {
+                          type: 'array',
+                          items: {
+                            type: 'object',
+                            properties: {
+                              path: { type: 'array', items: { type: ['string', 'number'] } },
+                              message: { type: 'string' },
+                            },
+                            required: ['path', 'message'],
+                          },
+                        },
+                      },
+                      required: ['issues'],
+                    },
+                  },
+                  required: ['defined', 'code', 'status', 'message', 'data'],
+                },
+                {
+                  type: 'object',
+                  properties: {
+                    defined: { const: false },
+                    code: { const: 'BAD_REQUEST' },
+                    status: { const: 400 },
+                    message: {
+                      const:
+                        "Malformed request. Ensure the request body is properly formatted and the 'Content-Type' header is set correctly.",
+                    },
+                  },
+                  required: ['defined', 'code', 'status', 'message'],
+                  not: { required: ['data'] },
+                },
+              ],
+            },
+          },
+        },
+      },
+      '413': {
+        description:
+          '413: request body over the limit; answered by the HTTP layer, not the procedure',
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: { error: { const: 'Payload too large' } },
+              required: ['error'],
+              additionalProperties: false,
+            },
+          },
+        },
+      },
+      '504': {
+        description:
+          '504: request exceeded the time limit; answered by the HTTP layer, not the procedure',
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: { error: { const: 'Request timed out' } },
+              required: ['error'],
+              additionalProperties: false,
+            },
+          },
+        },
+      },
+    });
+    // Метод без потока тела: один вариант 400 — отказ ограждения формы
+    expect(paths?.['/tasks']?.get?.responses).toEqual({
+      '200': { description: 'OK' },
+      '400': {
+        description:
+          '400: a body was sent with a method that carries none; answered before the procedure, which is not called',
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: { error: { const: 'Request body is not readable' } },
+              required: ['error'],
+              additionalProperties: false,
+            },
+          },
+        },
+      },
+      '504': {
+        description:
+          '504: request exceeded the time limit; answered by the HTTP layer, not the procedure',
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: { error: { const: 'Request timed out' } },
+              required: ['error'],
+              additionalProperties: false,
+            },
+          },
+        },
+      },
+    });
+    // Вход не валидируется: без варианта с данными zod-issues
+    expect(paths?.['/tasks/{id}']?.delete?.responses).toEqual({
+      '200': { description: 'OK' },
+      '400': {
+        description:
+          '400: the request body is malformed; answered before the procedure, which is not called',
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                defined: { const: false },
+                code: { const: 'BAD_REQUEST' },
+                status: { const: 400 },
+                message: {
+                  const:
+                    "Malformed request. Ensure the request body is properly formatted and the 'Content-Type' header is set correctly.",
+                },
+              },
+              required: ['defined', 'code', 'status', 'message'],
+              not: { required: ['data'] },
+            },
+          },
+        },
+      },
+      '413': {
+        description:
+          '413: request body over the limit; answered by the HTTP layer, not the procedure',
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: { error: { const: 'Payload too large' } },
+              required: ['error'],
+              additionalProperties: false,
+            },
+          },
+        },
+      },
+      '504': {
+        description:
+          '504: request exceeded the time limit; answered by the HTTP layer, not the procedure',
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: { error: { const: 'Request timed out' } },
+              required: ['error'],
+              additionalProperties: false,
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it('leaves a spec without paths, or a path without operations, untouched', () => {
+    const withoutPaths = specFixture();
+    delete withoutPaths.paths;
+    const withEmptyPath = specFixture();
+    if (withEmptyPath.paths) {
+      withEmptyPath.paths['/tasks'] = undefined;
+    }
+
+    expect(documentErrorResponses(withoutPaths, VALIDATED)).not.toHaveProperty('paths');
+    expect(documentErrorResponses(withEmptyPath, VALIDATED).paths).toEqual({
+      '/tasks': undefined,
+      '/tasks/{id}': expect.any(Object),
+    });
+  });
 });
 
 /** Public-процедура фикстурного домена: маршрут до `.input(...)`. */
 const note = (path: `/${string}`) =>
   ocPublic.route({ method: 'POST', path, summary: 'Fixture' }).meta({ access: { type: 'public' } });
+
+/** Значения, которые валидация обязана уметь отвергать; эталон набора проб. */
+const PROBES: unknown[] = [undefined, {}, [], null, '', 0, false];
+
+const isEmptyObject = (value: unknown): boolean =>
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  Object.keys(value).length === 0;
+
+/** Определение процедуры с заданной схемой входа — в форме, какой её держит контракт. */
+const procedureWith = (inputSchema: unknown): unknown => ({
+  '~orpc': { route: {}, meta: {}, inputSchema },
+});
 
 describe('operationsWithInputValidation', () => {
   // Домен, каким его собирает `pnpm gen feature` (tools/gen.ts, contractTemplate),
@@ -360,6 +618,91 @@ describe('operationsWithInputValidation', () => {
     expect(hasValidatedInput(domain.anything)).toBe(false);
     expect(hasValidatedInput(domain.list)).toBe(false);
     expect(hasValidatedInput('not a procedure')).toBe(false);
+  });
+
+  // Что угодно, кроме определения процедуры: null — объект по typeof,
+  // а «~orpc» бывает null, undefined и не объектом
+  it('treats anything without a procedure definition as not validated', () => {
+    const nonProcedures: unknown[] = [
+      42,
+      null,
+      undefined,
+      {},
+      { '~orpc': null },
+      { '~orpc': undefined },
+      { '~orpc': 'definition' },
+    ];
+
+    for (const value of nonProcedures) {
+      expect(hasValidatedInput(value)).toBe(false);
+    }
+  });
+
+  // Пробы входа — по одной на каждый вид значения. Для каждой есть схема,
+  // отвергающая только её: убери пробу — такая схема перестанет считаться
+  // валидирующей, и её операция лишится 400 в спеке
+  it.each([
+    ['undefined', undefined, z.unknown().refine((value) => value !== undefined)],
+    ['an empty object', {}, z.any().refine((value) => !isEmptyObject(value))],
+    [
+      'an empty array',
+      [],
+      z.any().refine((value) => !(Array.isArray(value) && value.length === 0)),
+    ],
+    ['null', null, z.any().refine((value) => value !== null)],
+    ['an empty string', '', z.any().refine((value) => value !== '')],
+    ['zero', 0, z.any().refine((value) => value !== 0)],
+    ['false', false, z.any().refine((value) => value !== false)],
+  ])('counts an input as validated when its schema rejects only %s', (_, probe, schema) => {
+    const rejected = PROBES.filter((other) => !schema.safeParse(other).success);
+
+    expect(rejected).toEqual([probe]);
+    expect(hasValidatedInput(procedureWith(schema))).toBe(true);
+  });
+
+  // Процедура без маршрута — не операция: у неё нет «METHOD /path», под
+  // которым спека обещает 400, каким бы ни был её вход
+  it('leaves out a procedure without a route, even with a validated public input', () => {
+    const rpcOnly = ocPublic
+      .meta({ access: { type: 'public' } })
+      .input(title)
+      .output(z.string());
+
+    expect(hasValidatedInput(rpcOnly)).toBe(true);
+    expect(operationsWithInputValidation({ ...domain, rpcOnly })).toEqual(
+      new Set(VALIDATED_OPERATIONS),
+    );
+  });
+
+  // Маршрут — пара из метода и пути: метод без пути или путь без метода —
+  // не операция, под которой спека обещает 400
+  it('leaves out a route with no method or no path', () => {
+    const methodOnly = ocPublic
+      .route({ method: 'POST', summary: 'Fixture' })
+      .meta({ access: { type: 'public' } })
+      .input(title)
+      .output(z.string());
+    const pathOnly = ocPublic
+      .route({ path: '/notes/path-only', summary: 'Fixture' })
+      .meta({ access: { type: 'public' } })
+      .input(title)
+      .output(z.string());
+
+    expect(operationsWithInputValidation({ ...domain, methodOnly, pathOnly })).toEqual(
+      new Set(VALIDATED_OPERATIONS),
+    );
+  });
+
+  // Домен `pnpm gen feature` вкладывается в роутер контракта: процедура
+  // находится на любой глубине вложенных роутеров
+  it('finds procedures at any depth of nested routers', () => {
+    const nested = {
+      notes: { create: note('/notes/nested').input(title).output(z.string()) },
+    };
+
+    expect(operationsWithInputValidation({ ...domain, nested })).toEqual(
+      new Set([...VALIDATED_OPERATIONS, 'POST /notes/nested']),
+    );
   });
 
   it('gets the validation 400 on a generated domain without touching any list', async () => {
