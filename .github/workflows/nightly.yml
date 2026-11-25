@@ -461,6 +461,28 @@ jobs:
       - run: pipx install "copier==$(cat tools/copier-version.txt)"
       - run: pnpm canaries
 
+  # Канарейка read-only ACL токена turbo-кэша (e27; ADR 0017, правило 2):
+  # ночной прогон — периодический контроль токена environment cache-read (тот
+  # же, что получают PR-job'ы ci.yml): читает remote-кэш и не пишет в него.
+  # Серверная гарантия может сломаться без изменений в репозитории (токен
+  # пересоздали с правом записи) — поэтому расписание, а не только push
+  # (job в canaries.yml). Красная — issue «Nightly failed» через job report;
+  # секрета нет — зелёная с предупреждением (проверять нечего).
+  turbo-acl:
+    name: turbo cache-read token is read-only (e27)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: cache-read
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+      TURBO_API: ${{ vars.TURBO_API }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      # Только встроенные модули Node: установка зависимостей не нужна.
+      - run: node tools/check-turbo-acl.ts
+
   verify-budgets:
     name: verify budgets
     runs-on: ubuntu-latest
@@ -555,6 +577,7 @@ jobs:
         perf-trend,
         perf-canary,
         gate-canaries,
+        turbo-acl,
         verify-budgets,
         backlog-doctor,
         telemetry,
