@@ -4,9 +4,14 @@
  * workflow и фазы перезаписи в CI — по образцу B4.1 (канарейка gate-canaries
  * ловит срыв привязки, якорь — заголовок wiring-блока). Инвариант e24 — после
  * checkout head PR ничего из PR-дерева не исполняется — пинится структурой
- * самого workflow.
+ * самого workflow. Инвариант e67 — токен события не попадает в argv git-команд
+ * — пинится структурой workflow, храповиком по всем workflow и живым прогоном
+ * блоков fetch/push против git-сервера, требующего авторизацию.
  */
-import { readFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -137,6 +142,7 @@ const INVARIANT = {
   noExec: 'после checkout head PR не запускаются node-инструменты и локальные actions',
   hooksOff: 'git commit и git push базлайнов идут с LEFTHOOK=0',
   noToken: 'шаги checkout и commit не получают GH_TOKEN',
+  noArgvToken: 'токен не попадает в argv git-команд и в env шага',
 } as const;
 
 /** Вызов по имени — целое слово (`pnpm install`, `/usr/bin/node`) — или бинарь из node_modules. */
@@ -210,6 +216,73 @@ const SABOTAGE = [
     invariant: INVARIANT.noToken,
     apply: (text: string): string =>
       text.replace(/^env:\n {2}REPO: /m, 'env:\n  GH_TOKEN: sabotage\n  REPO: '),
+  },
+] as const;
+
+/**
+ * Блок авторизации e67: заголовок `http.<url>.extraheader` собран из токена
+ * внутри под-оболочки и живёт только в конфиг-окружении этой git-команды
+ * (GIT_CONFIG_*) — ни в argv, ни в env шага, ни в `.git/config`.
+ */
+const AUTH_BLOCK =
+  /\(\n[ \t]*export GIT_CONFIG_COUNT=1\n[ \t]*export GIT_CONFIG_KEY_0=http\.https:\/\/github\.com\/\.extraheader\n[ \t]*CREDENTIAL="x-access-token:(?:\$\{\{ github\.token \}\}|\$\{GH_TOKEN\})"\n[ \t]*export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic \$\(printf '%s' "\$CREDENTIAL" \| base64 \| tr -d '\\n'\)"\n[ \t]*git -c credential\.helper= (?:fetch|push) [^\n]*\n[ \t]*\)\n/g;
+/**
+ * Источник токена в тексте workflow: выражение события, переменная шага, пара
+ * для заголовка, конфиг-окружение git.
+ */
+const TOKEN_SOURCE =
+  /x-access-token:|\$\{\{ github\.token \}\}|\$\{?GH_TOKEN\}?|GIT_CONFIG_|extraheader/i;
+/** Команда git с токеном в URL — токен в argv (ps) на время команды. */
+const GIT_WITH_TOKEN_URL =
+  /\bgit\s+(?:-c\s+\S+\s+)*(?:fetch|push|pull|clone)\b[^\n]*x-access-token:/;
+/**
+ * Известный остаток e67 вне touches задачи — `nightly.yml`, ровно пять команд
+ * (`:214-215`, `:314-315`, `:532`). Рост или новый файл — красный: токен в argv
+ * запрещён, переноси на блок авторизации. После перевода nightly.yml запись
+ * убрать: храповик сверяется с фактом в обе стороны.
+ */
+const TOKEN_URL_RESIDUAL: Readonly<Record<string, number>> = { 'nightly.yml': 5 };
+
+/** Токен в env под любым именем: GH_TOKEN, `github.token` в значении, конфиг-окружение git. */
+const tokenCarrier = (env: ReadonlyMap<string, string>): string | undefined =>
+  [...env].find(([key, value]) => TOKEN_SOURCE.test(`${key} ${value}`))?.[0];
+
+const TOKEN_SABOTAGE = [
+  {
+    name: 'токен возвращён в URL fetch',
+    invariant: INVARIANT.noArgvToken,
+    apply: (text: string): string =>
+      text.replace(
+        'git -c credential.helper= fetch --depth=1 "https://github.com/${REPO}.git"',
+        'git fetch --depth=1 "https://x-access-token:${{ github.token }}@github.com/${REPO}.git"',
+      ),
+  },
+  {
+    name: 'токен возвращён в URL push',
+    invariant: INVARIANT.noArgvToken,
+    apply: (text: string): string =>
+      text.replace(
+        'git -c credential.helper= push "https://github.com/${REPO}.git"',
+        'git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"',
+      ),
+  },
+  {
+    name: 'под-оболочка снята у fetch — конфиг-окружение с токеном переживает команду',
+    invariant: INVARIANT.noArgvToken,
+    apply: (text: string): string =>
+      text.replace(
+        /^([ \t]*)\(\n(([ \t]*export GIT_CONFIG_COUNT=1\n[ \t]*export GIT_CONFIG_KEY_0=[^\n]*\n[ \t]*CREDENTIAL=[^\n]*\n[ \t]*export GIT_CONFIG_VALUE_0=[^\n]*\n[ \t]*git -c credential\.helper= fetch [^\n]*\n))[ \t]*\)\n/m,
+        '$2',
+      ),
+  },
+  {
+    name: 'GIT_CONFIG_VALUE_0 объявлен в env шага checkout — токен под другим именем',
+    invariant: INVARIANT.noToken,
+    apply: (text: string): string =>
+      text.replace(
+        /(- name: Checkout PR head without executing it\n[^\n]*\n)( {8}run: \|\n)/,
+        '$1        env:\n          GIT_CONFIG_VALUE_0: AUTHORIZATION: basic x-access-token\n$2',
+      ),
   },
 ] as const;
 
@@ -335,18 +408,29 @@ const wiringViolations = (text: string): Violation[] => {
     if (step === undefined) violations.push(lostAnchor(INVARIANT.noToken, name));
     else if (step.env.has('GH_TOKEN')) {
       violations.push({ invariant: INVARIANT.noToken, detail: `«${name}»: GH_TOKEN в env шага` });
+    } else {
+      // e67: токен под другим именем (конфиг-окружение git) — тот же доступ, по имени не обходить.
+      const carrier = tokenCarrier(step.env);
+      if (carrier !== undefined) {
+        violations.push({
+          invariant: INVARIANT.noToken,
+          detail: `«${name}»: ${carrier} в env шага несёт токен`,
+        });
+      }
     }
   }
   // env уровня workflow и job наследует каждый шаг — токен там достался бы и checkout, и commit.
   for (const block of parseEnvBlocks(lines)) {
-    if (block.env.has('GH_TOKEN') && (block.depth === 0 || block.depth === job.keyIndent)) {
+    const carrier = block.env.has('GH_TOKEN') ? 'GH_TOKEN' : tokenCarrier(block.env);
+    if (carrier !== undefined && (block.depth === 0 || block.depth === job.keyIndent)) {
       const level = block.depth === 0 ? 'workflow' : 'job';
       violations.push({
         invariant: INVARIANT.noToken,
-        detail: `GH_TOKEN в env уровня ${level} — наследуется каждым шагом, включая checkout и commit`,
+        detail: `${carrier} в env уровня ${level} — наследуется каждым шагом, включая checkout и commit`,
       });
     }
   }
+  violations.push(...tokenArgvViolations(text));
   return violations;
 };
 
@@ -368,6 +452,47 @@ const newViolations = (before: string, after: string): string[] => {
   return wiringViolations(after)
     .filter((violation) => !known.has(`${violation.invariant} ${violation.detail}`))
     .map((violation) => violation.invariant);
+};
+
+/** Имена новых нарушений без повторов: один саботаж бьёт и по строке, и по якорю. */
+const newInvariantNames = (before: string, after: string): string[] => [
+  ...new Set(newViolations(before, after)),
+];
+
+const tokenUrlCommands = (text: string): number =>
+  text.split('\n').filter((line) => !isComment(line) && GIT_WITH_TOKEN_URL.test(line)).length;
+
+/**
+ * Нарушения инварианта e67 в тексте workflow: источник токена вне блока
+ * авторизации (argv команды, export, переживший команду) или потеря самих
+ * блоков — их ровно два, fetch и push.
+ */
+const tokenArgvViolations = (text: string): Violation[] => {
+  const blocks = [...text.matchAll(AUTH_BLOCK)];
+  const spans = blocks.map((match) => [match.index, match.index + match[0].length] as const);
+  const inBlock = (offset: number): boolean =>
+    spans.some(([start, end]) => start <= offset && offset < end);
+  const violations: Violation[] = [];
+  let offset = 0;
+  for (const line of text.split('\n')) {
+    const at = offset;
+    offset += line.length + 1;
+    // YAML-ключ — не команда; env шагов держит инвариант e24 (GH_TOKEN).
+    if (isComment(line) || /^[\w.-]+:\s/.test(line.trimStart())) continue;
+    if (!inBlock(at) && TOKEN_SOURCE.test(line)) {
+      violations.push({ invariant: INVARIANT.noArgvToken, detail: line.trim() });
+    }
+  }
+  const verbs = blocks.map(
+    (match) => /\n[ \t]*git -c credential\.helper= (\w+) /.exec(match[0])?.[1],
+  );
+  if (verbs.join() !== 'fetch,push') {
+    violations.push({
+      invariant: INVARIANT.noArgvToken,
+      detail: `блоки авторизации: ожидались fetch и push, найдено ${verbs.join(', ') || 'ничего'} — якорь инварианта потерян`,
+    });
+  }
+  return violations;
 };
 
 describe('проводка: визуальное одобрение в доверенном workflow и CI', () => {
@@ -427,6 +552,338 @@ describe('проводка: визуальное одобрение в дове�
 
       expect(sabotaged !== workflow).toBe(true);
       expect(newViolations(workflow, sabotaged)).toEqual([invariant]);
+    });
+  });
+
+  describe('инвариант e67: токен события не попадает в argv git-команд', () => {
+    const workflowsDir = join(repoRoot, '.github/workflows');
+    const tokenUrlLine =
+      '          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"\n';
+
+    it('токен живёт только в конфиг-окружении git внутри под-оболочки fetch и push', () => {
+      expect(invariantDetails(workflow, INVARIANT.noArgvToken)).toEqual([]);
+    });
+
+    it.each(TOKEN_SABOTAGE)('саботаж «$name» распознан', ({ invariant, apply }) => {
+      const sabotaged = apply(workflow);
+
+      expect(sabotaged !== workflow).toBe(true);
+      expect(newInvariantNames(workflow, sabotaged)).toEqual([invariant]);
+    });
+
+    it('храповик: токен в URL git-команд — только известный остаток nightly.yml', () => {
+      const actual = Object.fromEntries(
+        readdirSync(workflowsDir)
+          .filter((name) => /\.ya?ml$/.test(name))
+          .flatMap((name) => {
+            const commands = tokenUrlCommands(readFileSync(join(workflowsDir, name), 'utf8'));
+            return commands === 0 ? [] : [[name, commands] as const];
+          }),
+      );
+
+      expect(actual).toEqual(TOKEN_URL_RESIDUAL);
+    });
+
+    it('саботаж храповика «токен в URL в другом workflow» распознан', () => {
+      expect(tokenUrlCommands(ci)).toBe(0);
+      expect(tokenUrlCommands(`${ci}${tokenUrlLine}`)).toBe(1);
+    });
+
+    it('саботаж храповика «шестая команда с токеном в nightly.yml» распознан', () => {
+      const nightly = readFileSync(join(workflowsDir, 'nightly.yml'), 'utf8');
+
+      expect(tokenUrlCommands(nightly)).toBe(5);
+      expect(tokenUrlCommands(`${nightly}${tokenUrlLine}`)).toBe(6);
+    });
+  });
+
+  describe('живой прогон блоков fetch и push против git-сервера, требующего авторизацию', () => {
+    const FAKE_TOKEN = 'e67-fake-token-0123456789abcdef';
+    // Ответ задержан: git-процессы с их argv живут достаточно долго для выборки `ps`.
+    const AUTH_DELAY_MS = 1_000;
+    const REMOTE_PATH = 'e67.git';
+    const BRANCH = 'task/e67-sim';
+    const authBlocks = [...workflow.matchAll(AUTH_BLOCK)].map(([block]) => block);
+    type Env = Readonly<Record<string, string | undefined>>;
+    interface Remote {
+      readonly root: string;
+      readonly origin: string;
+      readonly work: string;
+      readonly headSha: string;
+      readonly port: number;
+      readonly env: Env;
+      readonly seen: { authorized: number; rejected: number };
+      readonly server: Server;
+      readonly life: { stopped: boolean };
+    }
+
+    const git = (cwd: string, args: readonly string[], env: Env): string => {
+      const result = spawnSync('git', args, { cwd, encoding: 'utf8', env });
+      if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`);
+      return result.stdout.trim();
+    };
+
+    /** `git http-backend` как CGI — то, что github.com делает с fetch и push по HTTP. */
+    const serveGit = (
+      request: IncomingMessage,
+      response: ServerResponse,
+      projectRoot: string,
+      env: Env,
+    ): void => {
+      const url = new URL(request.url ?? '', 'http://localhost');
+      const backend = spawn('git', ['http-backend'], {
+        env: {
+          ...env,
+          GIT_PROJECT_ROOT: projectRoot,
+          GIT_HTTP_EXPORT_ALL: '1',
+          PATH_INFO: url.pathname,
+          REQUEST_METHOD: request.method,
+          QUERY_STRING: url.search.slice(1),
+          CONTENT_TYPE: request.headers['content-type'] ?? '',
+          CONTENT_LENGTH: request.headers['content-length'] ?? '',
+          REMOTE_ADDR: '127.0.0.1',
+          REMOTE_USER: 'x-access-token',
+        },
+        stdio: ['pipe', 'pipe', 'inherit'],
+      });
+      const { stdin, stdout } = backend;
+      if (stdin === null || stdout === null) throw new Error('у http-backend нет каналов stdio');
+      const chunks: Buffer[] = [];
+      stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+      backend.on('close', () => {
+        const output = Buffer.concat(chunks);
+        const split = output.indexOf('\r\n\r\n');
+        const headers: Record<string, string> = {};
+        let status = 200;
+        for (const line of output.subarray(0, split).toString('utf8').split('\r\n')) {
+          const colon = line.indexOf(':');
+          const key = line.slice(0, colon);
+          const value = line.slice(colon + 1).trim();
+          if (key.toLowerCase() === 'status') status = Number(value.split(' ')[0]);
+          else headers[key] = value;
+        }
+        response.writeHead(status, headers);
+        response.end(output.subarray(split + 4));
+      });
+      request.pipe(stdin);
+    };
+
+    /** Репозиторий-«github.com» с авторизацией и рабочее дерево «дефолтной ветки». */
+    const startGitRemote = async (): Promise<Remote> => {
+      const root = mkdtempSync(join(tmpdir(), 'e67-visual-approve-'));
+      const origin = join(root, REMOTE_PATH);
+      const seed = join(root, 'seed');
+      const work = join(root, 'work');
+      // Изоляция от глобального конфига и хелперов учётных данных машины, где идёт тест.
+      const env: Env = {
+        ...process.env,
+        HOME: root,
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_AUTHOR_NAME: 'visual-approve-test',
+        GIT_AUTHOR_EMAIL: 'visual-approve@example.invalid',
+        GIT_COMMITTER_NAME: 'visual-approve-test',
+        GIT_COMMITTER_EMAIL: 'visual-approve@example.invalid',
+      };
+      const expectedAuth = `Basic ${Buffer.from(`x-access-token:${FAKE_TOKEN}`).toString('base64')}`;
+      const seen = { authorized: 0, rejected: 0 };
+      const life = { stopped: false };
+      const server = createServer((request, response) => {
+        // Схема авторизации нечувствительна к регистру (RFC 9110, 11.1).
+        if (request.headers.authorization?.toLowerCase() !== expectedAuth.toLowerCase()) {
+          seen.rejected += 1;
+          response.writeHead(401, { 'WWW-Authenticate': 'Basic realm="e67"' });
+          response.end();
+          return;
+        }
+        seen.authorized += 1;
+        setTimeout(() => {
+          if (!life.stopped) serveGit(request, response, root, env);
+        }, AUTH_DELAY_MS);
+      });
+      try {
+        git(root, ['init', '--bare', '--quiet', origin], env);
+        git(origin, ['config', 'http.receivepack', 'true'], env);
+        git(origin, ['config', 'uploadpack.allowAnySHA1InWant', 'true'], env);
+        git(root, ['clone', '--quiet', origin, seed], env);
+        writeFileSync(join(seed, 'base.txt'), 'base\n');
+        git(seed, ['add', '.'], env);
+        git(seed, ['commit', '--quiet', '-m', 'base'], env);
+        git(seed, ['push', '--quiet', 'origin', 'HEAD:refs/heads/main'], env);
+        git(seed, ['checkout', '--quiet', '-b', BRANCH], env);
+        writeFileSync(join(seed, 'pr.txt'), 'pr\n');
+        git(seed, ['add', '.'], env);
+        git(seed, ['commit', '--quiet', '-m', 'pr head'], env);
+        const headSha = git(seed, ['rev-parse', 'HEAD'], env);
+        git(seed, ['push', '--quiet', 'origin', BRANCH], env);
+        // Рабочее дерево дефолтной ветки — как после первого шага checkout на раннере.
+        git(root, ['clone', '--quiet', '--branch', 'main', origin, work], env);
+        await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
+        const address = server.address();
+        if (address === null || typeof address === 'string') {
+          throw new Error('сервер не слушает порт');
+        }
+        return { root, origin, work, headSha, port: address.port, env, seen, server, life };
+      } catch (error) {
+        life.stopped = true;
+        server.close();
+        rmSync(root, { recursive: true, force: true });
+        throw error;
+      }
+    };
+
+    const withGitRemote = async (run: (remote: Remote) => Promise<void>): Promise<void> => {
+      const remote = await startGitRemote();
+      try {
+        await run(remote);
+      } finally {
+        remote.server.close();
+        remote.life.stopped = true;
+        rmSync(remote.root, { recursive: true, force: true });
+      }
+    };
+
+    interface SampledRun {
+      readonly code: number | null;
+      readonly stderr: string;
+      /** argv процессов, работавших с remote, — по одному снимку `ps` на строку. */
+      readonly argv: readonly string[];
+    }
+
+    /** Код выхода блока — 0; иначе падение теста называет stderr шага. */
+    const exitOk = (run: SampledRun): void => {
+      if (run.code !== 0) throw new Error(`блок завершился с кодом ${run.code}:\n${run.stderr}`);
+    };
+
+    /** Скрипт — файл, как его пишет раннер: у bash в argv только путь. */
+    const runSampled = (remote: Remote, env: Env, script: string): Promise<SampledRun> =>
+      new Promise((resolveRun) => {
+        const { root, work, port } = remote;
+        const scriptPath = join(root, 'step.sh');
+        writeFileSync(scriptPath, script);
+        const argv: string[] = [];
+        const child = spawn('bash', ['-e', scriptPath], { cwd: work, env });
+        let stderr = '';
+        child.stderr?.on('data', (chunk: Buffer) => {
+          stderr += chunk;
+        });
+        let settled = false;
+        const done = new Promise<void>((resolveDone) => {
+          child.on('close', (code) => {
+            settled = true;
+            resolveDone();
+            resolveRun({ code, stderr, argv });
+          });
+        });
+        const sample = async (): Promise<void> => {
+          // Цикл останавливается извне — закрытием дочернего процесса, не условием.
+          for (;;) {
+            const listing = spawnSync('ps', ['-e', '-o', 'command='], { encoding: 'utf8' });
+            argv.push(
+              ...listing.stdout
+                .split('\n')
+                .filter((line) => line.includes(`:${port}/${REMOTE_PATH}`)),
+            );
+            await Promise.race([new Promise((resolveTick) => setTimeout(resolveTick, 25)), done]);
+            if (settled) break;
+          }
+        };
+        void sample();
+      });
+
+    it(
+      'fetch и push проходят авторизацию заголовком из конфиг-окружения — токена нет ни в argv, ни в конфиге',
+      { timeout: 30_000 },
+      async () => {
+        await withGitRemote(async (remote) => {
+          // Remote — локальный сервер вместо github.com: схема и хост меняются и в ключе
+          // конфига, и в URL; остальной текст блоков — из workflow байт-в-байт.
+          const [fetchBlock, pushBlock] = authBlocks.map((block) =>
+            block
+              .replaceAll('https://github.com', `http://127.0.0.1:${remote.port}`)
+              .replace('${{ github.token }}', FAKE_TOKEN),
+          );
+          if (fetchBlock === undefined || pushBlock === undefined) {
+            throw new Error('в workflow не два блока авторизации — структурный тест e67 красный');
+          }
+          const stepEnv = {
+            ...remote.env,
+            REPO: 'e67',
+            HEAD_SHA: remote.headSha,
+            GH_TOKEN: FAKE_TOKEN,
+            BRANCH,
+          };
+
+          const fetched = await runSampled(remote, stepEnv, fetchBlock);
+
+          exitOk(fetched);
+          expect(remote.seen.rejected).toBe(0);
+          expect(remote.seen.authorized).toBeGreaterThanOrEqual(2);
+          // Выборка действительно смотрела на живые git-процессы — иначе «токена нет» ничего не стоит.
+          expect(fetched.argv.length).toBeGreaterThan(0);
+          expect(fetched.argv.some((line) => line.includes(FAKE_TOKEN))).toBe(false);
+          expect(git(remote.work, ['rev-parse', 'FETCH_HEAD'], remote.env)).toBe(remote.headSha);
+
+          // Как шаг «Commit baselines»: коммит в PR-дереве, который push отнесёт в ветку PR.
+          git(remote.work, ['checkout', '--quiet', remote.headSha], remote.env);
+          writeFileSync(join(remote.work, 'baseline.webp'), 'baseline\n');
+          git(remote.work, ['add', '.'], remote.env);
+          git(remote.work, ['commit', '--quiet', '-m', 'visual baselines from CI'], remote.env);
+
+          const pushed = await runSampled(remote, stepEnv, pushBlock);
+
+          exitOk(pushed);
+          expect(remote.seen.rejected).toBe(0);
+          expect(remote.seen.authorized).toBeGreaterThanOrEqual(4);
+          expect(pushed.argv.some((line) => line.includes(FAKE_TOKEN))).toBe(false);
+          const pushedHead = git(remote.origin, ['rev-parse', `refs/heads/${BRANCH}`], remote.env);
+          expect(pushedHead).toBe(git(remote.work, ['rev-parse', 'HEAD'], remote.env));
+          const config = git(remote.work, ['config', '--list', '--show-origin'], remote.env);
+          expect(config.includes(FAKE_TOKEN)).toBe(false);
+          expect(config.includes('extraheader')).toBe(false);
+        });
+      },
+    );
+
+    it(
+      'детектор видит токен в argv: контроль со старой формой URL',
+      { timeout: 30_000 },
+      async () => {
+        await withGitRemote(async (remote) => {
+          const legacy = `git fetch --depth=1 "http://x-access-token:${FAKE_TOKEN}@127.0.0.1:${remote.port}/${REMOTE_PATH}" "$HEAD_SHA"`;
+
+          const fetched = await runSampled(
+            remote,
+            { ...remote.env, HEAD_SHA: remote.headSha },
+            legacy,
+          );
+
+          exitOk(fetched);
+          expect(remote.seen.authorized).toBeGreaterThanOrEqual(2);
+          expect(fetched.argv.length).toBeGreaterThan(0);
+          expect(fetched.argv.some((line) => line.includes(FAKE_TOKEN))).toBe(true);
+        });
+      },
+    );
+
+    it('ключ из блока матчит URL github.com: заголовок придёт и на настоящем remote', () => {
+      const keys = [...workflow.matchAll(/export GIT_CONFIG_KEY_0=(\S+)\n/g)].map(
+        (match) => match[1],
+      );
+      const key = keys[0] ?? '';
+
+      expect(keys).toEqual([
+        'http.https://github.com/.extraheader',
+        'http.https://github.com/.extraheader',
+      ]);
+      expect(
+        git(tmpdir(), ['config', '--get-urlmatch', 'http', 'https://github.com/owner/repo.git'], {
+          GIT_CONFIG_COUNT: '1',
+          GIT_CONFIG_KEY_0: key,
+          GIT_CONFIG_VALUE_0: 'AUTHORIZATION: basic eA==',
+        }),
+      ).toBe('http.extraheader AUTHORIZATION: basic eA==');
     });
   });
 });
