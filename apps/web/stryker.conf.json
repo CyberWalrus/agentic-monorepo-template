@@ -9,7 +9,7 @@
   "reporters": ["clear-text", "progress", "html", "json"],
   "htmlReporter": { "fileName": "reports/mutation/index.html" },
   "jsonReporter": { "fileName": "reports/mutation/mutation.json" },
-  "thresholds": { "break": 69 },
+  "thresholds": { "break": 72 },
   "tempDirName": ".stryker-tmp",
   "vitest": {
     "configFile": "vitest.projects.ts",
