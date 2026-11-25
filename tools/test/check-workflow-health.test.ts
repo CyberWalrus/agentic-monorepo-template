@@ -536,12 +536,51 @@ it('парсер триггеров и область на реальных work
   const nightly = scopeOf('nightly.yml');
   expect(nightly?.schedule).toBe(true);
   expect(nightly?.pushHeadSha).toBe(false);
+  // Push на main с paths-фильтром, без schedule (e79): красный прогон канареек
+  // на main — нарушение; наличие прогонов не требуется (пути могли не совпасть).
+  const canaries = scopeOf('canaries.yml');
+  expect(canaries?.pushHeadSha).toBe(false);
+  expect(canaries?.pushPaths).toBe(true);
+  expect(canaries?.schedule).toBe(false);
   // PR/dispatch-воркфлоу вне области.
-  expect(scopeOf('canaries.yml')).toBeNull();
   expect(scopeOf('agent-review.yml')).toBeNull();
   expect(scopeOf('gate-integrity.yml')).toBeNull();
   expect(scopeOf('preview.yml')).toBeNull();
   expect(scopeOf('visual-approve.yml')).toBeNull();
+});
+
+it('canaries.yml на push в main: пути — суперсет PR-фильтра, прогон main не отменяется (e79)', () => {
+  const workflow = readFileSync(join(repoDir, '.github', 'workflows', 'canaries.yml'), 'utf8');
+  // Список paths триггера: элементы «- …» до первой строки блока с отступом меньше
+  // четырёх пробелов (комментарии между триггерами отфильтровываются).
+  const pathsOf = (trigger: string): string[] => {
+    const lines = workflow.split('\n');
+    const start = lines.indexOf(`  ${trigger}:`);
+    expect(start, `в canaries.yml нет триггера ${trigger}`).toBeGreaterThan(-1);
+    const paths: string[] = [];
+    for (const line of lines.slice(start + 1)) {
+      if (!line.startsWith('    ')) {
+        break;
+      }
+      const item = /^ {6}- (.+)$/.exec(line);
+      if (item !== null) {
+        paths.push(item[1] ?? '');
+      }
+    }
+    return paths;
+  };
+  // На PR с согласованными breaking changes negative control красен по замыслу,
+  // и канарейки не судятся — судятся на main. Фильтр push обязан покрыть каждый
+  // путь PR-фильтра и код, который канарейки гоняют через verify: мерж, тронувший
+  // только apps/packages/e2e (24.11 — e57), иначе виден лишь в nightly.
+  const expected = [...pathsOf('pull_request'), 'apps/**', 'packages/**', 'e2e/**'];
+  expect(pathsOf('push'), 'push-фильтр канареек разошёлся с PR-фильтром').toEqual(expected);
+  expect(parseWorkflowTriggers(workflow)?.pushBranches).toEqual(['main']);
+  // Прогон main не отменяется следующим мержем и не ждёт соседа: группа на SHA,
+  // отмена — только для PR. Отменённый прогон чекер счёл бы красным (conclusion
+  // последнего завершённого push-прогона).
+  expect(/\n {2}group: (.+)\n/.exec(workflow)?.[1]).toContain('github.sha');
+  expect(workflow).not.toMatch(/\n {2}cancel-in-progress: true\n/);
 });
 
 it('область на реальных workflow: собственный хост вне области сверки (e39)', () => {
