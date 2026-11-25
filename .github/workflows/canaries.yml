@@ -112,3 +112,26 @@ jobs:
       # один источник tools/copier-version.txt (З10).
       - run: pipx install "copier==$(cat tools/copier-version.txt)"
       - run: pnpm canaries
+
+  # Канарейка read-only ACL токена turbo-кэша (e27; ADR 0017, правило 2):
+  # токен environment cache-read — тот же, что получают PR-job'ы ci.yml, —
+  # обязан читать remote-кэш и не писать в него. Серверную гарантию из
+  # репозитория не видно: чекер ходит тем же PUT, каким пишет turbo. Секрета
+  # нет — зелёная с предупреждением (проверять нечего); токен пишет — красная.
+  turbo-acl:
+    name: turbo cache-read token is read-only (e27)
+    # На PR вердикту не доверяем: проверку исполнял бы сам код PR, а токен
+    # PR-коду лишний раз не выдаётся. Значимы push в main и ручной прогон.
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: cache-read
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+      TURBO_API: ${{ vars.TURBO_API }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      # Только встроенные модули Node: установка зависимостей не нужна.
+      - run: node tools/check-turbo-acl.ts
