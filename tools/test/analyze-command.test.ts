@@ -36,6 +36,22 @@ describe('writeTargets', () => {
     ['rm -rf dir1 dir2', ['dir1', 'dir2']],
     // значение -s попадает в цели: безвредно, файл "0" никогда не защищён
     ['truncate -s 0 f.json', ['0', 'f.json']],
+    // номер потока перед `>`: `1>` пишет в файл как `>`; `2>` (stderr) остаётся вне целей
+    ['echo x 1> a.json', ['a.json']],
+    ['echo x 1>> a.json', ['a.json']],
+    ['echo x 21> a.json', []],
+    // `perl -i` пишет по месту в файлы после программы, как `sed -i`; без -i — только читает
+    ['perl -pi -e "s/a/b/" f.json', ['f.json']],
+    ['perl -p -i -e "s/a/b/" f.json', ['f.json']],
+    ['perl -pi.bak -e "s/a/b/" dir1/f.json dir2/g.json', ['dir1/f.json', 'dir2/g.json']],
+    ['perl -e "s/a/b/" f.json', []],
+    // программа в аргументе интерпретатора: цели — строковые литералы, похожие на путь
+    ["node -e \"require('fs').writeFileSync('f.json', 'x')\"", ['f.json']],
+    ['node -e \'require("fs").writeFileSync("dir/f.json", "x")\'', ['dir/f.json']],
+    ['node -e "require(\\"fs\\").writeFileSync(\\"f.json\\", \\"x\\")"', ['f.json']],
+    ["python3 -c \"open('f.json', 'w').write('x')\"", ['f.json']],
+    ['node -e "console.log(1)"', []],
+    ['python3 script.py', []],
   ];
   for (const [segment, expected] of cases) {
     it(`"${segment}" → ${JSON.stringify(expected)}`, () => {

@@ -547,18 +547,71 @@ export function tokenize(segment: string): string[] {
   return [...segment.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3] ?? '');
 }
 
-/** Пути, в которые сегмент команды пишет (или которые удаляет/перемещает). */
+/** Интерпретатор, которому программа передана аргументом: `node -e`, `node -p`, `python -c`. */
+const INLINE_CODE =
+  /(?:^|[^\w.-])(?:node|nodejs|bun|deno|tsx|ts-node|python[\d.]*)(?:\s+-{1,2}[\w.-]+)*\s+(?:-e|-c|--eval|-p|--print)(?=\s|$)/;
+
+/** Строковый литерал похож на путь к файлу: в нём есть каталог либо расширение, но нет текста программы. */
+const PATH_LIKE = /^(?:[^\s"'`(){}[\]]*\/[^\s"'`(){}[\]]*|[\w@+-]+\.[A-Za-z]\w*)$/;
+
+/**
+ * Строковые литералы программы в аргументе интерпретатора. Кавычки — стек: литерал
+ * открывается любой кавычкой и закрывается такой же; `\"` — отдельный уровень (программа
+ * в `"…"` оболочки, строки в ней — через экранирование). Внешний литерал — вся программа —
+ * отсеется по PATH_LIKE.
+ */
+function codeLiterals(code: string): string[] {
+  const literals: string[] = [];
+  const stack: [kind: string, start: number][] = [];
+  for (let at = 0; at < code.length; at++) {
+    let kind = '';
+    if (code.charAt(at) === "'") kind = "'";
+    else if (code.charAt(at) === '"') kind = '"';
+    else if (code.startsWith('\\"', at)) kind = '\\"';
+    else {
+      if (code.charAt(at) === '\\') at++;
+      continue;
+    }
+    const top = stack.at(-1);
+    if (top?.[0] === kind) {
+      stack.pop();
+      literals.push(code.slice(top[1] + kind.length, at));
+    } else {
+      stack.push([kind, at]);
+    }
+    if (kind === '\\"') at++;
+  }
+  return literals;
+}
+
+/**
+ * Пути, в которые сегмент команды пишет (или которые удаляет/перемещает).
+ *
+ * Перенаправление с номером потока (`1>`) — запись в файл, как `>`; `2>` остаётся вне целей.
+ * `perl -i` пишет по месту в файлы после программы, как `sed -i`. Программа интерпретатора
+ * (`node -e`, `python -c`) не разбирается: файл в ней может быть назван только строкой,
+ * поэтому строковые литералы, похожие на путь, считаются целями — консервативно, чтение
+ * защищённого пути из `-e` тоже попадёт в отказ.
+ */
 export function writeTargets(segment: string): string[] {
   const targets: string[] = [];
-  for (const match of segment.matchAll(/(?:^|[^0-9&<>])>{1,2}\s*([^\s;&|<>]+)/g)) {
+  for (const match of segment.matchAll(/(?:^|[^0-9&<>])1?>{1,2}\s*([^\s;&|<>]+)/g)) {
     const target = match[1] ?? '';
     if (!target.startsWith('&') && target !== '/dev/null') {
       targets.push(target);
     }
   }
+  const code = INLINE_CODE.exec(segment);
+  if (code !== null) {
+    targets.push(
+      ...codeLiterals(segment.slice(code.index + code[0].length)).filter((literal) =>
+        PATH_LIKE.test(literal),
+      ),
+    );
+  }
   const tokens = tokenize(segment.replace(/\d?>{1,2}\s*\S+/g, ' '));
   const args = (from: number) => tokens.slice(from).filter((t) => !t.startsWith('-'));
-  const index = tokens.findIndex((t) => /^(sed|tee|mv|cp|rm|truncate|ln|install)$/.test(t));
+  const index = tokens.findIndex((t) => /^(sed|tee|mv|cp|rm|truncate|ln|install|perl)$/.test(t));
   if (index === -1) {
     return targets;
   }
@@ -567,7 +620,9 @@ export function writeTargets(segment: string): string[] {
     return targets;
   }
   const rest = args(index + 1);
-  if (tool === 'sed' && tokens.some((t) => t.startsWith('-i'))) {
+  if (tool === 'perl' && tokens.some((t) => /^-[A-Za-z]*i/.test(t))) {
+    targets.push(...rest.slice(1));
+  } else if (tool === 'sed' && tokens.some((t) => t.startsWith('-i'))) {
     targets.push(...rest.slice(1));
   } else if (tool === 'cp' || tool === 'ln' || tool === 'install') {
     targets.push(...rest.slice(-1));
