@@ -62,7 +62,7 @@ describe('TasksPage', () => {
     );
 
     await expect.element(screen.getByText(/Nothing to do/)).toBeVisible();
-    await expect.element(screen.getByTestId('tasks-summary')).toHaveTextContent('No tasks yet');
+    await expect.element(screen.getByText('No tasks yet', { exact: true })).toBeVisible();
   });
 
   it('passes the toggled task id to onToggle', async () => {
@@ -95,6 +95,6 @@ describe('TasksPage', () => {
       <TasksPage tasks={tasks} onCreate={async () => {}} onToggle={async () => {}} />,
     );
 
-    await expect.element(screen.getByTestId('tasks-summary')).toHaveTextContent('1 of 2 remaining');
+    await expect.element(screen.getByText('1 of 2 remaining', { exact: true })).toBeVisible();
   });
 });
