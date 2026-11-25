@@ -116,6 +116,22 @@ describe('формат комментария версии действия', ()
     expect(problem(`      - {'uses': actions/checkout@${SHA}}`)).toContain('вне блок-маппинга');
   });
 
+  it('пробел до двоеточия (uses :) — тот же ключ: комментарий проверяется', () => {
+    // YAML допускает `key : value`; иначе такая запись обходила бы чекер молча.
+    expect(checkUsesLine(`      - uses : actions/checkout@${SHA} # v7.0.1`)).toEqual({
+      pinned: true,
+    });
+    expect(problem(`      - uses : actions/checkout@${SHA} # v7`)).toContain(
+      'тег релиза не полной версии',
+    );
+  });
+
+  it('ключ uses в кавычках — красный: форму чекер не читает', () => {
+    expect(problem(`      - 'uses': actions/checkout@${SHA} # v7.0.1`)).toContain('в кавычках');
+    expect(problem(`      - "uses": actions/checkout@${SHA} # v7.0.1`)).toContain('в кавычках');
+    expect(problem(`        "uses": actions/checkout@${SHA} # v7.0.1`)).toContain('в кавычках');
+  });
+
   it('закомментированная строка и uses: в тексте команды — не шаг', () => {
     expect(checkUsesLine(`      # - uses: actions/checkout@${SHA} # v7`)).toEqual({
       pinned: false,
@@ -135,6 +151,17 @@ describe('версия сканера zizmor', () => {
   it('комментарий и кавычки у значения не мешают', () => {
     expect(scannerVersion(withVersion('v1.32.0 # релиз 02.11'))).toEqual({ version: 'v1.32.0' });
     expect(scannerVersion(withVersion("'1.32.0'"))).toEqual({ version: '1.32.0' });
+  });
+
+  it('каждый шаг обёртки проверяется: второй шаг с latest — красный с номером строки', () => {
+    const wrapper =
+      '      - uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1';
+    const twoSteps = `${withVersion('v1.32.0')}${wrapper}\n        with:\n          version: latest\n`;
+    const verdict = scannerVersion(twoSteps).problem;
+    expect(verdict).toContain('ожидалась точная версия релиза');
+    expect(verdict).toContain('строка 8:');
+    const bothExact = twoSteps.replace('version: latest', 'version: v1.32.0');
+    expect(scannerVersion(bothExact)).toEqual({ version: 'v1.32.0' });
   });
 
   it('latest / prerelease / пусто — красные: версию выбирает обёртка', () => {

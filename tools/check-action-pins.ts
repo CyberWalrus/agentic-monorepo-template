@@ -18,10 +18,11 @@
  *    репозитория.
  *
  * Fail-closed (З4, З11): строка `uses:` неразборной формы, действие не по SHA,
- * `uses` вне блок-маппинга (flow-запись `- { uses: … }` и `with: { … }` чекер
- * не читает), пропавший шаг сканера и пустой каталог — красные, а не
- * пропущенные. Граница: соответствие комментария самому SHA чекер не проверяет
- * (нужна сеть) — это вторая линия, zizmor.
+ * `uses` вне блок-маппинга (flow-запись `- { uses: … }`, ключ в кавычках;
+ * `with: { … }` чекер не читает), пропавший шаг сканера и пустой каталог —
+ * красные, а не пропущенные. Границы: соответствие комментария самому SHA
+ * чекер не проверяет (нужна сеть) — это вторая линия, zizmor; экзотические
+ * формы YAML (якоря и теги у ключа, явный ключ `? uses`) не распознаются.
  *
  * Чистое ядро (evaluateTree) отделено от CLI guard-ом invokedDirectly: импорт
  * из тестов не читает дерево и не завершает процесс (как check-required-tasks.ts).
@@ -37,8 +38,13 @@ const IMMUTABLE_TAG = /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?
 const SHA = /^[0-9a-f]{40}$/;
 /** `<владелец>/<репозиторий>[/<путь>]@<ссылка>`. */
 const REMOTE_ACTION = /^([^/@\s]+)\/([^/@\s]+)(?:\/[^@\s]+)?@(\S+)$/;
-/** Ключ `uses:` блок-маппинга YAML — с тире элемента последовательности или без. */
-const BLOCK_USES = /^(\s*(?:-\s+)?uses:[ \t]*)(.*)$/;
+/**
+ * Ключ `uses:` блок-маппинга YAML — с тире элемента последовательности или без;
+ * пробел до двоеточия (`uses :`) YAML допускает, для чекера это тот же ключ.
+ */
+const BLOCK_USES = /^(\s*(?:-\s+)?uses[ \t]*:[ \t]*)(.*)$/;
+/** Ключ `uses` в кавычках — валидный YAML, но форму чекер не читает. */
+const QUOTED_USES = /^\s*(?:-\s*)?['"]uses['"][ \t]*:/;
 /** Локальное действие — относительный путь: `./…` либо `$/.github/…` (шаблон, e28). */
 const LOCAL_ACTION = /^(?:\.|\$)[/\\]/;
 /** `uses` ключом flow-маппинга: `{ uses: … }`, `{uses: …}`; ключ в кавычках тоже. */
@@ -123,6 +129,12 @@ function parseUses(rest: string): UsesValue | { problem: string } {
 export function checkUsesLine(line: string): LineVerdict {
   const block = BLOCK_USES.exec(line);
   if (block === null) {
+    if (QUOTED_USES.test(line)) {
+      return {
+        pinned: false,
+        problem: 'ключ uses в кавычках: чекер читает только `uses:` без кавычек',
+      };
+    }
     // Полностью закомментированная строка и хвост `… # uses: …` — не шаг.
     if (FLOW_USES.test(line.replace(/(^|\s)#.*$/, ''))) {
       return {
@@ -159,31 +171,13 @@ export function checkUsesLine(line: string): LineVerdict {
   return { pinned: true };
 }
 
-/**
- * Вход `version` шага сканера: точная версия — её значение; иначе проблема.
- * Шаг ищется по `uses:` блок-маппинга, вход — в `with:` того же шага.
- */
-export function scannerVersion(
-  text: string,
-  pin: typeof SCANNER_PIN = SCANNER_PIN,
+/** Вход `version` одного шага: точная версия — её значение; иначе проблема. */
+function stepInput(
+  lines: readonly string[],
+  step: number,
+  pin: typeof SCANNER_PIN,
 ): { version?: string; problem?: string } {
-  const lines = text.split('\n');
-  let step = -1;
-  let keyIndent = 0;
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? '';
-    const value = BLOCK_USES.exec(line)?.[2];
-    if (value !== undefined && value.trim().replace(/^['"]/, '').startsWith(`${pin.action}@`)) {
-      step = index;
-      keyIndent = line.indexOf('uses:');
-      break;
-    }
-  }
-  if (step === -1) {
-    return {
-      problem: `в ${pin.file} нет шага ${pin.action} — якорь правила версии сканера умер, обнови SCANNER_PIN (fail-closed, З4)`,
-    };
-  }
+  const keyIndent = (lines[step] ?? '').indexOf('uses');
   let withIndent: number | undefined;
   for (let index = step + 1; index < lines.length; index += 1) {
     const line = (lines[index] ?? '').replace(/\r$/, '');
@@ -221,6 +215,38 @@ export function scannerVersion(
   return {
     problem: `у шага ${pin.action} нет входа ${pin.input} — версия сканера не зафиксирована`,
   };
+}
+
+/**
+ * Вход `version` шага сканера — каждого шага обёртки, не только первого:
+ * точная версия — её значение; иначе проблема первого плохого шага (с номером
+ * строки).
+ */
+export function scannerVersion(
+  text: string,
+  pin: typeof SCANNER_PIN = SCANNER_PIN,
+): { version?: string; problem?: string } {
+  const lines = text.split('\n');
+  let found = false;
+  let version: string | undefined;
+  for (let index = 0; index < lines.length; index += 1) {
+    const value = BLOCK_USES.exec(lines[index] ?? '')?.[2];
+    if (value === undefined || !value.trim().replace(/^['"]/, '').startsWith(`${pin.action}@`)) {
+      continue;
+    }
+    found = true;
+    const verdict = stepInput(lines, index, pin);
+    if (verdict.problem !== undefined) {
+      return { problem: `строка ${index + 1}: ${verdict.problem}` };
+    }
+    version ??= verdict.version;
+  }
+  if (!found) {
+    return {
+      problem: `в ${pin.file} нет шага ${pin.action} — якорь правила версии сканера умер, обнови SCANNER_PIN (fail-closed, З4)`,
+    };
+  }
+  return version === undefined ? {} : { version };
 }
 
 /** Оценка дерева YAML-файлов `.github/**`. Чистая функция: тесты подают фикстуры. */
@@ -270,12 +296,16 @@ export function evaluateTree(files: readonly PinFile[]): {
   return { problems, pinned, scanner };
 }
 
+/** Порядок кодовых единиц, не localeCompare: вывод не зависит от локали машины. */
+const byName = (a: { name: string }, b: { name: string }): number =>
+  a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+
 /** YAML-файлы `.github/**` (workflows и composite-действия): пути от корня, по алфавиту. */
 export function listPinFiles(root: string): PinFile[] {
   const paths: string[] = [];
   const walk = (relative: string): void => {
     const entries = readdirSync(join(root, relative), { withFileTypes: true });
-    for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name))) {
+    for (const entry of entries.toSorted(byName)) {
       const path = `${relative}/${entry.name}`;
       if (entry.isDirectory()) {
         walk(path);
