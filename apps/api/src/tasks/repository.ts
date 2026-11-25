@@ -40,6 +40,18 @@ interface TaskRow {
 }
 
 /**
+ * Каноническая форма createdAt на границе хранилища (e58): UTC с `Z` и
+ * миллисекундами — то, что пишет Date#toISOString(). Контракт пускает любую
+ * точность дробной части и её отсутствие; `create` и так пишет эту форму, а
+ * единственный вход чужих строк — reset. Postgres приводит к ней сам: строка
+ * читается через toISOString. Хранилище держит только канонические строки,
+ * поэтому list, toggle и remove отвечают одной формой в обеих реализациях.
+ */
+function toCanonicalCreatedAt(createdAt: string): string {
+  return new Date(createdAt).toISOString();
+}
+
+/**
  * Хранилище в памяти. Достаточно для демо-домена;
  * Postgres-реализация — за тем же интерфейсом (postgres-repository.ts).
  * Ключ карты — идентификатор задачи: id уникален в масштабе хранилища
@@ -68,7 +80,11 @@ export class InMemoryTaskRepository implements TaskRepository {
     const tasks = [...this.#tasks.values()]
       .filter((row) => row.workspaceId === scope)
       .map((row) => row.task);
-    return tasks.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
+    // newest first — по моменту времени, а не по строке (e58). Контракт пускает
+    // любую точность дробной части и её отсутствие; лексикографически `Z`
+    // больше любой цифры, и `…10:00:00Z` вставал выше более поздних задач.
+    // Как в Postgres-реализации: ORDER BY created_at DESC.
+    return tasks.toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   }
 
   async create(title: string, ownerId?: string | null, workspaceId?: string): Promise<Task> {
@@ -118,6 +134,10 @@ export class InMemoryTaskRepository implements TaskRepository {
    * (свойство хранилища). Чужие id ищутся только среди строк, которые сброс
    * оставляет: без `workspaceId` стирается всё (легаси-семантика общего
    * `/__test__/reset`), и id прежних строк любого scope свободны.
+   *
+   * createdAt набора приводится к канонической форме (e58, см.
+   * toCanonicalCreatedAt) — тоже до замены карты: не разбирающаяся дата
+   * оставляет хранилище нетронутым, как любая другая ошибка набора.
    */
   async reset(tasks: readonly Task[], workspaceId?: string): Promise<void> {
     const seededIds = new Set<string>();
@@ -144,7 +164,11 @@ export class InMemoryTaskRepository implements TaskRepository {
       }
     }
     for (const task of tasks) {
-      retained.set(task.id, { task, ownerId: null, workspaceId: workspaceId ?? null });
+      retained.set(task.id, {
+        task: { ...task, createdAt: toCanonicalCreatedAt(task.createdAt) },
+        ownerId: null,
+        workspaceId: workspaceId ?? null,
+      });
     }
     this.#tasks = retained;
   }
