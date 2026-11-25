@@ -69,14 +69,32 @@ const serverEnvSchema = z
     INSTANCE_ID: optionalStringSchema,
     DATABASE_URL: optionalStringSchema,
     // Строгий enum: опечатка вида NODE_ENV=prod молча отключила бы прод-гвард.
+    // Поле остаётся опциональным: без тестового API окружение не обязано
+    // называть среду, запрет ниже сам требует явного значения (e69).
     NODE_ENV: z.enum(['development', 'production', 'test']).optional(),
   })
   .superRefine((env, ctx) => {
-    if (env.ENABLE_TEST_API && env.NODE_ENV === 'production') {
+    // Default-fail-closed (e69): тестовый API открывает только явная пара
+    // «флаг + NODE_ENV=development|test». Раньше запрещало одно значение
+    // ('production'), и незаданный NODE_ENV читался как «не production» —
+    // оба рубежа молчали на одном и том же входе.
+    if (!env.ENABLE_TEST_API) {
+      return;
+    }
+    if (env.NODE_ENV === 'production') {
       ctx.addIssue({
         code: 'custom',
         path: ['ENABLE_TEST_API'],
         message: 'ENABLE_TEST_API must never be set in production',
+      });
+      return;
+    }
+    if (env.NODE_ENV === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['ENABLE_TEST_API'],
+        message:
+          'ENABLE_TEST_API=1 needs an explicit NODE_ENV=development or NODE_ENV=test: the test API does not open on an unnamed environment',
       });
     }
   });
@@ -148,12 +166,22 @@ export function resolveServerStorage(
  * комбинацию переменных при старте server.ts. Этот рубеж зовёт createApp:
  * другой вход, поднимающий приложение мимо loadServerEnv, не сумеет включить
  * /__test__/* в production. Чтение process.env остаётся в env-модуле (C3.0);
- * NODE_ENV здесь сырой — до валидации схемой значение может быть любым строкой,
- * запрет исполняет точное совпадение с 'production', как и superRefine.
- * Сообщение — то же, что у первого рубежа: один запрет — один текст.
+ * NODE_ENV здесь сырой — до валидации схемой значение может быть любой строкой,
+ * поэтому разрешение — не «всё, кроме production», а явные development и test
+ * (e69): незаданное или написанное иначе значение не открывает тестовый API.
+ * Сообщения — те же, что у первого рубежа: один запрет — один текст.
  */
 export function assertTestApiNotInProduction(enableTestApi: boolean): void {
-  if (enableTestApi && process.env['NODE_ENV'] === 'production') {
+  if (!enableTestApi) {
+    return;
+  }
+  const nodeEnv = process.env['NODE_ENV'];
+  if (nodeEnv === 'production') {
     throw new Error('ENABLE_TEST_API must never be set in production');
+  }
+  if (nodeEnv !== 'development' && nodeEnv !== 'test') {
+    throw new Error(
+      'ENABLE_TEST_API=1 needs an explicit NODE_ENV=development or NODE_ENV=test: the test API does not open on an unnamed environment',
+    );
   }
 }
