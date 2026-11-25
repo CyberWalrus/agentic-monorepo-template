@@ -53,6 +53,7 @@ const KNOWN_GATES: readonly string[] = [
   'tools/analyze-command.ts',
   'tools/backlog-board.ts',
   'tools/check-action-pins.ts',
+  'tools/check-naming.ts',
   'tools/check-audit.ts',
   'tools/denial-journal.ts',
   'tools/denial-trend.ts',

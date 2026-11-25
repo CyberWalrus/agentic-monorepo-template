@@ -1516,6 +1516,47 @@ export const CANARIES: GateCanary[] = [
       writeFileSync(path, sabotaged);
     },
   },
+  {
+    // Нейминг путей (b17): после переименований b16 стандарт ничем не был
+    // enforced — PascalCase-имя появлялось снова без сигнала. Плохое изменение
+    // — новый файл с заглавной буквой в имени (критерий приёмки задачи);
+    // шаг naming краснеет, пока файл не переименован. Файл пишется в дерево и
+    // не коммитится: чекер смотрит tracked + untracked вне .gitignore, раннер
+    // убирает файл через git clean.
+    name: 'файл вне стандарта нейминга',
+    steps: 'naming',
+    failedStep: 'naming',
+    expect: /заглавные буквы в «Bar\.tsx»/,
+    apply: (root) => {
+      write(root, 'packages/foo/Bar.tsx', 'export const bar = 1;\n');
+    },
+  },
+  {
+    // Один источник исключений (b17): имя добавили в стандарт документации и
+    // не добавили в чекер — документация обещает исключение, которого гейт не
+    // знает (обратное направление — список в deny чекера без строки в
+    // стандарте). Плохое изменение — лишнее имя в перечне AGENTS.md; шаг
+    // naming краснеет, пока список не один. Якорь — конец перечня в абзаце
+    // «Нейминг путей» (литерал: переименование абзаца даёт «canary anchor not found»).
+    name: 'список исключений нейминга разошёлся с документацией',
+    steps: 'naming',
+    failedStep: 'naming',
+    expect: /AGENTS\.md: список исключений нейминга .*разошёлся с tools\/check-naming\.ts/,
+    apply: (root) => {
+      const path = join(root, 'AGENTS.md');
+      const before = readFileSync(path, 'utf8');
+      const anchor = '`CODEOWNERS.jinja`, `routeTree.gen.ts`.';
+      if (!before.includes(anchor)) {
+        throw new Error(
+          'canary anchor not found: AGENTS.md has no exception list sentence of the naming standard',
+        );
+      }
+      writeFileSync(
+        path,
+        before.replace(anchor, '`CODEOWNERS.jinja`, `routeTree.gen.ts`, `Panel.tsx`.'),
+      );
+    },
+  },
 ];
 // Вывод портов (З9, A5 PR-3) канарейки шага не имеет: рантайм читает записанный
 // reports/ports.json (read-first — иначе зонд после старта серверов уезжал на

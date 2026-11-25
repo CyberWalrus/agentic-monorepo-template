@@ -52,6 +52,7 @@
     "flaky:quarantine": "node tools/check-flaky-rate.ts --validate-quarantine --quarantine tools/flaky-quarantine.json",
     "visual-image:check": "node tools/check-visual-image.ts",
     "action-pins:check": "node tools/check-action-pins.ts",
+    "naming:check": "node tools/check-naming.ts",
     "backlog": "node tools/backlog.ts",
     "gen": "node tools/gen.ts"
   },
