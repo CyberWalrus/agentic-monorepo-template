@@ -10,6 +10,7 @@
  * WORKSPACE_HEADER_PARAMETER. Имя, форма и семантика заголовка живут здесь —
  * одном источнике для парсера и спеки.
  */
+import { isContractProcedure } from '@orpc/contract';
 import type { AnyContractRouter, OpenAPI } from '@orpc/contract';
 
 /** Заголовок-носитель рабочего пространства (ADR 0020). */
@@ -64,54 +65,78 @@ export const WORKSPACE_HEADER_PARAMETER = {
  *
  *   list: readsWorkspace(ocPublic.route({ … }).meta({ … }).output(…)),
  *
- * Строители неизменяемы: вызов после обёртки вернул бы новую процедуру без
- * метки. Не помеченная процедура считается заголовок не читающей — держит тест
- * домена: каждая его процедура помечена (tasks.test.ts).
+ * Метка — лишний ключ в опциях процедуры под `~orpc` (e81). Строители
+ * разворачивают `~orpc` исходной процедуры в каждую новую, поэтому метку переносят
+ * и строители процедуры (производная — та же процедура с иными опциями), и
+ * строитель каталога `oc.router`, пересобирающий каждую процедуру новым
+ * экземпляром. Реестр по экземпляру под строителем каталога метку терял: читатели
+ * выходили в спеку без заголовка и без ошибки. Не помеченная процедура считается
+ * заголовок не читающей — держит тест домена: каждая его процедура помечена
+ * (tasks.test.ts).
  *
- * Реестр — по экземпляру процедуры, а не по списку имён: `pnpm gen feature`
- * добавляет домен со своими процедурами, и список по именам расходился бы с
- * роутером по построению (e56).
+ * По процедуре, а не по списку имён: `pnpm gen feature` добавляет домен со
+ * своими процедурами, и список по именам расходился бы с роутером по построению
+ * (e56).
  */
-const workspaceReaders = new WeakSet<object>();
 
-/** Помечает процедуру контракта как читающую заголовок рабочего пространства. */
+/** Ключ метки в опциях процедуры: символ не столкнётся с опциями библиотеки. */
+const WORKSPACE_READER = Symbol('readsWorkspace');
+
+/**
+ * Помечает процедуру контракта как читающую заголовок рабочего пространства.
+ * Fail-closed: значение, которое процедурой не считается, пометить нельзя —
+ * обёртка вернула бы «читателя», которого не найдёт ни один обход.
+ */
 export function readsWorkspace<T extends object>(procedure: T): T {
-  workspaceReaders.add(procedure);
+  if (!isProcedure(procedure)) {
+    throw new Error(
+      `readsWorkspace must wrap a contract procedure, so the ${WORKSPACE_HEADER} header gets documented`,
+    );
+  }
+  procedure['~orpc'][WORKSPACE_READER] = true;
   return procedure;
 }
 
 /** Читает ли процедура заголовок рабочего пространства. */
 export function isWorkspaceReader(procedure: object): boolean {
-  return workspaceReaders.has(procedure);
+  return isProcedure(procedure) && procedure['~orpc'][WORKSPACE_READER] === true;
 }
 
 /**
- * Часть контрактной процедуры, читаемая здесь. `route` у процедуры контракта —
- * всегда объект (пустой, если `.route(...)` не вызывался), поэтому наличие
- * его не проверяется.
+ * Часть процедуры контракта, читаемая здесь. `~orpc` — открытый набор ключей:
+ * строитель каталога разворачивает их в новую процедуру, лишний ключ переносит.
+ * `route` у процедуры контракта — всегда объект (пустой, если `.route(...)`
+ * не вызывался), поэтому наличие его не проверяется.
  */
 interface ContractProcedure {
-  readonly '~orpc': { readonly route: { readonly method?: string; readonly path?: string } };
+  readonly '~orpc': {
+    readonly route: { readonly method?: string; readonly path?: string };
+    [key: string | symbol]: unknown;
+  };
 }
 
+/**
+ * Процедура ли значение — решает сама библиотека (`isContractProcedure`): тем же
+ * предикатом строитель каталога отличает процедуру от узла-роутера. Узел с
+ * ключом `~orpc`, написанный руками, процедурой не считается.
+ */
 function isProcedure(value: unknown): value is ContractProcedure {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    '~orpc' in value &&
-    typeof value['~orpc'] === 'object' &&
-    value['~orpc'] !== null
-  );
+  return isContractProcedure(value);
 }
 
-/** Все процедуры роутера контракта, рекурсивно по вложенным роутерам. */
+/**
+ * Все процедуры роутера контракта, рекурсивно по вложенным роутерам. Под
+ * `~orpc` процедур нет — это опции, а не вложенный роутер.
+ */
 function* procedures(router: AnyContractRouter): Generator<ContractProcedure> {
   if (isProcedure(router)) {
     yield router;
     return;
   }
-  for (const value of Object.values(router)) {
-    yield* procedures(value);
+  for (const [key, value] of Object.entries(router)) {
+    if (key !== '~orpc') {
+      yield* procedures(value);
+    }
   }
 }
 
