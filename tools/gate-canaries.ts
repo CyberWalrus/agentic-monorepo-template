@@ -27,7 +27,10 @@ export interface GateCanary {
   failedStep: string;
   /** Подстрока/паттерн в выводе упавшего шага. */
   expect: RegExp;
-  /** Тексты вне apply, на которые опирается expect (заголовки тестов, шаблоны сообщений). */
+  /**
+   * Тексты вне apply, на которые опирается expect (заголовки тестов, шаблоны сообщений) —
+   * целиком, а не фрагмент: фрагмент переживает переименование своего заголовка.
+   */
   expects?: readonly ExpectAnchor[];
   /** Зонд: файл, который пишет apply, и файл-цель, который он импортирует. */
   probe?: Probe;
@@ -926,7 +929,12 @@ export const CANARIES: GateCanary[] = [
     full: true,
     failedStep: 'perf',
     expect: /create-task/,
-    expects: [{ file: 'e2e/perf/tasks.perf.ts', text: 'create-task' }],
+    // Заголовок целиком, а не «create-task»: литерал есть ещё в ключах метрик
+    // (scenario:create-task) и сообщениях ассертов, поэтому переименование одного
+    // заголовка проверка живости пропустила бы (находка ревью перед мержем).
+    expects: [
+      { file: 'e2e/perf/tasks.perf.ts', text: 'scenario "create-task" stays within budget' },
+    ],
     apply: (root) => {
       const path = join(root, 'apps/web/src/features/tasks/use-tasks.ts');
       const source = readFileSync(path, 'utf8');
