@@ -1127,6 +1127,27 @@ export const CANARIES: GateCanary[] = [
     },
   },
   {
+    // Шаг test идёт с turbo --continue (25.11). Без флага turbo останавливает остальные пакеты после
+    // первого падения, их отчёты vitest не пишутся: диагностика шага видит только первое падение, и
+    // канарейка «owner-процедура без строки сценария таблицы» слепнет, когда тест другого пакета падает
+    // раньше (три останова поезда: 22.11, 24.11, 25.11). Плохое изменение — снятие флага: красит тест
+    // tools/test/verify-steps.test.ts в test:hooks.
+    name: 'шаг test останавливается на первом падении (turbo без --continue)',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /упавший прогон test доводится до конца/,
+    apply: (root) => {
+      const path = join(root, 'tools', 'verify-steps.ts');
+      const source = readFileSync(path, 'utf8');
+      if (!source.includes("turbo('test', ['--continue'])")) {
+        throw new Error(
+          'canary anchor not found: tools/verify-steps.ts has no turbo test step with --continue',
+        );
+      }
+      writeFileSync(path, source.replace("turbo('test', ['--continue'])", "turbo('test')"));
+    },
+  },
+  {
     // b4.4: карантин не узаконенный .skip — @critical в карантин запрещён
     // (максимум 3 записи, срок обязателен; остальное валидирует тот же чекер).
     // Красит шаг quarantine (tools/check-flaky-rate.ts --validate-quarantine).

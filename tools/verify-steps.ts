@@ -12,10 +12,10 @@ export interface Step {
   args: string[];
 }
 
-const turbo = (task: string): Step => ({
+const turbo = (task: string, extra: string[] = []): Step => ({
   name: task,
   command: 'pnpm',
-  args: ['turbo', 'run', task, '--output-logs=errors-only'],
+  args: ['turbo', 'run', task, '--output-logs=errors-only', ...extra],
 });
 
 export const fast: Step[] = [
@@ -25,7 +25,12 @@ export const fast: Step[] = [
   { name: 'env', command: 'pnpm', args: ['env:check'] },
   turbo('typecheck'),
   { name: 'typecheck:tools', command: 'pnpm', args: ['typecheck:tools'] },
-  turbo('test'),
+  // Упавший прогон идёт до конца (turbo --continue). Без флага turbo останавливает остальные пакеты после
+  // первого падения, их vitest убит до записи reports/vitest.json: диагностика шага видит только первое
+  // падение, а канарейка «owner-процедура без строки сценария таблицы» ждёт сообщение теста другого пакета
+  // и даёт «test НЕ УПАЛ» (22.11, 24.11, 25.11 — три останова поезда). Цена — время остальных пакетов на
+  // упавшем прогоне (замер 25.11: 4,6 с → 8,9 с); зелёный прогон не меняется.
+  turbo('test', ['--continue']),
   { name: 'boundaries', command: 'pnpm', args: ['boundaries'] },
   { name: 'knip', command: 'pnpm', args: ['knip'] },
   // Состав workspace (e20): каждая обязательная задача turbo объявлена хотя бы
