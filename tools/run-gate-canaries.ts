@@ -12,8 +12,10 @@
  *
  * Ограничения: канарейки проверяют ЗАКОММИЧЕННОЕ состояние (worktree от HEAD) —
  * при локальной разработке сначала commit. Запускаются при изменении tools/,
- * .claude/, конфигов гейтов (workflow canaries.yml) и в nightly; в каждом PR
- * не нужны. pnpm install в worktree делаетс один раз на весь набор; в CI store
+ * .claude/, конфигов гейтов (workflow canaries.yml), на push в main (e79: на PR
+ * с согласованными breaking changes negative control красен по замыслу, и
+ * отдельные канарейки судятся только на main) и в nightly; в каждом PR не
+ * нужны. pnpm install в worktree делаетс один раз на весь набор; в CI store
  * прогревается установкой в корневом чекауте (setup action) до worktree.
  *
  *   pnpm canaries
