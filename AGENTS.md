@@ -16,6 +16,7 @@ Node (`.nvmrc`) · pnpm (`packageManager`) · Turborepo · TypeScript · Oxlint 
 apps/api/                Hono + oRPC. src/<module>/ — домен, app.ts/router.ts — HTTP-слой
 apps/web/                TanStack Start. src/features/<feature>/ — независимые фичи, src/lib/ — общее
 packages/contracts/      oRPC-контракт + Zod-схемы. Единый источник правды API. openapi.json генерируется
+packages/preflight/      Проверки окружения pnpm preflight (Node, pnpm, node_modules против lockfile, git-хуки, Docker, Chromium). Не гейт: в verify не входит и ничего не блокирует
 packages/ui/             Презентационные React-компоненты. Без импортов контрактов и транспорта; шейп данных объявляется локально в пакете (domain-shaped presentation допустим)
 e2e/                     Playwright: features/ (функциональные), *.visual.ts (скриншоты), perf/ (бюджеты), specs/ (планы тестов — трассировка AC), agents/ (seed Test Agents)
 tools/                   Гейты: verify, бюджет бандла, защищённые пути, визуальные тесты в Docker
