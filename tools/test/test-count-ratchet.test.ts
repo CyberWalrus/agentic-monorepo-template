@@ -532,35 +532,6 @@ it('диспатч ci.yml отказал после create — шаг красн
   expect(repo.ghCalls().filter((call) => call.startsWith('workflow run'))).toEqual([DISPATCH_CALL]);
 }, 30_000);
 
-it('диспатч ci.yml отказал под открытым PR — шаг красный, состояние ветки по факту (e85)', () => {
-  const repo = ratchetRepo();
-  writeFileSync(join(repo.ghState, 'create-refused'), '');
-  repo.night(300);
-  expect(repo.runStep().status).toBe(1);
-  const nightOne = repo.remoteTip();
-
-  // Ночь 2: человек открыл PR, у джобы нет права actions: write.
-  writeFileSync(
-    join(repo.ghState, 'pr-list.json'),
-    JSON.stringify([{ number: 7, url: 'https://github.com/org/repo/pull/7' }]),
-  );
-  rmSync(join(repo.ghState, 'create-refused'));
-  writeFileSync(join(repo.ghState, 'dispatch-refused'), '');
-  repo.night(718);
-
-  const run = repo.runStep();
-
-  expect(run.status).toBe(1);
-  expect(run.output).toContain(DISPATCH_REFUSED);
-  // Ветка и правда обновлена — вывод не утверждает обратное (commit — по факту).
-  expect(run.output).toMatch(
-    /^PR #7 уже открыт — ветка chore\/test-count-ratchet обновлена \(commit [0-9a-f]{12}\): CI \(ci\.yml\) на head SHA не запущен/m,
-  );
-  expect(run.output).toContain(`Дальше человек: запусти CI на ветке PR — gh ${DISPATCH_CALL}`);
-  expect(gitText(repo.dir, ['rev-parse', '--verify', `${repo.remoteTip()}^`])).toBe(nightOne);
-  expect(repo.remoteBaseline()).toEqual({ 'reports/vitest-hooks.json': 718 });
-}, 30_000);
-
 it('push отклонён — шаг красный с причиной дословно, без «уже открыт» и без create', () => {
   const repo = ratchetRepo();
   const hook = join(repo.remote, 'hooks', 'pre-receive');

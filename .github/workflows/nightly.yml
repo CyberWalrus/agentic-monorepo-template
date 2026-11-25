@@ -136,7 +136,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      actions: read # fetch-state: артефакты прошлых ночных прогонов
+      actions: write # fetch-state: артефакты прошлых ночных прогонов; e85: диспатч ci.yml на head-ветку PR храповика
       contents: write # ветка и коммит храповика
       pull-requests: write # PR храповика
     steps:
@@ -209,9 +209,13 @@ jobs:
       # человека. Настройка Actions «Allow GitHub Actions to create and approve
       # pull requests» включена (e85, решение владельца 25.11): github.token
       # создаёт PR сам, отказ create (кроме «уже открыт») по-прежнему красный.
-      # Диспатч ci.yml этому шагу не заведён (e85, журнал задачи): проверки на
-      # новом head SHA запускает одно событие PR от человека — шаг называет его.
-      # Ни `|| echo`, ни continue-on-error: текст шага исполняет канарейка
+      # События от github.token workflow не рождают, поэтому шаг сам запускает
+      # ci.yml диспатчем на ветку PR (нужно право actions: write); отказ
+      # диспатча — красный шаг. Доверенный gate-integrity.yml автоматика не
+      # запускает (маршрут (б1), ADR 0002): PR трогает deny-путь, label
+      # gate-change-approved после последнего push обязателен и его событие
+      # labeled запускает гейт — вывод шага это называет. Ни `|| echo`, ни
+      # continue-on-error: текст шага исполняет канарейка
       # tools/test/check-mutation-ratchet.test.ts.
       - name: PR with raised thresholds
         env:

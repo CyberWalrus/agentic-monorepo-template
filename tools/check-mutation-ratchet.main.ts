@@ -542,27 +542,50 @@ if (command === 'apply') {
 // либо шаг красный с причиной дословно и действием человека. До e82 логика
 // жила inline в nightly.yml и глушила отказы (`git push … || true`,
 // `gh pr create … || echo «PR храповика уже открыт — ветка обновлена»`):
-// create отклоняет настройка Actions, и ночи с предложением уходили зелёным
-// шагом без PR. Остаточный риск тот же, что у e40: если main менял порог
-// после основания открытой PR-ветки — конфликт покажет сам PR, шаг об этом
-// не знает.
+// create отклоняла настройка Actions, и ночи с предложением уходили зелёным
+// шагом без PR. С e85 настройка включена (решение владельца 25.11): PR
+// создаёт сам шаг, после create и после push под открытым PR он диспатчит
+// ci.yml (маршрут (а)) — отказ диспатча красный, как отказ create.
+// Доверенный gate-integrity.yml не тронут (маршрут (б1)): его запускает
+// событие PR от человека, вывод шага его называет. Остаточный риск тот же,
+// что у e40: если main менял порог после основания открытой PR-ветки —
+// конфликт покажет сам PR, шаг об этом не знает.
 const RATCHET_BRANCH = 'chore/mutation-ratchet-web-contracts';
 const TRACKING_REF = `refs/remotes/nightly-ratchet/${RATCHET_BRANCH}`;
 const COMMIT_MESSAGE = 'chore: поднятие мутационного порога break web и контрактов (nightly, b2.4)';
 const PR_TITLE = 'chore: поднятие мутационного порога break web и контрактов (nightly)';
 const PR_BODY =
   'Автоматическое поднятие thresholds.break web и контрактов после зелёного nightly (b2.4, З7): правило ADR 0009 «Пороги» от устойчивого счёта, только вверх. Порог может только ужесточаться — каждое повышение проходит приёмку человека: label `gate-change-approved` после последнего push (force-repush ветки снимает label на synchronize, ADR 0002).';
-// Push делает github.token, а события от него не рождают workflow run (как у
-// базлайнов visual, ADR 0015): на новом коммите обязательные checks (gate,
-// gate-integrity) сами не появятся, и PR не смержить. Поднятие при этом
-// опубликовано — вывод обязан назвать это и действие человека.
-const CI_NOTE = [
-  'CI на новый коммит не запустится: push сделал github.token,',
-  'события от него workflow не рождают, а обязательные checks (gate, gate-integrity)',
-  'ждут результаты на новом head SHA.',
-  'Перед merge человеку одно из: пустой коммит от себя, Update branch',
-  'или закрыть и снова открыть PR — synchronize/reopened запускают',
-  'ci.yml и gate-integrity.yml на новом коммите.',
+// Проверки на PR автоматики (e85). push и create делает github.token, события
+// от него workflow не рождают (как у базлайнов visual, ADR 0015): на новом head
+// SHA проверки сами не придут. ci.yml шаг запускает сам диспатчем на ветку
+// храповика (нужно право job actions: write) — check `gate` появляется без
+// действий человека.
+const CI_WORKFLOW = 'ci.yml';
+const CI_STARTED = [
+  `CI (${CI_WORKFLOW}) на head SHA запущен диспатчем:`,
+  'прогон workflow_dispatch — всё дерево, без merge-ref; check `gate` появится без действий человека.',
+].join('\n');
+// Доверенный gate-integrity.yml (обязательные checks gate-integrity,
+// bundle-approval) автоматика не запускает: любое его расширение — отдельный
+// ADR (ADR 0002). PR храповика трогает deny-путь — конфиг Stryker: label
+// gate-change-approved после последнего push обязателен, его событие labeled
+// запускает гейт (маршрут (б1) задачи e85); зелёный вывод обязан назвать это.
+const GATE_NOTE = [
+  'gate-integrity и bundle-approval автоматика не запускает: gate-integrity.yml —',
+  'доверенный гейт, на PR автоматики приходит событием PR от человека.',
+  'PR трогает deny-путь (конфиг Stryker): перед merge нужен label',
+  'gate-change-approved, поставленный после последнего push, — событие labeled',
+  'запускает gate-integrity.yml на текущем head SHA, сверх label действий нет.',
+  'Пока PR открыт, ночь с превышением добавляет коммит: label нужно поставить',
+  'заново после последнего ночного push (если стоит с прошлого head — снять и поставить).',
+].join('\n');
+// PR открывает человек (create отказал): его событие opened запускает проверки
+// само — диспатч не нужен, вывод называет только обязательный label.
+const HUMAN_OPEN_NOTE = [
+  'PR откроет человек — его событие opened запустит ci.yml и gate-integrity.yml',
+  'на текущем head SHA; для merge всё равно нужен label gate-change-approved',
+  'после последнего push (PR трогает deny-путь — конфиг Stryker).',
 ].join('\n');
 
 interface CommandResult {
@@ -708,6 +731,34 @@ function gitAuthEnv(token: string): NodeJS.ProcessEnv {
 // чтобы авторизовал ровно токен job, а не хелпер машины или checkout.
 function gitOnRemote(args: string[], gitAuth: NodeJS.ProcessEnv): CommandResult {
   return capture('git', ['-c', 'credential.helper=', ...args], gitAuth);
+}
+
+// Запуск CI на head-ветке храповика (e85), по образцу tools/check-test-count.ts:
+// вызывается только после публикации нового head SHA (create либо push под
+// открытым PR) и только с существующим PR — диспатч ветки без PR гонял бы CI
+// впустую. Отказ — красный шаг: PR есть, а проверка на нём не идёт; действие
+// человека называет готовую команду, линии — причину дословно и остаточное
+// событие для gate-integrity.
+function startCi(repository: string, pullRequest: string): void {
+  const dispatchArgs = [
+    'workflow',
+    'run',
+    CI_WORKFLOW,
+    '--repo',
+    repository,
+    '--ref',
+    RATCHET_BRANCH,
+  ];
+  const dispatched = capture('gh', dispatchArgs);
+  if (dispatched.status !== 0) {
+    throw new PublishFailure(`запусти CI на ветке PR — gh ${dispatchArgs.join(' ')}`, [
+      `${pullRequest}: CI (${CI_WORKFLOW}) на head SHA не запущен — проверь право job (actions: write).`,
+      ...commandFailed(`gh ${dispatchArgs.slice(0, 3).join(' ')}`, dispatched),
+      GATE_NOTE,
+    ]);
+  }
+  console.log(CI_STARTED);
+  console.log(GATE_NOTE);
 }
 
 /** Предложение из файла decide; файла нет — null. Битый файл — красный, а не «нет предложения» (З11). */
@@ -899,6 +950,7 @@ function publishProposal(proposalPath: string, configPaths: BreaksConfigPaths): 
     console.log(
       `PR #${open.number} уже открыт — ветка ${RATCHET_BRANCH} не тронута: порог ветки уже не ниже предложенного: ${clean(open.url)}`,
     );
+    console.log(GATE_NOTE);
     return 0;
   }
 
@@ -939,10 +991,9 @@ function publishProposal(proposalPath: string, configPaths: BreaksConfigPaths): 
   const branchState = pushedState;
 
   if (open !== null) {
-    console.log(
-      `PR #${open.number} уже открыт — ${branchState} (commit ${commit.slice(0, 12)}): ${clean(open.url)}`,
-    );
-    console.log(CI_NOTE);
+    const alreadyOpen = `PR #${open.number} уже открыт — ${branchState} (commit ${commit.slice(0, 12)})`;
+    console.log(`${alreadyOpen}: ${clean(open.url)}`);
+    startCi(repository, alreadyOpen);
     return 0;
   }
 
@@ -961,11 +1012,13 @@ function publishProposal(proposalPath: string, configPaths: BreaksConfigPaths): 
     `${PR_BODY}\n\nПредложение nightly (прогон ${proposal.runId}, база ${proposal.sha}):\n${JSON.stringify(proposal.proposals, null, 2)}`,
   ]);
   if (created.status === 0) {
-    console.log(`PR храповика создан: ${clean(created.stdout.trim())}`);
-    console.log(CI_NOTE);
+    const createdUrl = clean(created.stdout.trim());
+    console.log(`PR храповика создан: ${createdUrl}`);
+    startCi(repository, `PR храповика создан: ${createdUrl} (${branchState})`);
     return 0;
   }
-  // PR могли открыть между list и create — перепроверяем, а не гадаем.
+  // PR могли открыть между list и create — перепроверяем, а не гадаем. Открыл
+  // его человек: его событие opened запускает проверки само, диспатч не нужен.
   const rechecked = capture('gh', listArgs);
   if (rechecked.status === 0) {
     try {
@@ -974,7 +1027,6 @@ function publishProposal(proposalPath: string, configPaths: BreaksConfigPaths): 
         console.log(
           `PR #${raced.number} уже открыт — ${branchState} (commit ${commit.slice(0, 12)}): ${clean(raced.url)}`,
         );
-        console.log(CI_NOTE);
         return 0;
       }
     } catch {
@@ -983,7 +1035,7 @@ function publishProposal(proposalPath: string, configPaths: BreaksConfigPaths): 
   }
   throw new PublishFailure(
     `${branchState} — PR открывает человек:\n  gh pr create --base main --head ${RATCHET_BRANCH} --title "${PR_TITLE}"`,
-    [...commandFailed('gh pr create', created), CI_NOTE],
+    [...commandFailed('gh pr create', created), HUMAN_OPEN_NOTE],
   );
 }
 
