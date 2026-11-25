@@ -530,16 +530,11 @@ describe('HTTP concerns', () => {
     expect(rest.status).toBe(404);
   });
 
-  // e68: идентификатор экземпляра — внутренние данные. Публичный `/health` не
-  // отдаёт его ни в какой конфигурации: с INSTANCE_ID и без, с тестовым API и без.
+  // e68: идентификатор экземпляра — внутренние данные. Сервер без тестового API
+  // не отдаёт его в /health ни с заданным INSTANCE_ID, ни без него.
   it.each([
     { name: 'outside e2e', options: {} },
     { name: 'with INSTANCE_ID', options: { instanceId: 'run-token' } },
-    { name: 'with the test API on', options: { enableTestApi: true } },
-    {
-      name: 'with INSTANCE_ID and the test API on',
-      options: { instanceId: 'run-token', enableTestApi: true },
-    },
   ])('answers /health with the status only — $name', async ({ options }) => {
     const { app } = setup(options);
 
@@ -548,32 +543,23 @@ describe('HTTP concerns', () => {
     expect(await response.json()).toEqual({ status: 'ok' });
   });
 
-  it('serves the instance id of the e2e run on the test API only', async () => {
-    const { app } = setup({ instanceId: 'run-token', enableTestApi: true });
+  it('adds the instance id to /health only while the test API is on (the own-server gate)', async () => {
+    const running = setup({ instanceId: 'run-token', enableTestApi: true });
+    const bare = setup({ enableTestApi: true });
 
-    const response = await app.request('/__test__/instance');
-
-    expect(await response.json()).toEqual({ status: 'ok', instance: 'run-token' });
+    // Гейт «свой сервер» (З9, A5) читает отсюда токен своего прогона.
+    expect(await (await running.app.request('/health')).json()).toEqual({
+      status: 'ok',
+      instance: 'run-token',
+    });
+    // С тестовым API, но без INSTANCE_ID: идентификатора нет — гейт сервер отвергнет.
+    expect(await (await bare.app.request('/health')).json()).toEqual({
+      status: 'ok',
+      instance: null,
+    });
   });
 
-  it('answers /__test__/instance with a null instance when started without INSTANCE_ID', async () => {
-    const { app } = setup({ enableTestApi: true });
-
-    const response = await app.request('/__test__/instance');
-
-    expect(await response.json()).toEqual({ status: 'ok', instance: null });
-  });
-
-  it('hides /__test__/instance unless the test API is enabled', async () => {
-    // «Выключено по умолчанию» (architecture.md, 2.3) — даже с заданным INSTANCE_ID.
-    const { app } = setup({ instanceId: 'run-token' });
-
-    const response = await app.request('/__test__/instance');
-
-    expect(response.status).toBe(404);
-  });
-
-  it('stamps log records with the instance id instead of serving it', async () => {
+  it('stamps log records with the instance id', async () => {
     const records: LogRecord[] = [];
     const sink: LogSink = (record) => records.push(record);
     const stamped = setup({ instanceId: 'run-token', log: sink });

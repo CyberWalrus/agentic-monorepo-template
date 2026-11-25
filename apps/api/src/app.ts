@@ -127,10 +127,10 @@ export interface AppOptions {
    */
   enableTestApi?: boolean;
   /**
-   * Идентификатор экземпляра (`INSTANCE_ID`; З9, A5) — внутренние данные, в
-   * публичный `/health` не выходит (e68): штамп `instanceId` в каждой записи
-   * лога (observability.ts) и ответ `/__test__/instance`, где его сверяет с
-   * токеном прогона global setup Playwright, чтобы тест не смотрел в чужой сервер.
+   * Идентификатор экземпляра (`INSTANCE_ID`; З9, A5): штамп `instanceId` в
+   * каждой записи лога (observability.ts), а в `/health` — только у сервера с
+   * включённым тестовым API (e68). Global setup Playwright сверяет его с токеном
+   * прогона, чтобы тест не смотрел в чужой сервер.
    */
   instanceId?: string;
   /**
@@ -293,10 +293,15 @@ export function createApp({
   });
   const timeoutGuard = requestTimeout(requestTimeoutMs);
 
-  // Публичный `/health` отдаёт минимум — только статус (e68): идентификатор
-  // экземпляра из ответа убран, он живёт в логе (createLogger выше) и в тестовом
-  // контуре (`/__test__/instance` ниже).
-  app.get('/health', (c) => c.json({ status: 'ok' }));
+  // Публичный `/health` отдаёт минимум — статус (e68). Идентификатор экземпляра
+  // — внутренние данные: он идёт штампом в лог (createLogger выше), а в ответе
+  // появляется только у сервера с включённым тестовым API — для гейта «свой
+  // сервер» (З9, A5): global setup Playwright сверяет его с токеном прогона,
+  // чтобы тест не смотрел в чужой сервер. Тестовый API в production не
+  // поднимается (двойной guard выше), поэтому публичный ответ его не отдаёт.
+  app.get('/health', (c) =>
+    c.json(enableTestApi ? { status: 'ok', instance: instanceId ?? null } : { status: 'ok' }),
+  );
 
   app.use('/rpc/*', requestShapeGuard, timeoutGuard, bodyLimitGuard);
   app.use('/api/*', requestShapeGuard, timeoutGuard, bodyLimitGuard);
@@ -384,13 +389,6 @@ export function createApp({
       await tasks.reset(parsed.data.tasks, workspaceId ?? undefined);
       return c.body(null, 204);
     });
-
-    // Гейт «свой сервер» (З9, A5): идентификатор прогона отдаёт только
-    // тестовый контур — global setup Playwright сверяет его с токеном прогона
-    // (tools/instance.ts), поэтому прогон не может незаметно пойти против чужого
-    // процесса на порту. Форма ответа — прежний ответ `/health`: status и
-    // instance. С выключенным тестовым API маршрута нет (e68).
-    app.get('/__test__/instance', (c) => c.json({ status: 'ok', instance: instanceId ?? null }));
 
     // Срез лога по идентификаторам запроса (C4): фикстура E2E собирает
     // x-request-id из ответов сценария и здесь забирает только его записи —
