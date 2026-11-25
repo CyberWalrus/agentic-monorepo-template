@@ -27,7 +27,43 @@ export interface GateCanary {
   failedStep: string;
   /** Подстрока/паттерн в выводе упавшего шага. */
   expect: RegExp;
+  /**
+   * Тексты вне apply, на которые опирается expect (заголовки тестов, шаблоны сообщений) —
+   * целиком, а не фрагмент: фрагмент переживает переименование своего заголовка.
+   */
+  expects?: readonly ExpectAnchor[];
+  /** Зонд: файл, который пишет apply, и файл-цель, который он импортирует. */
+  probe?: Probe;
   apply: (root: string) => void;
+}
+
+/**
+ * Якорь expect вне apply: текст в дереве, по которому канарейка узнаёт своё
+ * падение, — apply его не читает и не проверяет. Переименование теста вне
+ * фильтра путей canaries.yml применяет канарейку впустую: шаг падает, но без
+ * этого текста — «НЕ УПАЛ» увидит только nightly (e77). Живость держит тест
+ * gates-canary.test.ts (шаг test:hooks).
+ */
+interface ExpectAnchor {
+  /** Путь файла в дереве, от корня репозитория. */
+  file: string;
+  /**
+   * Литеральный текст исходника: заголовок теста целиком (expect его матчит)
+   * или статическая приставка шаблона сообщения (expect с неё начинается).
+   */
+  text: string;
+}
+
+/**
+ * Зонд apply и файл-цель его импорта. Зонд только пишет файл-нарушение и
+ * полагается на то, что цель существует: переименованная или удалённая цель
+ * меняет причину падения шага на not-to-unresolvable — канарейка «НЕ УПАЛА».
+ */
+interface Probe {
+  /** Файл-зонд, который пишет apply. */
+  file: string;
+  /** Файл, который зонд импортирует относительным путём. */
+  imports: string;
 }
 
 // Высокоэнтропийный литерал: повторяющиеся символы gzip сжимает, и перерасход
@@ -55,6 +91,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** Массив `quarantine` файла карантина; нет объекта с массивом — null. */
+function quarantineOf(value: unknown): unknown[] | null {
+  return isRecord(value) && Array.isArray(value['quarantine']) ? value['quarantine'] : null;
+}
+
 /**
  * Регистрации `/rpc` в server-app.ts — якорь двух канареек ниже. Якорятся сами
  * маршруты вместе с тем, что стоит перед `proxyRpc` (e55 поставила перед ним
@@ -78,10 +119,14 @@ type RpcRoute = {
 const RPC_MAIN_LINE = /^([ \t]*)app\.all\('\/rpc', ([^;\n]*?)proxyRpc\);/m;
 const RPC_SUB_LINE = /^([ \t]*)app\.all\('\/rpc\/\*', ([^;\n]*?)proxyRpc\);/m;
 /**
- * Регистрация `/rpc` в строке кода — любым `….all('/rpc'` (и `subapp.all`), но
- * не в строке комментария: осталась после переименования — якорь её не знает.
+ * Регистрация `/rpc` в строке кода — любым `….all('/rpc'`, `….all('/rpc/*'` или
+ * `….all('/rpc*'` (и `subapp.all`), но не в строке комментария: осталась после
+ * переименования — якорь её не знает. До e77 `/rpc/*` проходил: после `rpc`
+ * регулярка ждала `'` или `*`, а там `/`. Ветка `*` (`/rpc*` и любой хвост после
+ * него) сохранена — надмножество прежней `(?:'|\*)`: вариант задачи
+ * `(?:'|\/\*')` терял `/rpc*`, сужая постпроверку (находка ревью перед мержем).
  */
-const RPC_ANY = /^[ \t]*(?!\/\/)\S*app\.all\('\/rpc(?:'|\*)/m;
+const RPC_ANY = /^[ \t]*(?!\/\/)\S*app\.all\('\/rpc(?:'|\/?\*)/m;
 
 function rpcRoutes(source: string): { main: RpcRoute; sub: RpcRoute } | null {
   const route = (pattern: RegExp): RpcRoute | null => {
@@ -130,6 +175,7 @@ export const CANARIES: GateCanary[] = [
     steps: 'boundaries',
     failedStep: 'boundaries',
     expect: /product-not-to-tools/,
+    probe: { file: 'apps/web/src/lib/evil-probe.ts', imports: 'tools/ports.ts' },
     apply: (root) =>
       write(
         root,
@@ -159,6 +205,10 @@ export const CANARIES: GateCanary[] = [
     steps: 'boundaries',
     failedStep: 'boundaries',
     expect: /web-lib-not-to-features/,
+    probe: {
+      file: 'apps/web/src/lib/evil-feature-probe.ts',
+      imports: 'apps/web/src/features/tasks/task-cache.ts',
+    },
     apply: (root) =>
       write(
         root,
@@ -172,6 +222,10 @@ export const CANARIES: GateCanary[] = [
     steps: 'boundaries',
     failedStep: 'boundaries',
     expect: /api-domain-independent-of-transport/,
+    probe: {
+      file: 'apps/api/src/tasks/evil-transport-probe.ts',
+      imports: 'apps/api/src/authorization.ts',
+    },
     apply: (root) =>
       write(
         root,
@@ -186,6 +240,10 @@ export const CANARIES: GateCanary[] = [
     steps: 'boundaries',
     failedStep: 'boundaries',
     expect: /no-cross-feature-imports/,
+    probe: {
+      file: 'apps/web/src/features/evil/index.ts',
+      imports: 'apps/web/src/features/tasks/use-tasks.ts',
+    },
     apply: (root) =>
       write(
         root,
@@ -283,6 +341,7 @@ export const CANARIES: GateCanary[] = [
     steps: 'boundaries',
     failedStep: 'boundaries',
     expect: /packages-not-to-apps/,
+    probe: { file: 'packages/ui/src/evil-apps-probe.ts', imports: 'apps/web/src/lib/env.ts' },
     apply: (root) =>
       write(
         root,
@@ -296,6 +355,7 @@ export const CANARIES: GateCanary[] = [
     steps: 'boundaries',
     failedStep: 'boundaries',
     expect: /no-app-to-app/,
+    probe: { file: 'apps/api/src/evil-app-probe.ts', imports: 'apps/web/src/lib/env.ts' },
     apply: (root) =>
       write(
         root,
@@ -308,6 +368,7 @@ export const CANARIES: GateCanary[] = [
     steps: 'boundaries',
     failedStep: 'boundaries',
     expect: /e2e-black-box/,
+    probe: { file: 'e2e/evil-black-box-probe.spec.ts', imports: 'apps/web/src/lib/env.ts' },
     apply: (root) =>
       write(
         root,
@@ -516,6 +577,11 @@ export const CANARIES: GateCanary[] = [
     steps: 'openapi',
     failedStep: 'openapi',
     expect: /out of date/,
+    // Сообщение проверки дрейфа; packages/** — вне PR-фильтра canaries.yml: PR,
+    // переписавший только его, канарейки в PR не запускает (e77, находка ревью).
+    expects: [
+      { file: 'packages/contracts/scripts/openapi.ts', text: 'openapi.json is out of date' },
+    ],
     apply: (root) => {
       const path = join(root, 'packages/contracts/src/tasks.ts');
       const source = readFileSync(path, 'utf8');
@@ -541,6 +607,12 @@ export const CANARIES: GateCanary[] = [
     steps: 'test',
     failedStep: 'test',
     expect: /every contract procedure declares a valid access policy/,
+    expects: [
+      {
+        file: 'packages/contracts/src/access-policy.test.ts',
+        text: 'every contract procedure declares a valid access policy',
+      },
+    ],
     apply: (root) => {
       const path = join(root, 'packages/contracts/src/tasks.ts');
       const source = readFileSync(path, 'utf8');
@@ -754,6 +826,12 @@ export const CANARIES: GateCanary[] = [
     full: true,
     failedStep: 'e2e',
     expect: /test API is not reachable through the web origin/,
+    expects: [
+      {
+        file: 'e2e/features/api-origin/api-origin.spec.ts',
+        text: 'test API is not reachable through the web origin',
+      },
+    ],
     apply: (root) => {
       const path = join(root, 'apps/web/src/server-app.ts');
       const source = readFileSync(path, 'utf8');
@@ -780,12 +858,14 @@ export const CANARIES: GateCanary[] = [
   {
     // Детерминизм сборки (ADR 0005): запечённый адрес в клиентском бандле
     // ловит скан шага bundle. atob(btoa()) не сворачивается минификатором
-    // (урок B1), литерал останется в чанке.
+    // (урок B1), литерал останется в чанке. Якорь expect — сообщение скана в
+    // tools/measure-bundle.ts (e77: в e2e/perf/tasks.perf.ts такого заголовка нет).
     name: 'адрес API запечён в бандл',
     steps: 'build,bundle',
     full: true,
     failedStep: 'bundle',
     expect: /Baked API addresses/i,
+    expects: [{ file: 'tools/measure-bundle.ts', text: 'Baked API addresses' }],
     apply: (root) => {
       const path = join(root, 'apps/web/src/lib/api-client.ts');
       const source = readFileSync(path, 'utf8');
@@ -851,6 +931,12 @@ export const CANARIES: GateCanary[] = [
     full: true,
     failedStep: 'perf',
     expect: /create-task/,
+    // Заголовок целиком, а не «create-task»: литерал есть ещё в ключах метрик
+    // (scenario:create-task) и сообщениях ассертов, поэтому переименование одного
+    // заголовка проверка живости пропустила бы (находка ревью перед мержем).
+    expects: [
+      { file: 'e2e/perf/tasks.perf.ts', text: 'scenario "create-task" stays within budget' },
+    ],
     apply: (root) => {
       const path = join(root, 'apps/web/src/features/tasks/use-tasks.ts');
       const source = readFileSync(path, 'utf8');
@@ -1089,6 +1175,12 @@ export const CANARIES: GateCanary[] = [
     steps: 'test',
     failedStep: 'test',
     expect: /env\.example api/,
+    expects: [
+      {
+        file: 'apps/api/src/env-example.test.ts',
+        text: 'env.example api содержит все ключи схемы окружения',
+      },
+    ],
     apply: (root) => {
       const path = join(root, 'apps', 'api', 'env.example');
       const source = readFileSync(path, 'utf8');
@@ -1152,6 +1244,8 @@ export const CANARIES: GateCanary[] = [
     // b4.4: карантин не узаконенный .skip — @critical в карантин запрещён
     // (максимум 3 записи, срок обязателен; остальное валидирует тот же чекер).
     // Красит шаг quarantine (tools/check-flaky-rate.ts --validate-quarantine).
+    // Якорь — массив quarantine любой наполненности: с первой настоящей записи
+    // карантина прежний якорь '"quarantine": []' исчез бы вместе с канарейкой (e77).
     name: 'quarantine: @critical в карантине',
     steps: 'quarantine',
     failedStep: 'quarantine',
@@ -1159,16 +1253,34 @@ export const CANARIES: GateCanary[] = [
     apply: (root) => {
       const path = join(root, 'tools', 'flaky-quarantine.json');
       const source = readFileSync(path, 'utf8');
-      if (!source.includes('"quarantine": []')) {
+      const before = quarantineOf(JSON.parse(source));
+      if (before === null) {
         throw new Error('canary anchor not found: quarantine array');
       }
-      writeFileSync(
-        path,
-        source.replace(
-          '"quarantine": []',
-          '"quarantine": [{ "test": "smoke.spec.ts :: @critical вход", "until": "2099-01-01T00:00:00Z", "issue": "#1" }]',
-        ),
-      );
+      // Запись вставляется первой в существующий массив — пустой или с настоящими
+      // записями. Текст правится, а не перепечатывается из JSON: комментарий файла
+      // на месте. Сверка по JSON, а не по факту замены: замена, не добавившая
+      // запись, — якорь не найден.
+      const entry = JSON.stringify({
+        test: 'smoke.spec.ts :: @critical вход',
+        until: '2099-01-01T00:00:00Z',
+        issue: '#1',
+      });
+      const withEntry =
+        before.length === 0
+          ? source.replace(
+              /("quarantine"\s*:\s*)\[\s*\]/,
+              (_match: string, head: string) => `${head}[${entry}]`,
+            )
+          : source.replace(
+              /("quarantine"\s*:\s*)\[/,
+              (_match: string, head: string) => `${head}[${entry}, `,
+            );
+      const after = quarantineOf(JSON.parse(withEntry));
+      if (after === null || after.length !== before.length + 1) {
+        throw new Error('canary anchor not found: quarantine array');
+      }
+      writeFileSync(path, withEntry);
     },
   },
   {
@@ -1310,6 +1422,11 @@ export const CANARIES: GateCanary[] = [
     steps: 'test',
     failedStep: 'test',
     expect: /access scenario row for tasks\.evilOwnerProbe/,
+    // Якорь expect — приставка шаблона сообщения scenarioOf; значение
+    // плейсхолдера `${path}` даёт зонд (tasks + evilOwnerProbe).
+    expects: [
+      { file: 'apps/api/src/owner-access-table.test.ts', text: 'access scenario row for ' },
+    ],
     apply: (root) => {
       const contractPath = join(root, 'packages', 'contracts', 'src', 'tasks.ts');
       const contract = readFileSync(contractPath, 'utf8');
