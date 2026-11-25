@@ -1,0 +1,59 @@
+# CI на смену base-ветки PR (e78). Смена base не порождает synchronize, а check
+# привязан к head SHA: без перезапуска PR ушёл бы в merge со check, вычисленным
+# на прежней базе. На edited слушает только этот workflow: правка тела и
+# заголовка проходит мимо условия уровня job — пропуск не занимает раннер, ci.yml
+# не создаётся и ничего не отменяет. Пока edited слушал сам ci.yml, правка тела
+# создавала второй прогон CI, а concurrency отменяла идущий (PR #239, 24.11.2026).
+#
+# Диспатч — по образцу visual-approve (b3.1, ADR 0015): ci.yml запускается на
+# ref head-ветки PR — на тот же head SHA, с определением ci.yml из ветки. Прогон
+# идёт с workflow_dispatch-семантикой: всё дерево, без merge-ref и bundle-delta.
+# На новой базе PR проверяют synchronize (Update branch) и merge queue — всё,
+# кроме bundle-delta: в очереди и на push его нет. Поэтому доверенный
+# bundle-approval (gate-integrity.yml) блокирует замер, сделанный до смены base,
+# до следующего synchronize: без этого retarget уходил бы в merge с зелёным
+# замером против прежней базы (находка security-ревью e78).
+#
+# Код PR не исполняется: ни checkout, ни скриптов — один вызов gh API с
+# константами и именем head-ветки из события. Права — минимум на диспатч.
+# Имя ветки — вход из события: приходит через env, в команде стоит в кавычках и
+# сверен с допустимыми символами до вызова. PR из форка: head-ветка лежит вне
+# репозитория, диспатч по ref невозможен. Оба отказа — красный job с объяснением,
+# а не молчание (З11): CI на новой базе запускает человек пустым коммитом в
+# ветку PR или кнопкой Update branch.
+name: CI base change
+
+on:
+  pull_request:
+    types: [edited]
+
+concurrency:
+  group: ci-base-change-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+
+jobs:
+  dispatch:
+    name: ci-base-change
+    if: github.event.changes.base != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger CI on the PR head branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          if [ "$FORK" = "true" ]; then
+            echo "::error::PR из форка: head-ветка лежит вне ${REPO}, диспатч по ref невозможен. CI на новой базе запускается пустым коммитом в ветку PR или кнопкой Update branch."
+            exit 1
+          fi
+          if ! [[ "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::Имя head-ветки вне допустимых символов [A-Za-z0-9._/-]: диспатч по ref не выполнялся. CI на новой базе запускается пустым коммитом в ветку PR."
+            exit 1
+          fi
+          gh api -X POST "repos/${REPO}/actions/workflows/ci.yml/dispatches" -f ref="${BRANCH}"

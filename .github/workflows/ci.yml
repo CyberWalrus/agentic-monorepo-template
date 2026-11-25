@@ -3,9 +3,12 @@ name: CI
 
 on:
   pull_request:
-    # edited: смена base-ветки не порождает synchronize, а check привязан к head SHA.
+    # Только новый head. edited срабатывает и на правку тела PR: создавал второй
+    # прогон, а concurrency отменяла идущий (e78). Смену base (synchronize не
+    # порождает, check привязан к head SHA) держит ci-base-change.yml — диспатчит
+    # этот workflow на head-ветку PR.
     # Labelы обрабатывает gate-integrity.yml (ADR 0002), здесь они не нужны.
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
   merge_group:
   push:
     branches: [main]

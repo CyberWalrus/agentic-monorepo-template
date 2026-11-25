@@ -1070,6 +1070,128 @@ export const CANARIES: GateCanary[] = [
     },
   },
   {
+    // Перезапуск CI на новый head, а не на правку тела PR (e78): ci.yml слушает
+    // pull_request только [opened, synchronize, reopened]. edited срабатывает и
+    // на правку тела, а concurrency ci.yml отменяет идущий прогон того же head
+    // (PR #239, 24.11.2026: правка тела отменила идущий CI и создала второй).
+    // Условие уровня job не годится: запуск всё равно создаётся, а concurrency
+    // отменяет предыдущий до вычисления условий. Плохое изменение — edited
+    // возвращён в типы ci.yml: правка тела снова перезапускает CI, а wiring-тест
+    // в tools/test/gates-canary.test.ts краснеет. Проводка живёт в test:hooks:
+    // событие исполняется в CI и не является шагом verify. Якорь — заголовок
+    // wiring-теста. Вторую половину — смену base — держит следующая канарейка.
+    name: 'ci.yml снова слушает edited',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /проводка: ci\.yml не слушает edited/,
+    expects: [
+      {
+        file: 'tools/test/gates-canary.test.ts',
+        text: 'проводка: ci.yml не слушает edited, смену base держит ci-base-change.yml (e78)',
+      },
+    ],
+    apply: (root) => {
+      const path = join(root, '.github/workflows/ci.yml');
+      const source = readFileSync(path, 'utf8');
+      const withEdited = source.replace(
+        /(  pull_request:\n(?:    #[^\n]*\n)*    types: \[opened, synchronize, reopened)\]/,
+        '$1, edited]',
+      );
+      if (withEdited === source) {
+        throw new Error(
+          'canary anchor not found: ci.yml pull_request has no [opened, synchronize, reopened] types',
+        );
+      }
+      writeFileSync(path, withEdited);
+    },
+  },
+  {
+    // Вторая половина e78: ci.yml больше не слушает edited, поэтому смену base
+    // (synchronize не порождает, check привязан к head SHA) держит
+    // ci-base-change.yml — edited с changes.base диспатчит ci.yml на head-ветку
+    // PR. Плохое изменение — срыв привязки (вызов диспатча удалён из workflow):
+    // смена base оставила бы на head check, вычисленный на прежней базе, а
+    // wiring-тест в tools/test/gates-canary.test.ts краснеет. Проводка живёт в
+    // test:hooks, как у соседней канарейки. Якорь — тот же заголовок
+    // wiring-теста: обе половины лежат в одном тесте.
+    name: 'смену base никто не перезапускает',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /не слушает edited, смену base держит ci-base-change\.yml/,
+    expects: [
+      {
+        file: 'tools/test/gates-canary.test.ts',
+        text: 'проводка: ci.yml не слушает edited, смену base держит ci-base-change.yml (e78)',
+      },
+    ],
+    apply: (root) => {
+      const path = join(root, '.github/workflows/ci-base-change.yml');
+      const source = readFileSync(path, 'utf8');
+      const stripped = source.replace(
+        '\n' +
+          '          gh api -X POST "repos/${REPO}/actions/workflows/ci.yml/dispatches" -f ref="${BRANCH}"\n',
+        '\n',
+      );
+      if (stripped === source) {
+        throw new Error('canary anchor not found: ci-base-change.yml has no ci.yml dispatch');
+      }
+      writeFileSync(path, stripped);
+    },
+  },
+  {
+    // Хвост e78 (security-ревью): ci.yml на edited больше не пересматривает
+    // bundle-delta — прогон по диспатчу его не делает, synchronize смена base
+    // не порождает. Доверенный bundle-approval блокирует замер, чей run создан
+    // не позже последней смены base (tools/check-bundle-gate.ts). Плохое
+    // изменение — блок снят: retarget с зелёным замером против прежней базы
+    // ушёл бы в merge без label. Логику чекера держит его тест: bad-change
+    // краснит шаг test:hooks. Якорь — заголовок теста «замер до смены base».
+    name: 'bundle-approval доверяет замеру до смены base',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /замер до смены base/,
+    expects: [{ file: 'tools/test/check-bundle-gate.test.ts', text: 'замер до смены base — FAIL' }],
+    apply: (root) => {
+      const path = join(root, 'tools', 'check-bundle-gate.ts');
+      const source = readFileSync(path, 'utf8');
+      const unblocked = source.replace('  } else if (stale) {\n', '  } else if (false) {\n');
+      if (unblocked === source) {
+        throw new Error('canary anchor not found: check-bundle-gate.ts has no stale branch');
+      }
+      writeFileSync(path, unblocked);
+    },
+  },
+  {
+    // Проводка той же блокировки: gate-integrity.yml добывает время смены base
+    // из таймлайна PR и передаёт чекеру base-change.json и suites.json. Плохое
+    // изменение — тип события убран из запроса: смену base чекер не увидит и
+    // замер против прежней базы пройдёт зелёным; wiring-тест e78 в
+    // tools/test/gates-canary.test.ts краснеет. Якорь — заголовок того же
+    // wiring-теста: третья половина проводки e78.
+    name: 'bundle-approval не видит смену base',
+    steps: 'test:hooks',
+    failedStep: 'test:hooks',
+    expect: /проводка: ci\.yml не слушает edited, смену base держит ci-base-change\.yml/,
+    expects: [
+      {
+        file: 'tools/test/gates-canary.test.ts',
+        text: 'проводка: ci.yml не слушает edited, смену base держит ci-base-change.yml (e78)',
+      },
+    ],
+    apply: (root) => {
+      const path = join(root, '.github/workflows/gate-integrity.yml');
+      const source = readFileSync(path, 'utf8');
+      const blinded = source.replace(
+        'itemTypes: [BASE_REF_CHANGED_EVENT], last: 1',
+        'itemTypes: [], last: 1',
+      );
+      if (blinded === source) {
+        throw new Error('canary anchor not found: gate-integrity.yml does not read base changes');
+      }
+      writeFileSync(path, blinded);
+    },
+  },
+  {
     // Классы защиты tools/ (ADR 0014, e9): шаг verify → pnpm tool-class:check.
     // Плохое изменение — срыв проводки script→гейт (tool-class:check удалён из
     // package.json): шаг verify ломается, замыкание tools/ перестаёт
