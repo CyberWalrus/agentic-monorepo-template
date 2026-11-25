@@ -1035,12 +1035,44 @@ describe('test API', () => {
     );
   });
 
-  it('starts with the test API enabled outside production', () => {
-    vi.stubEnv('NODE_ENV', 'development');
+  // Матрица второго рубежа (e69): вход мимо loadServerEnv открывает /__test__/*
+  // только при явном NODE_ENV=development|test. До e69 незаданный NODE_ENV
+  // читался как «не production» — одного флага хватало, чтобы открыть тестовый API.
+  const unnamedEnvironment =
+    'ENABLE_TEST_API=1 needs an explicit NODE_ENV=development or NODE_ENV=test';
 
-    expect(() =>
-      createApp({ tasks: new InMemoryTaskRepository(), enableTestApi: true }),
-    ).not.toThrow();
+  it.each(['development', 'test'] as const)(
+    'opens the test API on the wire by an explicit NODE_ENV=%s',
+    async (nodeEnv) => {
+      vi.stubEnv('NODE_ENV', nodeEnv);
+      const app = createApp({ tasks: new InMemoryTaskRepository(), enableTestApi: true });
+
+      // Закрытый тестовый API отвечает 404 на свой маршрут.
+      const response = await app.request('/__test__/reset', {
+        method: 'POST',
+        body: '{"tasks":[]}',
+      });
+
+      expect(response.status).not.toBe(404);
+    },
+  );
+
+  it.each([
+    {
+      label: 'production',
+      nodeEnv: 'production',
+      refusal: 'ENABLE_TEST_API must never be set in production',
+    },
+    { label: 'unset', nodeEnv: undefined, refusal: unnamedEnvironment },
+    { label: 'empty', nodeEnv: '', refusal: unnamedEnvironment },
+    { label: 'prod', nodeEnv: 'prod', refusal: unnamedEnvironment },
+    { label: 'staging', nodeEnv: 'staging', refusal: unnamedEnvironment },
+  ])('refuses to start with NODE_ENV=$label', ({ nodeEnv, refusal }) => {
+    vi.stubEnv('NODE_ENV', nodeEnv);
+
+    expect(() => createApp({ tasks: new InMemoryTaskRepository(), enableTestApi: true })).toThrow(
+      refusal,
+    );
   });
 
   it('replaces data when enabled', async () => {
