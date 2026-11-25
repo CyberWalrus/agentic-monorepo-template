@@ -995,9 +995,12 @@ describe('on a real HTTP server', () => {
       expect(raw).toMatch(/^HTTP\/1\.1 504 /);
       expect(raw).toContain('{"error":"Request timed out"}');
       expectNothingRan();
-      // Раньше срока ответа не бывает — это таймер. Сверху — запас к порядку
-      // величины: до правки ответ ждал бы requestTimeout Node (300 с по умолчанию).
-      expect(firstByteAfterMs).toBeGreaterThanOrEqual(200);
+      // Ответ ждёт таймаута — это таймер, а не лимит тела. Нижняя граница — с допуском
+      // 10 %: таймер Node может сработать на долю миллисекунды раньше относительно
+      // отдельно взятого старта (в ночном прогоне 45711705391 измерено 199,6 мс — и
+      // тест покраснел на грани). Сверху — запас к порядку величины: до правки ответ
+      // ждал бы requestTimeout Node (300 с по умолчанию).
+      expect(firstByteAfterMs).toBeGreaterThanOrEqual(180);
       expect(firstByteAfterMs).toBeLessThan(2_000);
     } finally {
       await close();
