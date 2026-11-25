@@ -24,7 +24,7 @@
 
 ```bash
 nvm use                     # Node из .nvmrc
-npm install -g pnpm@12.16.1 # pnpm: corepack в Node ≥25 не входит (ADR 0012); версия — дословно из packageManager
+npm install -g pnpm@12.21.0 # pnpm: corepack в Node ≥25 не входит (ADR 0012); версия — дословно из packageManager
 pnpm install                # зависимости и git-хуки
 pnpm verify                 # все быстрые гейты; время — таблица 3.1 в docs/architecture.md
                             # подмножество шагов: pnpm verify --only docs (список — через запятую)
