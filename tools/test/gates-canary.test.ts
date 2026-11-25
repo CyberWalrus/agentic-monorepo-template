@@ -19,7 +19,9 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -71,6 +73,30 @@ function filesUnder(root: string): { rel: string; abs: string }[] {
 function namesOf(files: { rel: string }[]): string[] {
   return files.map((f) => f.rel).toSorted();
 }
+
+/** Относительные пути каталогов под корнем (без самого корня). */
+function dirsUnder(root: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        const abs = join(dir, entry.name);
+        out.push(relative(root, abs));
+        walk(abs);
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+/**
+ * Время изменения каждого файла нетронутой копии. Одна и та же далёкая дата, а не
+ * «время копирования»: любое изменение файла ставит текущее время, и изменение
+ * видно даже тогда, когда размер тот же, а запись пришлась на тот же тик часов,
+ * что и копирование (гранулярность mtime зависит от файловой системы и часов ядра).
+ */
+const PRISTINE_MTIME = new Date('2000-01-01T00:00:00Z');
 
 describe('таблица канареек гейтов', () => {
   const known = new Set(allStepNames);
@@ -475,18 +501,24 @@ describe('якоря канареек живы на текущем дереве 
     const pristine = join(root, 'pristine');
     cpSync(repoRoot, pristine, { recursive: true, filter: copyFilter });
     const copy = join(root, 'copy');
-    let stamps: Map<string, FileStamp> | null = null;
+    const stamps: Map<string, FileStamp> = new Map();
+    let dirs: Set<string> | null = null;
+    // Восстановленный файл получает то же время изменения, что и вся нетронутая копия
     const restore = (rel: string): void => {
       const target = join(copy, rel);
       mkdirSync(dirname(target), { recursive: true });
       copyFileSync(join(pristine, rel), target);
-      stamps?.set(rel, stampOf(target));
+      utimesSync(target, PRISTINE_MTIME, PRISTINE_MTIME);
+      stamps.set(rel, stampOf(target));
     };
     return {
       fresh: () => {
-        if (stamps === null) {
+        if (dirs === null) {
           cpSync(pristine, copy, { recursive: true });
-          stamps = new Map(filesUnder(copy).map((f) => [f.rel, stampOf(f.abs)]));
+          for (const f of filesUnder(copy)) {
+            restore(f.rel);
+          }
+          dirs = new Set(dirsUnder(copy));
           return copy;
         }
         const present = new Set<string>();
@@ -510,6 +542,17 @@ describe('якоря канареек живы на текущем дереве 
         for (const rel of stamps.keys()) {
           if (!present.has(rel)) {
             restore(rel);
+          }
+        }
+        // Каталоги, созданные канарейкой, убираются — сначала вложенные, потом ставшие пустыми
+        const foreign = dirsUnder(copy)
+          .filter((dir) => !dirs?.has(dir))
+          .toSorted((a, b) => b.split(sep).length - a.split(sep).length);
+        for (const dir of foreign) {
+          try {
+            rmdirSync(join(copy, dir));
+          } catch {
+            // Не пустой: внутри остался файл эталона
           }
         }
         return copy;
@@ -555,6 +598,20 @@ describe('якоря канареек живы на текущем дереве 
       writeFileSync(join(copy, '__restore-probe__.txt'), 'новый файл');
       renameSync(join(copy, second.rel), join(copy, second.rel + '.renamed'));
       expectPristine(tree);
+      // Файл той же длины, записанный сразу после возврата (тот же тик часов), и новые каталоги
+      const again = tree.fresh();
+      const source = readFileSync(join(again, first.rel));
+      writeFileSync(join(again, first.rel), Buffer.alloc(source.length, 0x78));
+      const created = join(again, '__restore-probe-dir__', 'nested');
+      mkdirSync(created, { recursive: true });
+      writeFileSync(join(created, 'file.txt'), 'файл в новом каталоге');
+      expect(dirsUnder(again).length, 'каталоги, созданные проверкой').toBeGreaterThan(
+        dirsUnder(tree.pristine).length,
+      );
+      expectPristine(tree);
+      expect(dirsUnder(tree.fresh()).toSorted(), 'каталоги после fresh()').toEqual(
+        dirsUnder(tree.pristine).toSorted(),
+      );
     } finally {
       tree.dispose();
     }
