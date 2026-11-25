@@ -7,10 +7,26 @@ import { oc } from '@orpc/contract';
 import { implement } from '@orpc/server';
 import type { ContractRouterClient } from '@orpc/contract';
 import { serve } from '@hono/node-server';
-import { ocAccess, type Contract } from '@repo/contracts';
+import {
+  contract,
+  documentErrorResponses,
+  errorResponses,
+  ocAccess,
+  operationsWithInputValidation,
+  type Contract,
+  voidSchemaConverter,
+  type WireResponse,
+} from '@repo/contracts';
+import { OpenAPIGenerator } from '@orpc/openapi';
+import { ZodToJsonSchemaConverter } from '@orpc/zod/zod4';
 import * as z from 'zod';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+// e56: фикстуры провода, из которых строится спека, и правила ответов
+// HTTP-слоя — публичный экспорт `@repo/contracts`
+// (packages/contracts/src/openapi-spec.ts). Скрипты пакета публичным импортом
+// недоступны, а относительный путь к соседнему пакету не существует в
+// песочнице мутаций API (копируется только apps/api).
 import { createApp, REQUEST_BODY_LIMIT_BYTES, REQUEST_TIMEOUT_MS } from './app.ts';
 import { authorizationMiddleware, type Actor, type AppContext } from './authorization.ts';
 import type { LogRecord, LogSink } from './observability.ts';
@@ -644,6 +660,80 @@ describe('request guards', () => {
   });
 });
 
+// e56: формы ответов на проводе — дословно. Из этих же фикстур строится спека
+// (packages/contracts/src/openapi-spec.ts): расходится рантайм — красный
+// здесь, расходится спека — красный в openapi-spec.test.ts. Операция — та, что
+// документирована: POST /api/tasks.
+describe('error responses on the wire', () => {
+  const JSON_HEADERS = { 'content-type': 'application/json' };
+  const WIRE_CASES: readonly {
+    name: string;
+    expected: WireResponse;
+    send: () => RequestInit;
+  }[] = [
+    {
+      name: 'a malformed JSON body',
+      expected: errorResponses.malformedBody,
+      send: () => ({ method: 'POST', headers: JSON_HEADERS, body: '{"title": ' }),
+    },
+    {
+      name: 'a body over the limit',
+      expected: errorResponses.payloadTooLarge,
+      send: () => ({
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ title: 'x'.repeat(2048) }),
+      }),
+    },
+  ];
+
+  for (const { name, expected, send } of WIRE_CASES) {
+    it(`answers ${name} with the status and body the spec is built from`, async () => {
+      const { app } = setup({ bodyLimitBytes: 1024 });
+
+      const response = await app.request('/api/tasks', send());
+
+      expect(response.headers.get('content-type')).toMatch(/^application\/json/);
+      expect({ status: response.status, body: await response.json() }).toEqual(expected);
+    });
+  }
+
+  it('answers a stalled body with the status and body the spec is built from', async () => {
+    const { app } = setup({ bodyLimitBytes: 1024, requestTimeoutMs: 50 });
+    const stalled = stalledBody();
+
+    try {
+      const response = await app.request('/api/tasks', {
+        method: 'POST',
+        body: stalled.stream,
+        duplex: 'half',
+      });
+
+      expect(response.headers.get('content-type')).toMatch(/^application\/json/);
+      expect({ status: response.status, body: await response.json() }).toEqual(
+        errorResponses.requestTimedOut,
+      );
+    } finally {
+      // Проигравшая ветка отпущена: висящих промисов тест не оставляет.
+      stalled.release();
+    }
+  });
+
+  it('answers an invalid body with the zod issues the spec documents', async () => {
+    const { app } = setup();
+
+    const response = await app.request('/api/tasks', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ title: '   ' }),
+    });
+
+    // В issue на проводе есть и другие поля (code, origin…) — спека описывает минимум
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject(errorResponses.validationFailed.body);
+  });
+});
+
 // Дыра воспроизводится только на настоящем адаптере: node-server собирает
 // TRACE как GET без потока (`request.body === null`), хотя тело в соединении
 // есть; через `app.request()` такой запрос не собрать (см. withMethod).
@@ -690,6 +780,51 @@ describe('on a real HTTP server', () => {
       }
     },
   );
+
+  // e56 (ревью): адаптер не передаёт поток тела методам GET и HEAD, и
+  // объявленное тело отбивает ограждение формы — до потолка (200 байт при
+  // потолке 64 не дают 413) и до процедуры. Этот 400 спека описывает у
+  // методов без тела; проверка на каждой GET-операции настоящего контракта.
+  it('answers a GET with a declared body with the 400 the spec documents', async () => {
+    const app = createApp({ tasks: new InMemoryTaskRepository(), bodyLimitBytes: 64 });
+    const { port, close } = await listen(app);
+    // Спека операций — та же композиция, что в generateSpec контрактов
+    // (packages/contracts/scripts/openapi-spec.ts; здесь и в
+    // router-divergence.test.ts, operationsOfSpec): те же конвертеры и то же
+    // правило ответов HTTP-слоя
+    const spec = documentErrorResponses(
+      await new OpenAPIGenerator({
+        schemaConverters: [voidSchemaConverter, new ZodToJsonSchemaConverter()],
+      }).generate(contract),
+      operationsWithInputValidation(contract),
+    );
+    const gets = Object.entries(spec.paths ?? {}).filter(([, item]) => item?.get !== undefined);
+
+    // Инвариант — на каждой GET-операции, без перечня путей: `pnpm gen feature`
+    // добавляет в контракт публичный `GET /<name>`, общие тесты не трогая.
+    // Перечень не пуст — иначе проверки ниже прошли бы впустую.
+    expect(gets.length, 'the contract has no GET operation').toBeGreaterThan(0);
+
+    try {
+      await Promise.all(
+        gets.map(async ([path, item]) => {
+          const { raw } = await rawExchange(
+            port,
+            `GET /api${path} HTTP/1.1\r\nHost: api.local\r\nContent-Type: application/json\r\nContent-Length: 200\r\nConnection: close\r\n\r\n${' '.repeat(200)}`,
+            2_000,
+          );
+          const documented = Object.keys(item?.get?.responses ?? {});
+
+          expect(raw).toMatch(/^HTTP\/1\.1 400 /);
+          expect(raw).toContain(JSON.stringify(errorResponses.unreadableBody.body));
+          expect(documented).toContain('400');
+          expect(documented).not.toContain('413');
+        }),
+      );
+    } finally {
+      await close();
+    }
+  });
 
   it('answers 504 to a stalled chunked body in about the request timeout', async () => {
     const { app, expectNothingRan } = setupGuards({ bodyLimitBytes: 64, requestTimeoutMs: 200 });
