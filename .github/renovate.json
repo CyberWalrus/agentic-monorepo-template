@@ -7,6 +7,18 @@
   "rangeStrategy": "bump",
   "_comment": "b6: GitHub Actions закрепляются по SHA (pinDigests) — Renovate поднимает дайджесты и обновляет комментарий-версию рядом.",
   "pinDigests": true,
+  "customManagers": [
+    {
+      "description": "zizmor (e76): версия сканера — вход version шага zizmor в security.yml; менеджер github-actions видит только uses:, поэтому отдельное regex-правило: каждый релиз — свой PR, на котором джоба zizmor идёт с новой версией до переключения. Регекс — синтаксис RE2 (Renovate компилирует регексы им; lookaround RE2 не поддерживает): граница шага — строка следующего шага, она начинается с дефиса после отступа; строки-продолжение шага (with:, входы, комментарии) начинаются с отступа и не с дефиса. Якорь правила и запрет lookaround в matchStrings держит tools/test/check-action-pins.test.ts",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github\\/workflows\\/security\\.yml$/"],
+      "matchStrings": [
+        "zizmorcore/zizmor-action@[0-9a-f]{40}[^\\n]*\\n(?:[ \\t]+[^- \\t\\n][^\\n]*\\n)*?[ \\t]+version:[ \\t]*(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "zizmorcore/zizmor",
+      "datasourceTemplate": "github-releases"
+    }
+  ],
   "packageRules": [
     {
       "description": "Playwright: базлайны и Docker-образ зависят от версии — один PR, обязательный pnpm visual и tools/playwright-agents.sh",
