@@ -45,6 +45,14 @@
  * (fast-forward) — если main менял базлайн после её основания, конфликт
  * покажет сам PR, шаг об этом не знает.
  *
+ * Авторизация git — конфиг-окружением (GIT_CONFIG_*, git >= 2.31), как в блоке
+ * e67 (visual-approve.yml): заголовок собирается из GH_TOKEN здесь и живёт
+ * только в env дочерних процессов git, которые ходят на remote, и только на
+ * время команды. В argv команд токена нет — в URL remote он был бы виден в ps
+ * на время команды. Это держат храповик tools/test/visual-approval.test.ts (в
+ * тексте скрипта — ноль литералов URL с токеном) и лог argv в канарейке
+ * tools/test/test-count-ratchet.test.ts.
+ *
  * Второй остаточный риск (находка ревью e40): push делает github.token, а
  * события от него не рождают workflow run (как у базлайнов visual, ADR 0015) —
  * CI (ci.yml) и gate-integrity на новом коммите сами не запустятся,
@@ -294,11 +302,24 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv = process.e
   };
 }
 
-// Токен идёт в URL remote и может вернуться в выводе git (например, «unable to
-// access …») — из вывода он вырезается.
+// Заголовок авторизации для конфиг-окружения git (блок e67): basic от пары
+// «x-access-token:<токен>». Пустой токен — пустая строка.
+function authorizationHeader(token: string): string {
+  return token === ''
+    ? ''
+    : `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
+}
+
+// Токен и собранный из него заголовок живут в env дочерних процессов (GH_TOKEN,
+// GIT_CONFIG_VALUE_*) и могут вернуться в выводе команды (например, git
+// печатает значение конфигурации при ошибке разбора) — из вывода они вырезаются.
 function redact(text: string): string {
   const token = process.env['GH_TOKEN'] ?? '';
-  return token === '' ? text : text.replaceAll(token, '***');
+  let result = text;
+  for (const secret of [token, authorizationHeader(token)]) {
+    result = secret === '' ? result : result.replaceAll(secret, '***');
+  }
+  return result;
 }
 
 // Вывод команды дословно, построчно: управляющие символы экранируются
@@ -393,6 +414,32 @@ function commitBaselineOn(parent: string, baselineRelative: string): string {
   }
 }
 
+// Конфиг-окружение дочернего git (блок e67): заголовок авторизации для github.com
+// идёт переменными GIT_CONFIG_* — только процессам, которые ходят на remote, и
+// на время команды; в argv, в env шага и в .git/config токена нет. Чужие записи
+// конфиг-окружения не затираются — новая идёт после них.
+function gitAuthEnv(token: string): NodeJS.ProcessEnv {
+  const count = Number.parseInt(process.env['GIT_CONFIG_COUNT'] ?? '0', 10);
+  if (!Number.isInteger(count) || count < 0) {
+    throw new PublishFailure(
+      'это шаг nightly-джобы «test count ratchet», локально его не запускают.',
+      ['✗ GIT_CONFIG_COUNT в окружении job — не неотрицательное целое.'],
+    );
+  }
+  return {
+    ...process.env,
+    GIT_CONFIG_COUNT: String(count + 1),
+    [`GIT_CONFIG_KEY_${count}`]: 'http.https://github.com/.extraheader',
+    [`GIT_CONFIG_VALUE_${count}`]: authorizationHeader(token),
+  };
+}
+
+// git-команда на remote: токен — конфиг-окружением; credential.helper сброшен,
+// чтобы авторизовал ровно токен job, а не хелпер машины или checkout.
+function gitOnRemote(args: string[], gitAuth: NodeJS.ProcessEnv): CommandResult {
+  return run('git', ['-c', 'credential.helper=', ...args], gitAuth);
+}
+
 function publishRaisedBaseline(): number {
   const baselineRelative = argv['baseline']?.[0] ?? 'test-count-baseline.json';
   const token = process.env['GH_TOKEN'] ?? '';
@@ -403,7 +450,8 @@ function publishRaisedBaseline(): number {
       ['✗ GH_TOKEN или GITHUB_REPOSITORY не заданы.'],
     );
   }
-  const remote = `https://x-access-token:${token}@github.com/${repository}.git`;
+  const remote = `https://github.com/${repository}.git`;
+  const gitAuth = gitAuthEnv(token);
   const ref = `refs/heads/${RATCHET_BRANCH}`;
   const listArgs = [
     'pr',
@@ -455,7 +503,7 @@ function publishRaisedBaseline(): number {
     must(
       `PR #${open.number} открыт, но топ ветки не получен; ${untouched} — проверь права job (contents: read).`,
       'git fetch',
-      run('git', ['fetch', '--no-tags', remote, `${ref}:${TRACKING_REF}`]),
+      gitOnRemote(['fetch', '--no-tags', remote, `${ref}:${TRACKING_REF}`], gitAuth),
     );
     parent = must(
       untouched,
@@ -478,12 +526,12 @@ function publishRaisedBaseline(): number {
   // PR закрыт или смержен) заменяется новым коммитом. Код 2 у ls-remote —
   // ветки нет (первая ночь); любой другой код — сеть или права, громко.
   if (open === null) {
-    const existing = run('git', ['ls-remote', '--exit-code', remote, ref]);
+    const existing = gitOnRemote(['ls-remote', '--exit-code', remote, ref], gitAuth);
     if (existing.status === 0) {
       must(
         `ветка ${RATCHET_BRANCH} не обновлена — на remote старый коммит; проверь права job (contents: write).`,
         'git push --delete',
-        run('git', ['push', remote, '--delete', RATCHET_BRANCH]),
+        gitOnRemote(['push', remote, '--delete', RATCHET_BRANCH], gitAuth),
       );
       unpushedState = `${branch} удалена и не пересоздана`;
       pushedState = `${branch} заменена коммитом поверх main`;
@@ -497,7 +545,7 @@ function publishRaisedBaseline(): number {
   must(
     `${unpushedState}: поднятие не потеряно — ночная джоба повторит завтра; повторится — проверь права job (contents: write).`,
     'git push',
-    run('git', ['push', remote, `${commit}:${ref}`]),
+    gitOnRemote(['push', remote, `${commit}:${ref}`], gitAuth),
   );
   const branchState = pushedState;
 

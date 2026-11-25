@@ -5,7 +5,8 @@
  * Канарейки e40 «PR создан или громкая ошибка» (критерий приёмки): шаг
  * «PR with raised baseline» исполняется тем текстом, что читает runner из
  * nightly.yml, — в подставном репозитории: bare-репозиторий вместо github.com
- * (url.insteadOf подменяет URL push) и подставной gh на PATH. Отказ create,
+ * (url.insteadOf подменяет URL команды) и подставной gh на PATH; git на PATH —
+ * обёртка, пишущая argv и конфиг-окружение каждого вызова. Отказ create,
  * который не «PR уже открыт», обязан краснить шаг: замаскированный `|| echo`
  * ловится исполнением шага, а не поиском подстроки.
  */
@@ -199,8 +200,20 @@ it('проводка e40: hooks-отчёт гоняется до update; кра�
 });
 
 const BRANCH = 'chore/test-count-ratchet';
-// Токен в URL — как в ночном шаге; insteadOf в подставном клоне уводит push в bare-репозиторий.
-const PUSH_URL = 'https://x-access-token:tok@github.com/org/repo.git';
+// Скрипт ходит на github.com; insteadOf в подставном клоне уводит команду в
+// bare-репозиторий. Токен в URL не ходит (e67): авторизация — конфиг-окружением
+// git (GIT_CONFIG_*), заголовок скрипт собирает из GH_TOKEN.
+const REMOTE_URL = 'https://github.com/org/repo.git';
+const TOKEN = 'tok';
+/** Так шаг ходил на remote до перевода на конфиг-окружение — токен в argv. */
+const TOKEN_URL = `https://x-access-token:${TOKEN}@github.com/org/repo.git`;
+/** Запись лога вызова git: конфиг-окружение с заголовком для токена фикстуры. */
+const AUTH_CONFIG = `1|http.https://github.com/.extraheader|AUTHORIZATION: basic ${Buffer.from(
+  `x-access-token:${TOKEN}`,
+).toString('base64')}`;
+/** Подкоманда git по argv: опции git (-c …) отброшены. */
+const gitSubcommand = (argv: string): string =>
+  argv.replace(/^(?:-c \S+ )+/, '').split(' ')[0] ?? '';
 const REFUSED =
   'gh: pull request create failed: GraphQL: GitHub Actions is not permitted to create or approve pull requests (createPullRequest)';
 
@@ -213,6 +226,9 @@ function neutralEnv(): NodeJS.ProcessEnv {
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_TERMINAL_PROMPT: '0',
+    // Фикстура не выходит в сеть: git-у разрешён только file-транспорт
+    // (любой https-адрес, не переписанный insteadOf, отклоняется им же).
+    GIT_ALLOW_PROTOCOL: 'file',
   };
 }
 
@@ -253,6 +269,28 @@ case "$1 $2" in
 esac
 `;
 
+/** Строки лога без пустых; файла нет — пусто. */
+function readLog(path: string): string[] {
+  return existsSync(path)
+    ? readFileSync(path, 'utf8')
+        .split('\n')
+        .filter((line) => line !== '')
+    : [];
+}
+
+/** Настоящий git для обёртки: первый в PATH машины, вне подставного bin. */
+const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+if (realGit === '') {
+  throw new Error('git не найден в PATH — фикстура e40 не соберётся.');
+}
+
+const FAKE_GIT = `#!/bin/sh
+# Обёртка git (e40): argv и конфиг-окружение вызова — в git-calls.log, затем настоящий git.
+# Токен фикстуры фиктивный, поэтому значение конфигурации пишется целиком.
+printf 'argv:%s\\nconfig:%s|%s|%s\\n' "$*" "\${GIT_CONFIG_COUNT:-}" "\${GIT_CONFIG_KEY_0:-}" "\${GIT_CONFIG_VALUE_0:-}" >> "$FAKE_GH_DIR/git-calls.log"
+exec "${realGit}" "$@"
+`;
+
 interface RatchetRepo {
   /** Клон на main: здесь ночная джоба делает update и исполняет шаг. */
   dir: string;
@@ -264,6 +302,8 @@ interface RatchetRepo {
   night(hooksTests: number): void;
   runStep(): { status: number | null; output: string };
   ghCalls(): string[];
+  /** Вызовы git, порождённые шагом: argv и конфиг-окружение каждого. */
+  gitCalls(): { argv: string; config: string }[];
   remoteTip(): string;
   remoteBaseline(): unknown;
 }
@@ -282,7 +322,10 @@ function ratchetRepo(): RatchetRepo {
   gitText(dir, ['init', '-q', '-b', 'main']);
   gitText(dir, ['config', 'user.name', 'canary']);
   gitText(dir, ['config', 'user.email', 'canary@example.com']);
-  gitText(dir, ['config', `url.${remote}.insteadOf`, PUSH_URL]);
+  gitText(dir, ['config', `url.${remote}.insteadOf`, REMOTE_URL]);
+  // Саботаж «токен возвращён в URL» уводится в тот же bare-репозиторий: тест
+  // краснеет по argv, а не по отказу транспорта.
+  gitText(dir, ['config', '--add', `url.${remote}.insteadOf`, TOKEN_URL]);
   mkdirSync(join(dir, 'tools'));
   copyFileSync(
     join(repoDir, 'tools', 'check-test-count.ts'),
@@ -295,6 +338,7 @@ function ratchetRepo(): RatchetRepo {
   gitText(dir, ['add', '.']);
   gitText(dir, ['commit', '-qm', 'base']);
   writeFileSync(join(bin, 'gh'), FAKE_GH, { mode: 0o755 });
+  writeFileSync(join(bin, 'git'), FAKE_GIT, { mode: 0o755 });
   writeFileSync(join(ghState, 'pr-list.json'), '[]');
   return {
     dir,
@@ -333,11 +377,16 @@ function ratchetRepo(): RatchetRepo {
     },
     ghCalls() {
       const log = join(ghState, 'calls.log');
-      return existsSync(log)
-        ? readFileSync(log, 'utf8')
-            .split('\n')
-            .filter((line) => line !== '')
-        : [];
+      return readLog(log);
+    },
+    gitCalls() {
+      const lines = readLog(join(ghState, 'git-calls.log'));
+      return lines.flatMap((line, index) => {
+        const config = lines[index + 1] ?? '';
+        return line.startsWith('argv:') && config.startsWith('config:')
+          ? [{ argv: line.slice('argv:'.length), config: config.slice('config:'.length) }]
+          : [];
+      });
     },
     remoteTip() {
       const result = spawnSync('git', ['ls-remote', remote, `refs/heads/${BRANCH}`], {
@@ -348,7 +397,7 @@ function ratchetRepo(): RatchetRepo {
       return (result.stdout ?? '').split(/\s+/)[0] ?? '';
     },
     remoteBaseline() {
-      gitText(dir, ['fetch', '-q', PUSH_URL, `refs/heads/${BRANCH}`]);
+      gitText(dir, ['fetch', '-q', REMOTE_URL, `refs/heads/${BRANCH}`]);
       return JSON.parse(gitText(dir, ['show', 'FETCH_HEAD:test-count-baseline.json']));
     },
   };
@@ -553,4 +602,38 @@ it('базлайн актуален — шаг зелёный, gh не вызы�
   expect(run.output).toContain('Базлайн актуален');
   expect(repo.ghCalls()).toEqual([]);
   expect(repo.remoteTip()).toBe('');
+}, 30_000);
+
+it('токен не в argv git: авторизация — конфиг-окружением, и только у команд на remote (e67)', () => {
+  const repo = ratchetRepo();
+  writeFileSync(join(repo.ghState, 'create-refused'), '');
+
+  // Ночь 1: ветки нет — ls-remote и push. Ночь 2: ветка прошлой ночи без PR —
+  // ls-remote, push --delete и push.
+  repo.night(700);
+  expect(repo.runStep().status).toBe(1);
+  repo.night(718);
+  expect(repo.runStep().status).toBe(1);
+
+  // Ночь 3: человек открыл PR — fetch и push.
+  writeFileSync(
+    join(repo.ghState, 'pr-list.json'),
+    JSON.stringify([{ number: 7, url: 'https://github.com/org/repo/pull/7' }]),
+  );
+  repo.night(740);
+  expect(repo.runStep().status).toBe(0);
+
+  const calls = repo.gitCalls();
+  const onRemote = calls.filter(({ argv }) => argv.includes(REMOTE_URL));
+  // Все команды шага на remote исполнялись — каждая несла URL без токена.
+  expect(new Set(onRemote.map(({ argv }) => gitSubcommand(argv)))).toEqual(
+    new Set(['fetch', 'ls-remote', 'push']),
+  );
+  expect(onRemote.some(({ argv }) => argv.includes('--delete'))).toBe(true);
+  for (const { argv } of calls) {
+    expect(argv).not.toMatch(/x-access-token|:tok@/);
+  }
+  // Авторизация — конфиг-окружением, и только у команд на remote: локальный git
+  // (diff, rev-parse, коммит) токена не получает.
+  expect(calls.filter(({ config }) => config === AUTH_CONFIG)).toEqual(onRemote);
 }, 30_000);
