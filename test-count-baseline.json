@@ -4,5 +4,5 @@
   "packages/contracts/reports/vitest.json": 162,
   "packages/preflight/reports/vitest.json": 30,
   "packages/ui/reports/vitest.json": 21,
-  "reports/vitest-hooks.json": 1275
+  "reports/vitest-hooks.json": 1276
 }
