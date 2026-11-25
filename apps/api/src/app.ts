@@ -121,9 +121,9 @@ export interface AppOptions {
    */
   resolveActor?: (request: Request) => Actor | null;
   /**
-   * Включает `/__test__/*` для подготовки данных в E2E.
-   * Никогда не включается в production: двойной guard — loadServerEnv
-   * и проверка внутри createApp (c1.7).
+   * Включает `/__test__/*` для подготовки данных в E2E. Открывается только при
+   * явном `NODE_ENV=development|test`: незаданный NODE_ENV — не «не production»
+   * (e69). Двойной guard — loadServerEnv и проверка внутри createApp (c1.7).
    */
   enableTestApi?: boolean;
   /**
@@ -185,7 +185,8 @@ export function createApp({
 }: AppOptions) {
   // Дубль-guard тестового API (c1.7): loadServerEnv — первый рубеж, этот —
   // второй для входов мимо него. До любых маршрутов: приложение с /__test__/*
-  // в production не поднимается вовсе.
+  // не поднимается ни в production, ни без явного NODE_ENV=development|test
+  // (e69).
   assertTestApiNotInProduction(enableTestApi);
 
   // Подменённый роутер без мидлвари отдал бы процедуры мимо авторизации:

@@ -88,6 +88,8 @@ describe('loadServerEnv', () => {
       PORT: '3901',
       ENABLE_TEST_API: 'true',
       ENABLE_TEST_API_WITH_DATABASE: 'true',
+      // Включённый флаг требует явной среды (e69): без неё — отказ при старте.
+      NODE_ENV: 'test',
     });
 
     expect(env.enableTestApi).toBe(true);
@@ -150,6 +152,50 @@ describe('loadServerEnv', () => {
       loadServerEnv({ PORT: '3901', ENABLE_TEST_API: '1', NODE_ENV: 'production' }),
     ).toThrow(/- ENABLE_TEST_API: ENABLE_TEST_API must never be set in production/);
   });
+
+  // Матрица e69 (default-fail-closed): тестовый API открывает только явная пара
+  // «ENABLE_TEST_API=1 + NODE_ENV=development|test». Отсутствующий NODE_ENV —
+  // не «не production»: включённый флаг при нём — отказ при старте.
+  it.each(['development', 'test'] as const)(
+    'opens the test API by an explicit NODE_ENV=%s',
+    (nodeEnv) => {
+      const env = loadServerEnv({ PORT: '3901', ENABLE_TEST_API: '1', NODE_ENV: nodeEnv });
+
+      expect(env.enableTestApi).toBe(true);
+    },
+  );
+
+  it.each([
+    {
+      label: 'production',
+      nodeEnv: 'production',
+      refusal: /ENABLE_TEST_API: ENABLE_TEST_API must never be set in production/,
+    },
+    {
+      label: 'unset',
+      nodeEnv: undefined,
+      refusal:
+        /ENABLE_TEST_API: ENABLE_TEST_API=1 needs an explicit NODE_ENV=development or NODE_ENV=test/,
+    },
+    // Опечатка и «почти прод» не открывают и не молчат: их отклоняет enum.
+    { label: 'prod', nodeEnv: 'prod', refusal: /NODE_ENV: / },
+    { label: 'staging', nodeEnv: 'staging', refusal: /NODE_ENV: / },
+  ])('refuses to start with NODE_ENV=$label', ({ nodeEnv, refusal }) => {
+    expect(() => loadServerEnv({ PORT: '3901', ENABLE_TEST_API: '1', NODE_ENV: nodeEnv })).toThrow(
+      refusal,
+    );
+  });
+
+  it.each([undefined, 'development', 'production', 'test'] as const)(
+    'keeps the test API closed while the flag is off, whatever NODE_ENV is (%s)',
+    (nodeEnv) => {
+      const absent = loadServerEnv({ PORT: '3901', NODE_ENV: nodeEnv });
+      const off = loadServerEnv({ PORT: '3901', ENABLE_TEST_API: '0', NODE_ENV: nodeEnv });
+
+      expect(absent.enableTestApi).toBe(false);
+      expect(off.enableTestApi).toBe(false);
+    },
+  );
 
   it('lists every invalid variable in one failure', () => {
     expect(() => loadServerEnv({ PORT: 'abc', ENABLE_TEST_API: '2', NODE_ENV: 'prod' })).toThrow(
@@ -236,20 +282,44 @@ describe('assertTestApiNotInProduction', () => {
     );
   });
 
-  it('allows the test API outside production and when not enabled', () => {
-    vi.stubEnv('NODE_ENV', 'development');
-    expect(() => assertTestApiNotInProduction(true)).not.toThrow();
+  // Матрица e69 — та же, что у первого рубежа, но на сыром process.env: мимо
+  // loadServerEnv значение не проходит enum, и опечатка или «почти прод»
+  // приходит сюда как есть. Открывают только явные development и test.
+  const unnamedEnvironment =
+    'ENABLE_TEST_API=1 needs an explicit NODE_ENV=development or NODE_ENV=test';
 
-    vi.stubEnv('NODE_ENV', 'test');
-    expect(() => assertTestApiNotInProduction(true)).not.toThrow();
+  it.each(['development', 'test'] as const)(
+    'allows the test API by an explicit NODE_ENV=%s',
+    (nodeEnv) => {
+      vi.stubEnv('NODE_ENV', nodeEnv);
 
-    vi.stubEnv('NODE_ENV', 'production');
-    expect(() => assertTestApiNotInProduction(false)).not.toThrow();
+      expect(() => assertTestApiNotInProduction(true)).not.toThrow();
+    },
+  );
+
+  it.each([
+    {
+      label: 'production',
+      nodeEnv: 'production',
+      refusal: 'ENABLE_TEST_API must never be set in production',
+    },
+    { label: 'unset', nodeEnv: undefined, refusal: unnamedEnvironment },
+    { label: 'empty', nodeEnv: '', refusal: unnamedEnvironment },
+    { label: 'prod', nodeEnv: 'prod', refusal: unnamedEnvironment },
+    { label: 'staging', nodeEnv: 'staging', refusal: unnamedEnvironment },
+  ])('refuses the test API with NODE_ENV=$label', ({ nodeEnv, refusal }) => {
+    vi.stubEnv('NODE_ENV', nodeEnv);
+
+    expect(() => assertTestApiNotInProduction(true)).toThrow(refusal);
   });
 
-  it('treats an unset NODE_ENV as not production', () => {
-    vi.stubEnv('NODE_ENV', undefined);
+  // Без включённого тестового API рубежу нечего запрещать — при любом NODE_ENV.
+  it.each([undefined, '', 'development', 'production', 'test'] as const)(
+    'has nothing to refuse while the test API is off, whatever NODE_ENV is (%s)',
+    (nodeEnv) => {
+      vi.stubEnv('NODE_ENV', nodeEnv);
 
-    expect(() => assertTestApiNotInProduction(true)).not.toThrow();
-  });
+      expect(() => assertTestApiNotInProduction(false)).not.toThrow();
+    },
+  );
 });

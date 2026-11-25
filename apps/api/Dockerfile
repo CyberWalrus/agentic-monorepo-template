@@ -48,7 +48,11 @@ RUN set -eux; cd /app; \
 FROM node:26.13.0-alpine AS runtime
 # Порт и хост — ENV образа: контейнер обязан слушать 0.0.0.0 и объявленный
 # порт; переопределяются -e при запуске (ADR 0012).
-ENV NODE_ENV=production PORT=3000 HOST=0.0.0.0
+# Прод-переменные перечислены явно (e69). NODE_ENV=production не снимать через
+# -e: тестовый API открывается только при явном NODE_ENV=development|test, а
+# ENABLE_TEST_API=1 вместе с NODE_ENV=production — отказ при старте. Флаги
+# тестового API заданы нулями здесь, а не оставлены дефолту кода.
+ENV NODE_ENV=production PORT=3000 HOST=0.0.0.0 ENABLE_TEST_API=0 ENABLE_TEST_API_WITH_DATABASE=0
 WORKDIR /app
 COPY --from=builder --chown=node:node /app ./
 # Приложение пишет только в stdout/stderr; домашний каталог node не нужен.
