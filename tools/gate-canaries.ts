@@ -572,6 +572,11 @@ export const CANARIES: GateCanary[] = [
     steps: 'openapi',
     failedStep: 'openapi',
     expect: /out of date/,
+    // Сообщение проверки дрейфа; packages/** — вне PR-фильтра canaries.yml: PR,
+    // переписавший только его, канарейки в PR не запускает (e77, находка ревью).
+    expects: [
+      { file: 'packages/contracts/scripts/openapi.ts', text: 'openapi.json is out of date' },
+    ],
     apply: (root) => {
       const path = join(root, 'packages/contracts/src/tasks.ts');
       const source = readFileSync(path, 'utf8');
