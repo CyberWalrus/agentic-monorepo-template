@@ -80,6 +80,9 @@ jobs:
       - run: pnpm required-tasks:check
       - run: pnpm sherif
       - run: pnpm visual-image:check
+      # Пины действий (e76): комментарий версии — неизменяемый тег релиза, версия
+      # сканера zizmor — точная; упреждает аудит ref-version-mismatch.
+      - run: pnpm action-pins:check
       - run: pnpm test:integrity
       # Тесты обвязки под кэшем turbo (E1): отчёт восстанавливается из кэша,
       # проверка отчёта идёт ниже явным --only (A3).
