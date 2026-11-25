@@ -4,10 +4,11 @@
  * Логика чекера гоняется на локальном стабе remote-кэша (`node:http`, тот же
  * процесс, что и запросы): read-only токен — зелёный; пишущий — красный, exit 1;
  * «проверить не удалось» — exit 2 (конфиг неполный, токен не читает, сервер
- * недоступен, неожиданный ответ). Отдельно закреплены форма запроса как у turbo
- * (метод, путь `/v8/artifacts/<hash>`, `teamId`, `Bearer`), отсутствие токена в
- * выводе, CLI без сети, проводка (токен канарейки — из environment cache-read;
- * каждый job ci.yml с TURBO_TOKEN объявляет environment), замыкание гейта
+ * недоступен, неожиданный ответ — в том числе редирект). Отдельно закреплены
+ * форма запроса как у turbo (метод, путь `/v8/artifacts/<hash>`, `teamId`,
+ * `Bearer`), отсутствие токена в выводе, CLI без сети, проводка (токен
+ * канарейки — из environment cache-read; каждый job ci.yml с TURBO_TOKEN
+ * объявляет environment), замыкание гейта
  * (deny, KNOWN_GATES, denyWrite) и ссылки в ADR 0017 и architecture.md.
  *
  * CLI гоняется spawned-процессом только на путях без сети: сетевые сценарии
@@ -38,7 +39,11 @@ type StubMode =
   | 'write-500'
   | 'exists'
   | 'flaky'
-  | 'echo';
+  | 'echo'
+  // Соединение на записи рвётся без ответа.
+  | 'drop-write'
+  // Коды ответов напрямую: чтение, запись; location — куда сервер перенаправляет (3xx).
+  | { read: number; write: number; location?: string };
 
 interface SeenRequest {
   method: string;
@@ -92,13 +97,26 @@ async function startStub(mode: StubMode): Promise<Stub> {
         body: Buffer.concat(chunks).toString('utf8'),
       });
       const write = request.method === 'PUT';
-      response.statusCode = respond(mode, write, requests.length);
+      if (mode === 'drop-write' && write) {
+        request.socket.destroy();
+        return;
+      }
+      response.statusCode =
+        typeof mode === 'object'
+          ? write
+            ? mode.write
+            : mode.read
+          : respond(mode, write, requests.length);
+      if (typeof mode === 'object' && mode.location !== undefined) {
+        response.setHeader('Location', mode.location);
+      }
+      const label = typeof mode === 'string' ? mode : `${mode.read}/${mode.write}`;
       // echo: сервер возвращает то, что ему прислали в Authorization, — так
       // проверяется, что тело ответа с токеном не уходит в вывод как есть.
       response.end(
         mode === 'echo' && write
           ? `rejected ${request.headers.authorization ?? ''}`
-          : `stub ${mode}`,
+          : `stub ${label}`,
       );
     });
   });
@@ -114,6 +132,15 @@ async function startStub(mode: StubMode): Promise<Stub> {
   }
   servers.push(server);
   return { api: `http://127.0.0.1:${address.port}`, requests };
+}
+
+/** Прогон канарейки на стабе настоящим fetch; пауза повтора — нулевая. */
+function probeStub(stub: Stub) {
+  return checkTurboAcl({
+    env: { TURBO_TOKEN: TOKEN, TURBO_TEAM: 'team', TURBO_API: stub.api },
+    hash: HASH,
+    retryDelayMs: 0,
+  });
 }
 
 afterAll(async () => {
@@ -367,6 +394,103 @@ it('случайный хеш уже есть в кэше (GET 200) — unknown,
   expect(result.verdict).toBe('unknown');
   expect(result.exitCode).toBe(2);
   expect(stub.requests.map((request) => request.method)).toEqual(['GET']);
+});
+
+// Классификатор ответа на запись — fail-closed: read-only доказывают только
+// 401 и 403, writes — любой 2xx; остальное красное. Без этих тестов пережил бы
+// мутант «любой отказ PUT = read-only».
+
+it.each([404, 405, 400])(
+  'неожиданный ответ на запись (PUT → %s) — unknown, exit 2: только 401 и 403 доказывают read-only',
+  async (code) => {
+    const stub = await startStub({ read: 404, write: code });
+    const result = await probeStub(stub);
+    expect(result.verdict).toBe('unknown');
+    expect(result.exitCode).toBe(2);
+    expect(result.lines.at(-1)?.level).toBe('error');
+    expect(result.lines.at(-1)?.text).toContain(`PUT → ${code}`);
+    // Тело ответа — в выводе: человек отличает отказ от сломанного эндпоинта.
+    expect(result.lines.at(-1)?.text).toContain(`stub 404/${code}`);
+    expect(textOf(result)).not.toContain('read-only подтверждён');
+    expect(stub.requests.map((request) => request.method)).toEqual(['GET', 'PUT']);
+  },
+);
+
+it('отказ в записи 401 — read-only, зелёный: отказ засчитывается и по 401, и по 403', async () => {
+  const stub = await startStub({ read: 404, write: 401 });
+  const result = await probeStub(stub);
+  expect(result.verdict).toBe('read-only');
+  expect(result.exitCode).toBe(0);
+  expect(result.lines.some((line) => line.level === 'error')).toBe(false);
+  expect(textOf(result)).toContain('PUT → 401');
+});
+
+it.each([201, 202, 204])('любой 2xx на запись (PUT → %s) — токен пишет, exit 1', async (code) => {
+  const stub = await startStub({ read: 404, write: code });
+  const result = await probeStub(stub);
+  expect(result.verdict).toBe('write');
+  expect(result.exitCode).toBe(1);
+  expect(result.lines.at(-1)?.level).toBe('error');
+  expect(result.lines.at(-1)?.text).toContain(`PUT → ${code}`);
+});
+
+it('соединение рвётся на записи — один повтор, затем unknown, exit 2: неясно, записалось ли', async () => {
+  const stub = await startStub('drop-write');
+  const result = await probeStub(stub);
+  expect(result.verdict).toBe('unknown');
+  expect(result.exitCode).toBe(2);
+  expect(textOf(result)).toContain('PUT');
+  expect(textOf(result)).not.toContain(TOKEN);
+  expect(stub.requests.map((request) => request.method)).toEqual(['GET', 'PUT', 'PUT']);
+});
+
+// Редиректы не проходят: вердикт выносится только по ответу самого сервера кэша.
+
+it.each([302, 307])(
+  'сервер перенаправляет запись (%s на страницу, отвечающую 403) — unknown, exit 2: чужой ответ не доказывает read-only',
+  async (code) => {
+    // «Страница авторизации»: на любой запрос отвечает 403 — с `follow` это
+    // читалось бы как отказ записи и давало зелёный пишущему токену.
+    const target = await startStub({ read: 403, write: 403 });
+    const stub = await startStub({ read: 404, write: code, location: `${target.api}/auth` });
+    const result = await probeStub(stub);
+    expect(result.verdict).toBe('unknown');
+    expect(result.exitCode).toBe(2);
+    expect(result.lines.at(-1)?.level).toBe('error');
+    expect(result.lines.at(-1)?.text).toContain(`PUT → ${code}`);
+    expect(stub.requests.map((request) => request.method)).toEqual(['GET', 'PUT']);
+    expect(target.requests).toEqual([]);
+  },
+);
+
+it('сервер перенаправляет чтение (302 на страницу, отвечающую 404) — unknown, exit 2, запись не пробуется', async () => {
+  const target = await startStub({ read: 404, write: 200 });
+  const stub = await startStub({ read: 302, write: 403, location: `${target.api}/auth` });
+  const result = await probeStub(stub);
+  expect(result.verdict).toBe('unknown');
+  expect(result.exitCode).toBe(2);
+  expect(textOf(result)).toContain('GET → 302');
+  expect(stub.requests.map((request) => request.method)).toEqual(['GET']);
+  expect(target.requests).toEqual([]);
+});
+
+it.each([
+  ['не похож на URL', 'cache.example.com'],
+  ['с протоколом не http(s)', 'ftp://cache.example.com'],
+])('TURBO_API %s — unknown, exit 2, сеть не трогается', async (_case, api) => {
+  let calls = 0;
+  const result = await checkTurboAcl({
+    env: { TURBO_TOKEN: TOKEN, TURBO_TEAM: 'team', TURBO_API: api },
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response('x');
+    },
+  });
+  expect(result.verdict).toBe('unknown');
+  expect(result.exitCode).toBe(2);
+  expect(result.lines[0]?.level).toBe('error');
+  expect(result.lines[0]?.text).toContain('TURBO_API');
+  expect(calls).toBe(0);
 });
 
 it('токен не попадает в вывод, даже если сервер возвращает его в теле ответа', async () => {
