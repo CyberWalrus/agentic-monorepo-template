@@ -127,8 +127,10 @@ export interface AppOptions {
    */
   enableTestApi?: boolean;
   /**
-   * Идентификатор прогона e2e для `/health` (З9, A5): global setup Playwright
-   * сверяет его с токеном прогона, чтобы тест не смотрел в чужой сервер.
+   * Идентификатор экземпляра (`INSTANCE_ID`; З9, A5) — внутренние данные, в
+   * публичный `/health` не выходит (e68): штамп `instanceId` в каждой записи
+   * лога (observability.ts) и ответ `/__test__/instance`, где его сверяет с
+   * токеном прогона global setup Playwright, чтобы тест не смотрел в чужой сервер.
    */
   instanceId?: string;
   /**
@@ -208,8 +210,11 @@ export function createApp({
           logBuffer.write(record);
         };
 
+  // Идентификатор экземпляра — в лог, не в публичный ответ (e68): «какой
+  // экземпляр это написал» ищут по штампу `instanceId` в записи.
   const log = createLogger({
     ...(sink === undefined ? {} : { sink }),
+    ...(instanceId === undefined ? {} : { instanceId }),
     now,
   });
 
@@ -288,7 +293,10 @@ export function createApp({
   });
   const timeoutGuard = requestTimeout(requestTimeoutMs);
 
-  app.get('/health', (c) => c.json({ status: 'ok', instance: instanceId ?? null }));
+  // Публичный `/health` отдаёт минимум — только статус (e68): идентификатор
+  // экземпляра из ответа убран, он живёт в логе (createLogger выше) и в тестовом
+  // контуре (`/__test__/instance` ниже).
+  app.get('/health', (c) => c.json({ status: 'ok' }));
 
   app.use('/rpc/*', requestShapeGuard, timeoutGuard, bodyLimitGuard);
   app.use('/api/*', requestShapeGuard, timeoutGuard, bodyLimitGuard);
@@ -320,8 +328,11 @@ export function createApp({
     // strictObject вместо z.object (c1.7): z.object молча стрипает лишние
     // ключи, и опечатка в e2e-фикстуре сидировала бы «почти то, что задумано».
     // Форма задачи переиспользует shape контракта: seed-задача — та же Task.
+    // `scope: "global"` — явное намерение стереть всё хранилище (e68): без него
+    // сброс требует валидный `x-workspace-id` (см. обработчик ниже).
     const ResetBodySchema = z.strictObject({
       tasks: z.strictObject(TaskSchema.shape).array(),
+      scope: z.literal('global').optional(),
     });
     const RequestIdsSchema = z
       .array(z.string())
@@ -336,14 +347,50 @@ export function createApp({
       if (!parsed.success) {
         return c.json({ error: 'Invalid seed data', issues: parsed.error.issues }, 400);
       }
-      // С workspace-заголовком seed заменяет содержимое одного рабочего
-      // пространства (изоляция параллельных E2E-сценариев, ADR 0020); без него
-      // — легаси-глобальный сброс для точечных сценариев. Осторожно: глобальный
-      // сброс при параллельном прогоне стирает данные соседних workspace.
-      const workspaceId = parseWorkspaceId(c.req.raw.headers.get(WORKSPACE_HEADER));
+      // Сфера сброса — только явная (e68); неоднозначное — 400 с названием
+      // причины, данные не тронуты:
+      //   - валидный `x-workspace-id` — замена содержимого одного рабочего
+      //     пространства (изоляция параллельных E2E-сценариев, ADR 0020);
+      //   - `"scope": "global"` без валидного заголовка — сброс всего хранилища
+      //     для точечных сценариев. Прежде им был любой запрос без заголовка:
+      //     одна забытая шапка в параллельном тесте стирала чужие данные;
+      //   - без заголовка и без scope — отказ: молчаливого глобального сброса нет;
+      //   - мусорный заголовок без scope — отказ: он не «ничей» scope и не
+      //     глобальный сброс;
+      //   - валидный заголовок вместе с `scope` — отказ: названы две сферы.
+      const header = c.req.raw.headers.get(WORKSPACE_HEADER);
+      const workspaceId = parseWorkspaceId(header);
+      if (workspaceId !== null && parsed.data.scope !== undefined) {
+        return c.json(
+          {
+            error: 'Ambiguous reset scope: x-workspace-id and "scope": "global" cannot be combined',
+          },
+          400,
+        );
+      }
+      if (workspaceId === null && parsed.data.scope === undefined) {
+        return c.json(
+          {
+            error:
+              header === null
+                ? 'Reset scope is not named: pass a valid x-workspace-id for one workspace or "scope": "global" for the whole storage'
+                : 'Invalid x-workspace-id header: a malformed header is neither a workspace nor the global scope',
+          },
+          400,
+        );
+      }
+      // Сфера ровно одна: валидный заголовок (строка) — одно рабочее пространство,
+      // явный `scope: "global"` без валидного заголовка (null) — всё хранилище.
       await tasks.reset(parsed.data.tasks, workspaceId ?? undefined);
       return c.body(null, 204);
     });
+
+    // Гейт «свой сервер» (З9, A5): идентификатор прогона отдаёт только
+    // тестовый контур — global setup Playwright сверяет его с токеном прогона
+    // (tools/instance.ts), поэтому прогон не может незаметно пойти против чужого
+    // процесса на порту. Форма ответа — прежний ответ `/health`: status и
+    // instance. С выключенным тестовым API маршрута нет (e68).
+    app.get('/__test__/instance', (c) => c.json({ status: 'ok', instance: instanceId ?? null }));
 
     // Срез лога по идентификаторам запроса (C4): фикстура E2E собирает
     // x-request-id из ответов сценария и здесь забирает только его записи —

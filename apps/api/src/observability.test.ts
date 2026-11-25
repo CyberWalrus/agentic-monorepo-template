@@ -188,7 +188,8 @@ describe('unhandled errors outside oRPC handlers', () => {
     const response = await app.request('/__test__/reset', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-request-id': 'reset-req-1' },
-      body: '{"tasks":[]}',
+      // Явная глобальная сфера (e68): без заголовка сброс обязан отклонить запрос.
+      body: '{"tasks":[],"scope":"global"}',
     });
 
     expect(response.status).toBe(500);
@@ -223,6 +224,44 @@ describe('logger unit behaviour', () => {
       event: 'startup',
       storage: 'memory',
     });
+  });
+
+  it('stamps every record with the instance id when one is given (e68)', () => {
+    const records: LogRecord[] = [];
+    const log = createLogger({
+      sink: (record) => records.push(record),
+      instanceId: 'run-token',
+    });
+
+    log('info', 'request', { requestId: 'req-1' });
+    log('warn', 'unhandled');
+
+    // Штамп стоит сразу после конверта записи, перед полями события.
+    expect(Object.keys(records[0] ?? {})).toEqual([
+      'ts',
+      'level',
+      'event',
+      'instanceId',
+      'requestId',
+    ]);
+    expect(records[0]).toMatchObject({
+      level: 'info',
+      event: 'request',
+      instanceId: 'run-token',
+      requestId: 'req-1',
+    });
+    expect(records[1]).toMatchObject({
+      level: 'warn',
+      event: 'unhandled',
+      instanceId: 'run-token',
+    });
+  });
+
+  it('adds no instance field to records when no instance id is given', () => {
+    const records: LogRecord[] = [];
+    createLogger({ sink: (record) => records.push(record) })('info', 'startup');
+
+    expect(records[0]).not.toHaveProperty('instanceId');
   });
 
   it('serializes errors explicitly: stack survives where JSON.stringify loses it', () => {

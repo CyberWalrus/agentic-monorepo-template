@@ -22,13 +22,27 @@ export interface LoggerOptions {
   sink?: LogSink;
   /** З13: время — через параметры; тесты фиксируют его. */
   now?: () => Date;
+  /**
+   * Идентификатор экземпляра (`INSTANCE_ID`): с ним каждая запись лога несёт
+   * поле `instanceId` (e68). Публичный `/health` идентификатор больше не
+   * отдаёт — «какой экземпляр это написал» ищут в логе, а не в ответе сервера.
+   * Без значения ключа в записях нет.
+   */
+  instanceId?: string;
 }
 
 export function createLogger(options: LoggerOptions = {}) {
   const sink = options.sink ?? consoleSink;
   const now = options.now ?? (() => new Date());
+  const instanceId = options.instanceId;
   return (level: LogLevel, event: string, fields: Record<string, unknown> = {}): void => {
-    sink({ ts: now().toISOString(), level, event, ...fields });
+    sink({
+      ts: now().toISOString(),
+      level,
+      event,
+      ...(instanceId === undefined ? {} : { instanceId }),
+      ...fields,
+    });
   };
 }
 

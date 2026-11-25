@@ -244,6 +244,42 @@ describe('RPC transport', () => {
   });
 });
 
+/**
+ * Приспособления тестов явной сферы сброса (e68): строка набора, сброс с
+ * заданными заголовками, приложение с тестовым API и чтение списка по сфере.
+ */
+function seedRow(id: string, title: string) {
+  return { id, title, completed: false, createdAt: '2026-11-01T10:00:00.000Z' };
+}
+
+async function postReset(
+  app: ReturnType<typeof createApp>,
+  data: unknown,
+  headers: Record<string, string> = {},
+) {
+  return app.request('/__test__/reset', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(data),
+  });
+}
+
+/** Приложение с тестовым API и чтение списка по сфере (без аргумента — «ничей»). */
+function scopeClients() {
+  const app = createApp({ tasks: new InMemoryTaskRepository(), enableTestApi: true });
+  const list = async (workspace?: string) => {
+    const client: ContractRouterClient<Contract> = createORPCClient(
+      new RPCLink({
+        url: 'http://api.test/rpc',
+        fetch: async (request) => app.fetch(request),
+        ...(workspace === undefined ? {} : { headers: { 'x-workspace-id': workspace } }),
+      }),
+    );
+    return client.tasks.list();
+  };
+  return { app, list };
+}
+
 describe('workspace scoping (ADR 0020)', () => {
   it('scopes RPC procedures to the workspace of the request header', async () => {
     const scoped = setup({ workspace: 'ws-a' });
@@ -275,7 +311,7 @@ describe('workspace scoping (ADR 0020)', () => {
     await app.request('/__test__/reset', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ tasks: [seeded] }),
+      body: JSON.stringify({ tasks: [seeded], scope: 'global' }),
     });
 
     // Мусорный заголовок не становится ключом данных: тот же «ничей» scope,
@@ -316,31 +352,117 @@ describe('workspace scoping (ADR 0020)', () => {
     expect(await clientFor().tasks.list()).toEqual([]);
   });
 
-  it('keeps the headerless reset a global wipe for point scenarios', async () => {
-    const scoped = setup({ enableTestApi: true, workspace: 'ws-a' });
-    await scoped.app.request('/__test__/reset', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-workspace-id': 'ws-a' },
-      body: JSON.stringify({
-        tasks: [
-          {
-            id: '00000000-0000-4000-8000-000000000001',
-            title: 'Seeded',
-            completed: false,
-            createdAt: '2026-11-01T10:00:00.000Z',
-          },
-        ],
-      }),
+  // e68: сфера сброса — только явная. «Забытая шапка» прежде была глобальным
+  // сбросом: в параллельном прогоне она стирала данные соседних сценариев.
+  describe('reset scope is explicit', () => {
+    it('refuses a reset without a workspace header and keeps every scope intact', async () => {
+      const { app, list } = scopeClients();
+      const ownerless = seedRow('00000000-0000-4000-8000-000000000003', 'Ownerless');
+      const inA = seedRow('00000000-0000-4000-8000-000000000001', 'In ws-a');
+      const inB = seedRow('00000000-0000-4000-8000-000000000002', 'In ws-b');
+      expect((await postReset(app, { tasks: [ownerless], scope: 'global' })).status).toBe(204);
+      expect((await postReset(app, { tasks: [inA] }, { 'x-workspace-id': 'ws-a' })).status).toBe(
+        204,
+      );
+      expect((await postReset(app, { tasks: [inB] }, { 'x-workspace-id': 'ws-b' })).status).toBe(
+        204,
+      );
+
+      // Забытая шапка: прежде — глобальный сброс, теперь — отказ с причиной.
+      const response = await postReset(app, { tasks: [] });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error:
+          'Reset scope is not named: pass a valid x-workspace-id for one workspace or "scope": "global" for the whole storage',
+      });
+      expect(await list()).toEqual([ownerless]);
+      expect(await list('ws-a')).toEqual([inA]);
+      expect(await list('ws-b')).toEqual([inB]);
     });
 
-    const response = await scoped.app.request('/__test__/reset', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ tasks: [] }),
+    it('resets the whole storage only by an explicit "scope": "global"', async () => {
+      const { app, list } = scopeClients();
+      const fresh = seedRow('00000000-0000-4000-8000-000000000009', 'Fresh');
+      await postReset(app, {
+        tasks: [seedRow('00000000-0000-4000-8000-000000000002', 'Ownerless')],
+        scope: 'global',
+      });
+      await postReset(
+        app,
+        { tasks: [seedRow('00000000-0000-4000-8000-000000000001', 'In ws-a')] },
+        { 'x-workspace-id': 'ws-a' },
+      );
+      await postReset(
+        app,
+        { tasks: [seedRow('00000000-0000-4000-8000-000000000003', 'In ws-b')] },
+        { 'x-workspace-id': 'ws-b' },
+      );
+
+      const response = await postReset(app, { tasks: [fresh], scope: 'global' });
+
+      expect(response.status).toBe(204);
+      expect(await list('ws-a')).toEqual([]);
+      expect(await list('ws-b')).toEqual([]);
+      // Строки нового набора — «ничей» scope, как у всякого сброса без заголовка.
+      expect(await list()).toEqual([fresh]);
     });
 
-    expect(response.status).toBe(204);
-    expect(await scoped.client.tasks.list()).toEqual([]);
+    it('refuses a malformed workspace header instead of reading it as the global scope', async () => {
+      const { app, list } = scopeClients();
+      const inA = seedRow('00000000-0000-4000-8000-000000000001', 'In ws-a');
+      await postReset(app, { tasks: [inA] }, { 'x-workspace-id': 'ws-a' });
+
+      // В RPC мусорный заголовок читается как «ничей» scope (ADR 0020); для
+      // сброса это было бы стиранием всего хранилища — поэтому отказ.
+      const response = await postReset(
+        app,
+        { tasks: [] },
+        { 'x-workspace-id': 'bad value with spaces' },
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error:
+          'Invalid x-workspace-id header: a malformed header is neither a workspace nor the global scope',
+      });
+      expect(await list('ws-a')).toEqual([inA]);
+    });
+
+    it('refuses a reset that names both a workspace and the global scope', async () => {
+      const { app, list } = scopeClients();
+      const inB = seedRow('00000000-0000-4000-8000-000000000002', 'In ws-b');
+      await postReset(app, { tasks: [inB] }, { 'x-workspace-id': 'ws-b' });
+
+      const response = await postReset(
+        app,
+        { tasks: [], scope: 'global' },
+        { 'x-workspace-id': 'ws-a' },
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: 'Ambiguous reset scope: x-workspace-id and "scope": "global" cannot be combined',
+      });
+      // Ни одна из двух названных сфер не тронута.
+      expect(await list('ws-a')).toEqual([]);
+      expect(await list('ws-b')).toEqual([inB]);
+    });
+
+    it('rejects an unknown scope value instead of guessing it', async () => {
+      const { app, list } = scopeClients();
+      const inA = seedRow('00000000-0000-4000-8000-000000000001', 'In ws-a');
+      await postReset(app, { tasks: [inA] }, { 'x-workspace-id': 'ws-a' });
+
+      const response = await postReset(app, { tasks: [], scope: 'all' });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: 'Invalid seed data',
+        issues: expect.arrayContaining([expect.objectContaining({ path: ['scope'] })]),
+      });
+      expect(await list('ws-a')).toEqual([inA]);
+    });
   });
 
   it('answers NOT_FOUND for a task of another workspace', async () => {
@@ -408,20 +530,65 @@ describe('HTTP concerns', () => {
     expect(rest.status).toBe(404);
   });
 
-  it('reports health without an instance when started outside e2e', async () => {
-    const { app } = setup();
+  // e68: идентификатор экземпляра — внутренние данные. Публичный `/health` не
+  // отдаёт его ни в какой конфигурации: с INSTANCE_ID и без, с тестовым API и без.
+  it.each([
+    { name: 'outside e2e', options: {} },
+    { name: 'with INSTANCE_ID', options: { instanceId: 'run-token' } },
+    { name: 'with the test API on', options: { enableTestApi: true } },
+    {
+      name: 'with INSTANCE_ID and the test API on',
+      options: { instanceId: 'run-token', enableTestApi: true },
+    },
+  ])('answers /health with the status only — $name', async ({ options }) => {
+    const { app } = setup(options);
 
     const response = await app.request('/health');
+
+    expect(await response.json()).toEqual({ status: 'ok' });
+  });
+
+  it('serves the instance id of the e2e run on the test API only', async () => {
+    const { app } = setup({ instanceId: 'run-token', enableTestApi: true });
+
+    const response = await app.request('/__test__/instance');
+
+    expect(await response.json()).toEqual({ status: 'ok', instance: 'run-token' });
+  });
+
+  it('answers /__test__/instance with a null instance when started without INSTANCE_ID', async () => {
+    const { app } = setup({ enableTestApi: true });
+
+    const response = await app.request('/__test__/instance');
 
     expect(await response.json()).toEqual({ status: 'ok', instance: null });
   });
 
-  it('reports the instance id of the e2e run that started it', async () => {
+  it('hides /__test__/instance unless the test API is enabled', async () => {
+    // «Выключено по умолчанию» (architecture.md, 2.3) — даже с заданным INSTANCE_ID.
     const { app } = setup({ instanceId: 'run-token' });
 
-    const response = await app.request('/health');
+    const response = await app.request('/__test__/instance');
 
-    expect(await response.json()).toEqual({ status: 'ok', instance: 'run-token' });
+    expect(response.status).toBe(404);
+  });
+
+  it('stamps log records with the instance id instead of serving it', async () => {
+    const records: LogRecord[] = [];
+    const sink: LogSink = (record) => records.push(record);
+    const stamped = setup({ instanceId: 'run-token', log: sink });
+    const plain = setup({ log: sink });
+
+    await stamped.app.request('/health');
+    await plain.app.request('/health');
+
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({
+      event: 'request',
+      path: '/health',
+      instanceId: 'run-token',
+    });
+    expect(records[1]).not.toHaveProperty('instanceId');
   });
 
   it('sends no CORS headers to any origin: browsers use the same-origin proxy (ADR 0005)', async () => {
@@ -897,7 +1064,8 @@ describe('test API', () => {
     const response = await app.request('/__test__/reset', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ tasks: [seeded] }),
+      // Глобальный сброс — явный (e68): без заголовка и без scope запрос отклонён.
+      body: JSON.stringify({ tasks: [seeded], scope: 'global' }),
     });
 
     expect(response.status).toBe(204);

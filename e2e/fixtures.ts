@@ -109,6 +109,8 @@ export const test = base.extend<Fixtures>({
     await use(async (tasks) => {
       // Заголовок явно: request-фикстура создаётся из статичных опций контекста
       // и не наследует setExtraHTTPHeaders, выставленный рантайм-фикстурой.
+      // Без заголовка сервер отвечает 400 (e68): глобальный сброс — только явным
+      // `"scope": "global"`, его фикстура не использует.
       const response = await request.post(`${API_URL}/__test__/reset`, {
         data: { tasks },
         headers: { [WORKSPACE_HEADER]: workspace },
