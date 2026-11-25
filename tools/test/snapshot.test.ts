@@ -2,9 +2,10 @@
  * Проверка по результату (roadmap A2 пункт 1, ADR 0003): канарейки механизма снимка.
  * Фикстура — настоящий git-репозиторий в tmp с копией хуков и собственным
  * protected-paths.json. Табличные кейсы: изменение защищённого файла, проскочившее
- * guard-bash, отменяется хуком и объясняется агенту; дрейф, совпавший с новым HEAD,
- * перебазируется; новые файлы под deny — только сообщаются, не удаляются; порча
- * state делает проверку громко слепой, а не тихо пропускающей.
+ * guard-bash, отменяется хуком и объясняется агенту; дрейф, принесённый честным pull,
+ * перебазируется, а запись с commit-ом одной командой — отменяется; новые файлы под
+ * deny — только сообщаются, не удаляются; порча state делает проверку громко слепой,
+ * а не тихо пропускающей.
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -30,7 +31,7 @@ import { beforeAll, expect, it, vi } from 'vitest';
 // нагрузкой verify дефолтные 5 c на тест флакуют (наблюдалось на чистом main).
 vi.setConfig({ testTimeout: 30_000 });
 
-import { stateDir } from '../snapshot.ts';
+import { snapshotCopy, stateDir } from '../snapshot.ts';
 
 const repoDir = resolve(import.meta.dirname, '..', '..');
 
@@ -49,8 +50,13 @@ const COPIED_FILES = [
 const PIN = '{"budget": 100}\n';
 const KEEP = '{"baseline": true}\n';
 const KEEPER_SH = '#!/bin/sh\necho keeper\n';
+/** Пути, которые при замене `/` на `__` дают одно имя копии. */
+const NESTED_ONE = 'one\n';
+const NESTED_TWO = 'two\n';
 
 let fixture = '';
+/** «origin»: честный pull приносит изменение защищённого файла из другого репозитория. */
+let remoteDir = '';
 let sessionCounter = 0;
 
 beforeAll(() => {
@@ -61,6 +67,10 @@ beforeAll(() => {
   mkdirSync(join(fixture, 'gates'), { recursive: true });
   mkdirSync(join(fixture, 'tools'), { recursive: true });
   mkdirSync(join(fixture, '.claude', 'hooks'), { recursive: true });
+  mkdirSync(join(fixture, 'gates', 'a'), { recursive: true });
+  mkdirSync(join(fixture, 'gates', 'a__b'), { recursive: true });
+  writeFileSync(join(fixture, 'gates', 'a', 'b__c'), NESTED_ONE);
+  writeFileSync(join(fixture, 'gates', 'a__b', 'c'), NESTED_TWO);
   writeFileSync(join(fixture, 'gates', 'keep.json'), KEEP);
   writeFileSync(join(fixture, 'gates', 'keeper.sh'), KEEPER_SH);
   chmodSync(join(fixture, 'gates', 'keeper.sh'), 0o755);
@@ -79,13 +89,22 @@ beforeAll(() => {
   );
   git(['add', '.']);
   git(['commit', '-m', 'hooks']);
+  remoteDir = join(fixture, '..', `${basename(fixture)}-origin`);
+  git(['clone', '--quiet', fixture, remoteDir]);
+  gitIn(remoteDir, ['config', 'user.email', 'fixture@example.com']);
+  gitIn(remoteDir, ['config', 'user.name', 'Fixture']);
+  git(['remote', 'add', 'origin', remoteDir]);
 });
 
-function git(args: string[]): void {
-  const result = spawnSync('git', args, { cwd: fixture, encoding: 'utf8' });
+function gitIn(dir: string, args: string[]): void {
+  const result = spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
   if (result.status !== 0) {
-    throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+    throw new Error(`git ${args.join(' ')} failed in ${dir}: ${result.stderr}`);
   }
+}
+
+function git(args: string[]): void {
+  gitIn(fixture, args);
 }
 
 function headSha(): string {
@@ -94,6 +113,15 @@ function headSha(): string {
     throw new Error(`git rev-parse failed: ${result.stderr}`);
   }
   return result.stdout.trim();
+}
+
+/** Действие новейшей записи reflog HEAD — так его называет сам git, без догадок о формате. */
+function reflogAction(): string {
+  const result = spawnSync('git', ['reflog', '-1', '--format=%gs'], {
+    cwd: fixture,
+    encoding: 'utf8',
+  });
+  return (result.stdout ?? '').trim();
 }
 
 function uniqueSession(): string {
@@ -107,13 +135,17 @@ interface HookResult {
   stderr: string;
 }
 
-function runHook(hook: string, input: Record<string, unknown>): HookResult {
+function runHook(
+  hook: string,
+  input: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = {},
+): HookResult {
   const result = spawnSync(process.execPath, [join(fixture, '.claude', 'hooks', hook)], {
     cwd: fixture,
     input: JSON.stringify(input),
     encoding: 'utf8',
     timeout: 60_000,
-    env: { ...process.env, CLAUDE_PROJECT_DIR: fixture },
+    env: { ...process.env, ...env, CLAUDE_PROJECT_DIR: fixture },
   });
   if (result.error) {
     throw result.error;
@@ -141,14 +173,18 @@ function startup(sessionId: string, source = 'startup'): HookResult {
   });
 }
 
-function postToolUse(sessionId: string): HookResult {
-  return runHook('protect-result.ts', {
-    session_id: sessionId,
-    hook_event_name: 'PostToolUse',
-    tool_name: 'Bash',
-    tool_input: { command: 'true' },
-    cwd: fixture,
-  });
+function postToolUse(sessionId: string, env: NodeJS.ProcessEnv = {}): HookResult {
+  return runHook(
+    'protect-result.ts',
+    {
+      session_id: sessionId,
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'true' },
+      cwd: fixture,
+    },
+    env,
+  );
 }
 
 function stop(sessionId: string): HookResult {
@@ -195,7 +231,7 @@ it('startup снимает снимок: tracked-файлы из deny, копи�
   const dir = stateDir(fixture, sessionId);
   expect(existsSync(join(dir, 'manifest.json')), 'manifest exists').toBe(true);
   for (const path of ['pin.json', join('gates', 'keep.json')]) {
-    const copy = join(dir, path.replaceAll('/', '__'));
+    const copy = snapshotCopy(fixture, sessionId, path);
     expect(existsSync(copy), `copy of ${path} exists`).toBe(true);
     expect(statSync(copy).mode & 0o777, 'copy is 0600').toBe(0o600);
     expect(readFileSync(copy, 'utf8'), 'copy matches the worktree').toBe(
@@ -353,12 +389,41 @@ it('защищённый путь-symlink на старте сессии дел�
   writeFileSync(join(fixture, 'pin.json'), PIN);
 });
 
-it('дрейф, совпавший с новым HEAD (pull/merge), перебазируется, а не откатывается', () => {
+/**
+ * Честный pull: изменение защищённого файла приходит из другого репозитория. В origin —
+ * тот же commit, что в фикстуре, затем `change` и commit уже там; фикстура его подтягивает.
+ */
+function pullChange(change: () => void): void {
+  gitIn(remoteDir, ['fetch', '--quiet', 'origin', 'main']);
+  gitIn(remoteDir, ['reset', '--quiet', '--hard', 'FETCH_HEAD']);
+  change();
+  gitIn(remoteDir, ['commit', '--quiet', '-am', 'legitimate gate change from a labeled PR']);
+  git(['pull', '--quiet', '--ff-only', 'origin', 'main']);
+}
+
+/** Команда оболочки в фикстуре — так её запустил бы агент; проверка по результату идёт после неё. */
+function agentRuns(command: string): void {
+  const result = spawnSync('bash', ['-c', command], { cwd: fixture, encoding: 'utf8' });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`bash ${command} exited with ${result.status}: ${result.stderr}`);
+  }
+}
+
+/** Строки журнала отказов — отказ проверки по результату обязан там появиться. */
+function denials(path: string): unknown[] {
+  return readFileSync(path, 'utf8')
+    .split('\n')
+    .filter((line) => line !== '')
+    .map((line) => JSON.parse(line));
+}
+
+it('честный pull, изменивший защищённый файл, перебазирует снимок, а не откатывает', () => {
   const sessionId = uniqueSession();
   startup(sessionId);
-  writeFileSync(join(fixture, 'pin.json'), '{"budget": 200}\n');
-  git(['add', '.']);
-  git(['commit', '-m', 'legitimate gate change from a labeled PR']);
+  pullChange(() => writeFileSync(join(remoteDir, 'pin.json'), '{"budget": 200}\n'));
   const result = postToolUse(sessionId);
   expectOk(result, 'protect-result');
   expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'legit change stays').toBe(
@@ -377,11 +442,274 @@ it('дрейф, совпавший с новым HEAD (pull/merge), переба
   git(['revert', '--no-edit', 'HEAD']);
 });
 
-it('файл, исчезнувший вместе с HEAD (git rm), убирается из снимка, а не воскрешается', () => {
+it.each([
+  {
+    name: 'perl -pi',
+    action: `perl -pi -e 's/100/0/' pin.json && git commit -qam "weaken the gate"`,
+  },
+  {
+    name: 'node -e',
+    action: `node -e "require('fs').writeFileSync('pin.json', '{\\"budget\\": 0}\\n')" && git commit -qam "weaken the gate"`,
+  },
+  {
+    name: 'редирект 1>',
+    action: `printf '{"budget": 0}\\n' 1> pin.json && git commit -qam "weaken the gate"`,
+  },
+])(
+  'запись и commit одной командой ($name) — не pull: файл восстановлен, отказ журналируется',
+  ({ action }) => {
+    const sessionId = uniqueSession();
+    const startHead = headSha();
+    const journal = join(fixture, '..', `${basename(fixture)}-denials-${uniqueSession()}.jsonl`);
+    startup(sessionId);
+    try {
+      // К проверке файл уже равен blob HEAD — ровно то, что раньше принималось за pull
+      agentRuns(action);
+      expect(headSha(), 'the command did commit: HEAD moved').not.toBe(startHead);
+      const result = postToolUse(sessionId, { DENIAL_JOURNAL_PATH: journal });
+      expectOk(result, 'protect-result');
+      expect(result.stdout, 'the agent is told what happened').toContain('pin.json');
+      expect(result.stdout, 'the cancellation is explained, not a rebase').toMatch(/CANCELLED/);
+      expect(result.stdout, 'not reported as a rebase').not.toMatch(/rebas/i);
+      expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'file is restored').toBe(PIN);
+      expect(denials(journal).at(-1), 'the denial is journaled').toMatchObject({
+        gate: 'protect-result',
+        reason: 'protected-file-restored',
+      });
+      // commit с подменой остался HEAD: извлечь из него содержимое ещё раз — тоже не pull
+      agentRuns('git reset -q --hard HEAD');
+      expectOk(postToolUse(sessionId), 'protect-result after reset --hard');
+      expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'still restored').toBe(PIN);
+    } finally {
+      git(['reset', '-q', '--hard', startHead]);
+    }
+  },
+);
+
+it('merge над отвергнутым commit-ом не выдаёт его содержимое за движение ветки', () => {
+  const sessionId = uniqueSession();
+  const startHead = headSha();
+  startup(sessionId);
+  try {
+    agentRuns(`perl -pi -e 's/100/0/' pin.json && git commit -qam "weaken the gate"`);
+    expectOk(postToolUse(sessionId), 'protect-result after the tampering commit');
+    expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'file is restored').toBe(PIN);
+    // HEAD с подменой остаётся в истории. Merge «промывает» его движением, которое reflog
+    // объясняет (checkout, пустой commit на побочной ветке, fast-forward merge), а
+    // содержимое файла в новом HEAD — то же самое; агент достаёт его из HEAD ещё раз.
+    agentRuns(
+      'git checkout -q -b carrier && git commit -q --allow-empty -m carrier && ' +
+        'git checkout -q main && git merge -q --no-edit carrier && git reset -q --hard HEAD',
+    );
+    const result = postToolUse(sessionId);
+    expectOk(result, 'protect-result after the merge');
+    expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'file is still restored').toBe(PIN);
+    expect(result.stdout, 'the cancellation is explained').toMatch(/CANCELLED/);
+  } finally {
+    git(['reset', '-q', '--hard', startHead]);
+    spawnSync('git', ['branch', '-D', 'carrier'], { cwd: fixture });
+  }
+});
+
+/**
+ * Подмена на побочной ветке: к возврату на main HEAD снова равен HEAD на старте сессии, окно
+ * reflog с прошлой проверки закрывается записью возврата, а коммит с подменой остаётся старше её.
+ */
+const SIDE_BRANCH_TAMPER =
+  "git checkout -q -b side && perl -pi -e 's/100/0/' pin.json && " +
+  'git commit -qam "weaken the gate" && git checkout -q main && ';
+
+it.each([
+  {
+    name: 'merge --ff-only',
+    action: `${SIDE_BRANCH_TAMPER}git merge -q --ff-only side`,
+    movement: /^merge side: Fast-forward$/,
+  },
+  {
+    name: 'cherry-pick',
+    action: `${SIDE_BRANCH_TAMPER}git cherry-pick side`,
+    movement: /^cherry-pick: /,
+  },
+  {
+    name: 'reset --hard',
+    action: `${SIDE_BRANCH_TAMPER}git reset -q --hard side`,
+    movement: /^reset: moving to side$/,
+  },
+  {
+    // Сообщение записи reflog задаёт переменная окружения: «pull» пишет обычный git commit
+    name: 'commit с записью reflog «pull» через GIT_REFLOG_ACTION',
+    action:
+      'perl -pi -e \'s/100/0/\' pin.json && GIT_REFLOG_ACTION=pull git commit -qam "Fast-forward"',
+    movement: /^pull: Fast-forward$/,
+  },
+])(
+  'коммит сессии с подменой, доставленный движением ветки ($name) — не pull: файл восстановлен, отказ журналируется',
+  ({ action, movement }) => {
+    const sessionId = uniqueSession();
+    const startHead = headSha();
+    const journal = join(fixture, '..', `${basename(fixture)}-denials-${uniqueSession()}.jsonl`);
+    startup(sessionId);
+    try {
+      agentRuns(action);
+      expect(headSha(), 'the command did commit: HEAD moved').not.toBe(startHead);
+      expect(reflogAction(), 'reflog explains the movement as a branch movement').toMatch(movement);
+      const result = postToolUse(sessionId, { DENIAL_JOURNAL_PATH: journal });
+      expectOk(result, 'protect-result');
+      expect(result.stdout, 'the agent is told what happened').toContain('pin.json');
+      expect(result.stdout, 'the cancellation is explained, not a rebase').toMatch(/CANCELLED/);
+      expect(result.stdout, 'not reported as a rebase').not.toMatch(/rebas/i);
+      expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'file is restored').toBe(PIN);
+      expect(denials(journal).at(-1), 'the denial is journaled').toMatchObject({
+        gate: 'protect-result',
+        reason: 'protected-file-restored',
+      });
+    } finally {
+      git(['reset', '-q', '--hard', startHead]);
+      spawnSync('git', ['branch', '-D', 'side'], { cwd: fixture });
+    }
+  },
+);
+
+it('git rm на побочной ветке, возврат и merge --ff-only — не «исчез вместе с HEAD»: файл восстановлен', () => {
+  const sessionId = uniqueSession();
+  const startHead = headSha();
+  startup(sessionId);
+  try {
+    agentRuns(
+      'git checkout -q -b side && git rm -q gates/keep.json && git commit -qm "drop the gate" && ' +
+        'git checkout -q main && git merge -q --ff-only side',
+    );
+    expect(reflogAction(), 'reflog explains the movement as a branch movement').toMatch(
+      /^merge side: Fast-forward$/,
+    );
+    const result = postToolUse(sessionId);
+    expectOk(result, 'protect-result');
+    expect(readFileSync(join(fixture, 'gates', 'keep.json'), 'utf8'), 'file is restored').toBe(
+      KEEP,
+    );
+    expect(result.stdout, 'the cancellation is explained').toMatch(/CANCELLED/);
+  } finally {
+    git(['reset', '-q', '--hard', startHead]);
+    spawnSync('git', ['branch', '-D', 'side'], { cwd: fixture });
+  }
+});
+
+/**
+ * Граница правила — публикация (решение оркестратора от 24.11): коммит, состоящий хотя бы в одной
+ * remote-tracking ссылке, — удалённая история. Изменение защищённого пути уходит на удалённый
+ * отдельным видимым действием (`git push`) — его видят ревью и CI. Тем же путём проходит и
+ * отмытый commit сессии: в копии это не различимое событие, ограничение принято сознательно.
+ */
+it('публикация — граница правила: запушенная побочная ветка с изменением защищённого файла, влитая локально, — удалённая история: снимок перебазируется', () => {
+  const sessionId = uniqueSession();
+  const startHead = headSha();
+  startup(sessionId);
+  try {
+    agentRuns(
+      `git checkout -q -b side && perl -pi -e 's/100/200/' pin.json && ` +
+        'git commit -qam "gate change from a labeled PR" && git push -q origin side && ' +
+        'git checkout -q main && git merge -q --ff-only side',
+    );
+    expect(headSha(), 'the merge did move HEAD').not.toBe(startHead);
+    expect(reflogAction(), 'reflog explains the movement as a branch movement').toMatch(
+      /^merge side: Fast-forward$/,
+    );
+    const result = postToolUse(sessionId);
+    expectOk(result, 'protect-result');
+    expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'published change stays').toBe(
+      '{"budget": 200}\n',
+    );
+    expect(snapshottedHash(sessionId, 'pin.json'), 'snapshot rebased to the new content').toBe(
+      contentSha('{"budget": 200}\n'),
+    );
+    expect(result.stdout, 'rebase is reported').toMatch(/rebas/i);
+  } finally {
+    git(['reset', '-q', '--hard', startHead]);
+    for (const args of [
+      ['branch', '-D', 'side'],
+      ['update-ref', '-d', 'refs/remotes/origin/side'],
+    ]) {
+      spawnSync('git', args, { cwd: fixture });
+    }
+    spawnSync('git', ['branch', '-D', 'side'], { cwd: remoteDir });
+  }
+});
+
+it.each(['fast-forward', 'merge-коммит'])(
+  'честный pull (%s) с изменением защищённого файла после commit-а открытых путей — перебазирует снимок',
+  (kind) => {
+    const sessionId = uniqueSession();
+    const startHead = headSha();
+    startup(sessionId);
+    try {
+      if (kind === 'merge-коммит') {
+        // origin уходит вперёд, пока в фикстуре работают: pull закончится merge-коммитом
+        gitIn(remoteDir, ['fetch', '--quiet', 'origin', 'main']);
+        gitIn(remoteDir, ['reset', '--quiet', '--hard', 'FETCH_HEAD']);
+        writeFileSync(join(remoteDir, 'pin.json'), '{"budget": 300}\n');
+        gitIn(remoteDir, ['commit', '--quiet', '-am', 'legitimate gate change from a labeled PR']);
+      }
+      // обычная работа сессии: локальный commit открытых путей, проверка, затем pull —
+      // другой вызов инструмента
+      agentRuns('git commit -q --allow-empty -m "work on open paths"');
+      expectOk(postToolUse(sessionId), 'protect-result after the local commit');
+      if (kind === 'fast-forward') {
+        pullChange(() => writeFileSync(join(remoteDir, 'pin.json'), '{"budget": 300}\n'));
+      } else {
+        agentRuns('git pull -q --no-rebase --no-edit origin main');
+      }
+      const result = postToolUse(sessionId);
+      expectOk(result, 'protect-result');
+      expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'legit change stays').toBe(
+        '{"budget": 300}\n',
+      );
+      expect(snapshottedHash(sessionId, 'pin.json'), 'snapshot rebased to the new content').toBe(
+        contentSha('{"budget": 300}\n'),
+      );
+      expect(result.stdout, 'rebase is reported').toMatch(/rebas/i);
+    } finally {
+      git(['reset', '-q', '--hard', startHead]);
+    }
+  },
+);
+
+it.each([
+  { name: 'merge-коммит', pull: 'git pull -q --no-rebase --no-edit origin main' },
+  { name: 'rebase', pull: 'git pull -q --rebase origin main' },
+])(
+  'честный pull ($name) с изменением защищённого файла в одной команде с commit-ом открытых путей — перебазирует снимок',
+  ({ pull }) => {
+    const sessionId = uniqueSession();
+    const startHead = headSha();
+    startup(sessionId);
+    try {
+      // origin уходит вперёд, пока в фикстуре работают: fast-forward невозможен
+      gitIn(remoteDir, ['fetch', '--quiet', 'origin', 'main']);
+      gitIn(remoteDir, ['reset', '--quiet', '--hard', 'FETCH_HEAD']);
+      writeFileSync(join(remoteDir, 'pin.json'), '{"budget": 300}\n');
+      gitIn(remoteDir, ['commit', '--quiet', '-am', 'legitimate gate change from a labeled PR']);
+      // commit и pull — один вызов инструмента: проверки между ними нет
+      agentRuns(`git commit -q --allow-empty -m "work on open paths" && ${pull}`);
+      expect(headSha(), 'the pull did move HEAD').not.toBe(startHead);
+      const result = postToolUse(sessionId);
+      expectOk(result, 'protect-result');
+      expect(readFileSync(join(fixture, 'pin.json'), 'utf8'), 'legit change stays').toBe(
+        '{"budget": 300}\n',
+      );
+      expect(snapshottedHash(sessionId, 'pin.json'), 'snapshot rebased to the new content').toBe(
+        contentSha('{"budget": 300}\n'),
+      );
+      expect(result.stdout, 'rebase is reported').toMatch(/rebas/i);
+    } finally {
+      git(['reset', '-q', '--hard', startHead]);
+    }
+  },
+);
+
+it('файл, исчезнувший вместе с HEAD (честный pull), убирается из снимка, а не воскрешается', () => {
   const sessionId = uniqueSession();
   startup(sessionId);
-  git(['rm', join('gates', 'keep.json')]);
-  git(['commit', '-m', 'gate removed from the repo by a labeled PR']);
+  pullChange(() => gitIn(remoteDir, ['rm', '--quiet', join('gates', 'keep.json')]));
   const result = postToolUse(sessionId);
   expectOk(result, 'protect-result');
   expect(existsSync(join(fixture, 'gates', 'keep.json')), 'deletion stays').toBe(false);
@@ -391,6 +719,68 @@ it('файл, исчезнувший вместе с HEAD (git rm), убирае
   writeFileSync(join(fixture, 'gates', 'keep.json'), KEEP);
   git(['add', '.']);
   git(['commit', '-m', 'keep.json restored']);
+});
+
+it('git rm защищённого файла и commit одной командой — не «исчез вместе с HEAD»: файл восстановлен', () => {
+  const sessionId = uniqueSession();
+  const startHead = headSha();
+  startup(sessionId);
+  try {
+    agentRuns(`git rm -q gates/keep.json && git commit -qm "drop the gate"`);
+    const result = postToolUse(sessionId);
+    expectOk(result, 'protect-result');
+    expect(readFileSync(join(fixture, 'gates', 'keep.json'), 'utf8'), 'file is restored').toBe(
+      KEEP,
+    );
+    expect(result.stdout, 'the cancellation is explained').toMatch(/CANCELLED/);
+  } finally {
+    git(['reset', '-q', '--hard', startHead]);
+  }
+});
+
+it('a/b__c и a__b/c — разные копии: обе восстанавливаются из своих снимков', () => {
+  const sessionId = uniqueSession();
+  startup(sessionId);
+  agentRuns(`echo hacked1 > gates/a/b__c; echo hacked2 > gates/a__b/c`);
+  const result = postToolUse(sessionId);
+  expectOk(result, 'protect-result');
+  expect(result.stdout, 'state is trusted, the check ran').not.toMatch(/cannot proceed/i);
+  expect(readFileSync(join(fixture, 'gates', 'a', 'b__c'), 'utf8')).toBe(NESTED_ONE);
+  expect(readFileSync(join(fixture, 'gates', 'a__b', 'c'), 'utf8')).toBe(NESTED_TWO);
+});
+
+it('локальный режим: commit открытого пути принят в снимок и не откатывается после выключения', () => {
+  const sessionId = uniqueSession();
+  mkdirSync(join(fixture, '.claude'), { recursive: true });
+  writeFileSync(
+    join(fixture, '.claude', 'maintenance.json'),
+    JSON.stringify({ task: 'b9', paths: ['gates/**'] }),
+  );
+  try {
+    startup(sessionId);
+    // оператор закоммитил правку открытого пути при включённом режиме
+    writeFileSync(join(fixture, 'gates', 'keep.json'), '{"operator": 1}\n');
+    git(['add', join('gates', 'keep.json')]);
+    git(['commit', '-m', 'operator gate change']);
+    expectOk(postToolUse(sessionId), 'protect-result with the mode on');
+    expect(
+      snapshottedHash(sessionId, join('gates', 'keep.json')),
+      'committed change is adopted while the path is open',
+    ).toBe(contentSha('{"operator": 1}\n'));
+    rmSync(join(fixture, '.claude', 'maintenance.json'));
+    const result = postToolUse(sessionId);
+    expectOk(result, 'protect-result with the mode off');
+    expect(
+      readFileSync(join(fixture, 'gates', 'keep.json'), 'utf8'),
+      'committed change survives the mode off',
+    ).toBe('{"operator": 1}\n');
+    expect(result.stdout, 'nothing is cancelled').not.toMatch(/CANCELLED/);
+  } finally {
+    rmSync(join(fixture, '.claude', 'maintenance.json'), { force: true });
+    writeFileSync(join(fixture, 'gates', 'keep.json'), KEEP);
+    git(['add', join('gates', 'keep.json')]);
+    git(['commit', '-m', 'keep.json restored']);
+  }
 });
 
 it('Stop при дрейфе восстанавливает файл и блокирует завершение с объяснением', () => {
@@ -447,7 +837,7 @@ it('переписанный хеш в manifest при старой копии �
 it('пропавшая копия снимка не уводит Stop в livelock', () => {
   const sessionId = uniqueSession();
   startup(sessionId);
-  rmSync(join(stateDir(fixture, sessionId), 'pin.json'));
+  rmSync(snapshotCopy(fixture, sessionId, 'pin.json'));
   writeFileSync(join(fixture, 'pin.json'), '{"budget": 0}\n');
   const result = stop(sessionId);
   expectOk(result, 'protect-result on Stop');
