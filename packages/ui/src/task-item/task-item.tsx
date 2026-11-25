@@ -21,7 +21,7 @@ export function TaskItem({ task, onToggle, disabled = false }: TaskItemProps) {
     .join(' ');
 
   return (
-    <li className={classes} data-testid="task-item" data-completed={task.completed}>
+    <li className={classes} data-completed={task.completed}>
       <input
         id={checkboxId}
         type="checkbox"

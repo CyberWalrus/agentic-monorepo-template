@@ -19,6 +19,8 @@ describe('visual', () => {
       </Frame>,
     );
 
+    // data-testid обоснован: Frame — layout-обёртка сценария, у div нет роли и подписи,
+    // текст принадлежит детям — семантики нет.
     await expect.element(screen.getByTestId('frame')).toMatchScreenshot('button-variants');
   });
 });
