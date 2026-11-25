@@ -26,6 +26,10 @@ import {
   operationsWithInputValidation,
   voidSchemaConverter,
 } from '../src/openapi-spec.ts';
+// e58: заголовок рабочего пространства генератору не виден — его читает
+// контекст запроса, а не схема входа. Описание и список операций, которые
+// его читают, — из workspace.ts.
+import { documentWorkspaceHeader, workspaceScopedOperations } from '../src/workspace.ts';
 
 /**
  * Версия API осознанно не ведётся (e56): у спеки нет потребителя, которому
@@ -36,7 +40,11 @@ import {
  */
 export const API_VERSION = '0.0.0';
 
-/** Спека из контракта: генерация с корректором void-вывода и ответы ошибок из фикстур провода. */
+/**
+ * Спека из контракта: генерация с корректором void-вывода, ответы ошибок из
+ * фикстур провода и заголовок рабочего пространства у операций, которые его
+ * читают (e58).
+ */
 export async function generateSpec(contract: AnyContractRouter): Promise<OpenAPI.Document> {
   const generator = new OpenAPIGenerator({
     schemaConverters: [voidSchemaConverter, new ZodToJsonSchemaConverter()],
@@ -45,5 +53,6 @@ export async function generateSpec(contract: AnyContractRouter): Promise<OpenAPI
     info: { title: 'Agentic Template API', version: API_VERSION },
     servers: [{ url: '/api' }],
   });
-  return documentErrorResponses(spec, operationsWithInputValidation(contract));
+  const withErrors = documentErrorResponses(spec, operationsWithInputValidation(contract));
+  return documentWorkspaceHeader(withErrors, workspaceScopedOperations(contract));
 }

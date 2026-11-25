@@ -9,11 +9,21 @@
  * (e47): покрытие «шаг покрыт» не замечало, что правил без канарейки всё больше.
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { gzipSync } from 'node:zlib';
-import { join, resolve, sep } from 'node:path';
+import { join, normalize, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BLOAT, BLOAT_DELTA, CANARIES, type GateCanary } from '../gate-canaries.ts';
 import { allStepNames, fast, post, serialFast, slow } from '../verify-steps.ts';
@@ -158,6 +168,13 @@ function expectsRule(canary: GateCanary, rule: string): boolean {
   // includes мало — /not-to-dev-dep-2/ накрыл бы not-to-dev-dep. Регулярка
   // пересобирается без флагов: у RegExp с g тест помнит lastIndex.
   return canary.expect.source.includes(rule) && new RegExp(canary.expect.source).test(rule);
+}
+
+/** Файл, в который резолвится относительный импорт из модуля `from`; нет — null. */
+function resolveRelativeImport(root: string, from: string, specifier: string): string | null {
+  const base = normalize(join(from, '..', specifier));
+  const candidates = [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts')];
+  return candidates.find((candidate) => existsSync(join(root, candidate))) ?? null;
 }
 
 describe('канарейки шага boundaries — по правилам, а не по шагу (e47)', () => {
@@ -369,12 +386,19 @@ describe('дельта-канарейка и инвариант порогов (
   });
 });
 
-describe('якоря канареек живы на текущем дереве (правка регистрации /rpc, 2026-11-24)', () => {
+describe('якоря канареек живы на текущем дереве (правка регистрации /rpc, 2026-11-24; e77)', () => {
   // Канарейки идут по фильтру путей (canaries.yml): PR, меняющий файл-якорь вне
   // фильтра, их не запускает. e55 переписала регистрацию /rpc в server-app.ts —
   // якоря двух канареек исчезли, мерж прошёл зелёным, а краснить стало на всех
   // следующих PR, где пути фильтра есть. Здесь каждая канарейка применяется к
   // копии дерева: пропавший якорь красит test:hooks в том же PR.
+  //
+  // e77: применение — не единственный якорь. Канарейка узнаёт своё падение по
+  // тексту вне apply (заголовок теста, шаблон сообщения) и по файлу, который
+  // импортирует её зонд; ни то, ни другое apply не проверяет. Оба вида объявлены
+  // у канарейки (expects, probe) и проверяются с двух сторон: на текущем дереве
+  // живы, на дереве с переименованным якорем — названы поимённо. Что остаётся
+  // только pnpm canaries — architecture.md, З6.
   const repoRoot = resolve(import.meta.dirname, '..', '..');
   // Канарейки, которым нужна настоящая ветка (создают task/evil-*): без
   // репозитория apply бросает «canary setup failed»; их держит раннер канареек.
@@ -406,22 +430,33 @@ describe('якоря канареек живы на текущем дереве 
       .slice(depth)
       .some((part) => notCopied.has(part));
 
-  it('apply каждой канарейки не бросает на копии дерева', () => {
+  /** Нетронутая копия дерева и функция, размножающая его по одной копии на канарейку. */
+  function treeCopies(): { fresh: () => string; dispose: () => void } {
     const root = mkdtempSync(join(tmpdir(), 'canary-anchors-'));
     const pristine = join(root, 'pristine');
+    cpSync(repoRoot, pristine, { recursive: true, filter: copyFilter });
+    return {
+      fresh: () => {
+        const copy = join(root, 'copy');
+        rmSync(copy, { recursive: true, force: true });
+        cpSync(pristine, copy, { recursive: true });
+        return copy;
+      },
+      dispose: () => rmSync(root, { recursive: true, force: true }),
+    };
+  }
+
+  it('apply каждой канарейки не бросает на копии дерева', () => {
+    const tree = treeCopies();
     try {
-      cpSync(repoRoot, pristine, { recursive: true, filter: copyFilter });
       const failures: string[] = [];
       let applied = 0;
       for (const canary of CANARIES) {
         if (needGit.has(canary.name)) {
           continue;
         }
-        const copy = join(root, 'copy');
-        rmSync(copy, { recursive: true, force: true });
-        cpSync(pristine, copy, { recursive: true });
         try {
-          canary.apply(copy);
+          canary.apply(tree.fresh());
           applied += 1;
         } catch (e) {
           failures.push(`${canary.name}: ${e instanceof Error ? e.message : String(e)}`);
@@ -430,12 +465,243 @@ describe('якоря канареек живы на текущем дереве 
       expect(applied, 'сколько канареек проверено').toBe(CANARIES.length - needGit.size);
       expect(failures, 'канарейки, чей якорь не найден в дереве').toEqual([]);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      tree.dispose();
     }
   }, 30_000);
 
   it('список канареек, требующих git, называет существующие канарейки', () => {
     const names = new Set(CANARIES.map((canary) => canary.name));
     expect([...needGit].filter((name) => !names.has(name))).toEqual([]);
+  });
+
+  // --- Якоря вне apply (e77) ------------------------------------------------------
+  // Относительный импорт зонда: `import x from './y'`, `import './y'`.
+  const RELATIVE_IMPORT = /^\s*import\s+(?:[^'"]*?\sfrom\s+)?['"](\.[^'"]+)['"]/gm;
+
+  /** Читатель файла дерева; нет файла — null (так выглядит и переименованный файл). */
+  type ReadTree = (file: string) => string | null;
+
+  const readTree: ReadTree = (file) => {
+    const path = join(repoRoot, file);
+    return existsSync(path) ? readFileSync(path, 'utf8') : null;
+  };
+
+  /** Якоря expect, которых нет в дереве, — поимённо: канарейка, файл, текст. */
+  function staleExpectAnchors(read: ReadTree): string[] {
+    const stale: string[] = [];
+    for (const canary of CANARIES) {
+      for (const anchor of canary.expects ?? []) {
+        const source = read(anchor.file);
+        if (source === null) {
+          stale.push(`«${canary.name}»: файла ${anchor.file} нет`);
+        } else if (!source.includes(anchor.text)) {
+          stale.push(`«${canary.name}»: в ${anchor.file} нет текста «${anchor.text}»`);
+        }
+      }
+    }
+    return stale;
+  }
+
+  /** Проблемы зонда на применённой копии дерева: цель существует и зонд импортирует её. */
+  function probeProblems(canary: GateCanary, copy: string): string[] {
+    const probe = canary.probe;
+    if (probe === undefined) {
+      return [];
+    }
+    const probePath = join(copy, probe.file);
+    if (!existsSync(probePath)) {
+      return [`«${canary.name}»: apply не пишет зонд ${probe.file}`];
+    }
+    if (!existsSync(join(copy, probe.imports))) {
+      return [`«${canary.name}»: файл-цель зонда ${probe.imports} не существует`];
+    }
+    const imported = [...readFileSync(probePath, 'utf8').matchAll(RELATIVE_IMPORT)].map((match) =>
+      resolveRelativeImport(copy, probe.file, match[1] ?? ''),
+    );
+    return imported.includes(probe.imports)
+      ? []
+      : [
+          `«${canary.name}»: зонд ${probe.file} импортирует ${imported.filter((item) => item !== null).join(', ') || 'ничего'}, а не ${probe.imports}`,
+        ];
+  }
+
+  it('тексты, на которые опирается expect, лежат в дереве там, где заявлены', () => {
+    expect(staleExpectAnchors(readTree)).toEqual([]);
+  });
+
+  it('якорь expect держит именно свой expect: expect матчит текст якоря или начинается с него', () => {
+    // Связь в обе стороны, как у имён правил границ (expectsRule): заголовок
+    // теста expect матчит, шаблон сообщения с плейсхолдером — expect начинается
+    // со статической приставки. Якорь «для галочки» отсоединяется здесь.
+    const detached = CANARIES.flatMap((canary) =>
+      (canary.expects ?? [])
+        .filter(
+          (anchor) =>
+            !canary.expect.test(anchor.text) &&
+            !canary.expect.source.startsWith(anchor.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+        )
+        .map(
+          (anchor) =>
+            `«${canary.name}»: /${canary.expect.source}/ не опирается на «${anchor.text}» (${anchor.file})`,
+        ),
+    );
+
+    expect(detached, 'якоря expect, не связанные с expect своей канарейки').toEqual([]);
+  });
+
+  it('переименование текста или файла любого якоря expect замечается поимённо', () => {
+    // Контроль с обеих сторон: проверка живости обязана увидеть пропажу каждого
+    // якоря — так «тест красный на переименовании» доказано для всего списка, а
+    // не выборочно руками. Тот же файл и текст у другой канарейки пропадает
+    // вместе с ним: заголовок wiring-теста держит две канарейки.
+    const blind: string[] = [];
+    for (const canary of CANARIES) {
+      for (const anchor of canary.expects ?? []) {
+        const expected = CANARIES.filter((other) =>
+          (other.expects ?? []).some(
+            (shared) => shared.file === anchor.file && shared.text === anchor.text,
+          ),
+        ).length;
+        const mutations: readonly ReadTree[] = [
+          (file) => {
+            const source = readTree(file);
+            return file === anchor.file && source !== null
+              ? source.replaceAll(anchor.text, '__renamed__')
+              : source;
+          },
+          (file) => (file === anchor.file ? null : readTree(file)),
+        ];
+        for (const mutate of mutations) {
+          const stale = staleExpectAnchors(mutate);
+          if (
+            stale.length !== expected ||
+            !stale.some((line) => line.includes(`«${canary.name}»:`))
+          ) {
+            blind.push(`«${canary.name}» / ${anchor.file}`);
+          }
+        }
+      }
+    }
+
+    expect(blind, 'якоря expect, чьё переименование проверка живости не замечает').toEqual([]);
+  });
+
+  it('файл-цель зонда существует, и зонд импортирует его', () => {
+    const tree = treeCopies();
+    try {
+      const problems = CANARIES.filter((canary) => canary.probe !== undefined).flatMap((canary) => {
+        const copy = tree.fresh();
+        canary.apply(copy);
+        return probeProblems(canary, copy);
+      });
+
+      expect(problems, 'зонды, чья цель не существует или не импортируется').toEqual([]);
+    } finally {
+      tree.dispose();
+    }
+  }, 30_000);
+
+  it('переименование любого файла-цели зонда замечается: apply бросает или проверка называет цель', () => {
+    // Цель, которую зонд импортирует относительным путём, исчезла — шаг границ
+    // падал бы not-to-unresolvable, а не своим правилом: канарейка «НЕ УПАЛА».
+    const tree = treeCopies();
+    try {
+      const blind: string[] = [];
+      for (const canary of CANARIES) {
+        if (canary.probe === undefined) {
+          continue;
+        }
+        const copy = tree.fresh();
+        renameSync(join(copy, canary.probe.imports), `${join(copy, canary.probe.imports)}.renamed`);
+        let noticed: string[];
+        try {
+          canary.apply(copy);
+          noticed = probeProblems(canary, copy);
+        } catch (e) {
+          noticed = [e instanceof Error ? e.message : String(e)];
+        }
+        if (noticed.length === 0) {
+          blind.push(canary.name);
+        }
+      }
+
+      expect(blind, 'канарейки, не заметившие переименования цели зонда').toEqual([]);
+    } finally {
+      tree.dispose();
+    }
+  }, 30_000);
+
+  it('канарейка карантина вставляет запись в существующий массив — пустой и с настоящей записью', () => {
+    // С первой настоящей записью карантина якорь '"quarantine": []' исчез бы
+    // вместе с канарейкой: шаг quarantine остался бы без негативного контроля.
+    const canary = CANARIES.find((item) => item.name === 'quarantine: @critical в карантине');
+    if (canary === undefined) {
+      throw new Error('канарейки «quarantine: @critical в карантине» нет в таблице');
+    }
+    const real = { test: 'smoke.spec.ts :: флак', until: '2099-01-01T00:00:00Z', issue: '#2' };
+    const fixtures: readonly [string, unknown[]][] = [
+      ['пустой массив', []],
+      ['массив с настоящей записью', [real]],
+    ];
+    for (const [label, entries] of fixtures) {
+      const root = mkdtempSync(join(tmpdir(), 'canary-quarantine-'));
+      try {
+        const path = join(root, 'tools', 'flaky-quarantine.json');
+        mkdirSync(join(path, '..'), { recursive: true });
+        writeFileSync(
+          path,
+          `${JSON.stringify({ $comment: 'фикстура', quarantine: entries }, null, 2)}\n`,
+        );
+
+        canary.apply(root);
+
+        const after: unknown = JSON.parse(readFileSync(path, 'utf8'));
+        if (!isRecord(after) || !Array.isArray(after['quarantine'])) {
+          throw new Error(`${label}: после apply в файле нет массива quarantine`);
+        }
+        const quarantine: unknown[] = after['quarantine'];
+        expect(quarantine.length, `${label}: запись добавлена, чужие на месте`).toBe(
+          entries.length + 1,
+        );
+        expect(
+          canary.expect.test(JSON.stringify(quarantine[0])),
+          `${label}: первая запись — зонд канарейки, expect его узнаёт`,
+        ).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it.each([
+    ["app.all('/rpc/*')", "app.all('/rpc/*', requestShapeGuard);"],
+    ["subapp.all('/rpc/*')", "subapp.all('/rpc/*', proxyRpc);"],
+    // `/rpc*` ловился и до e77 (`(?:'|\*)`): расширение `(?:'|\/\*')` его теряло.
+    // Хвост после `*` — прежняя ветка `*` не была привязана к закрывающей кавычке.
+    ["app.all('/rpc*')", "app.all('/rpc*', requestShapeGuard);"],
+    ["subapp.all('/rpc*')", "subapp.all('/rpc*', proxyRpc);"],
+    ["app.all('/rpc*v2')", "app.all('/rpc*v2', requestShapeGuard);"],
+  ])('канарейка удаления не пропускает лишнюю регистрацию %s', (_label, extra) => {
+    const canary = CANARIES.find((item) => item.name === 'прокси /rpc удалён');
+    if (canary === undefined) {
+      throw new Error('канарейки «прокси /rpc удалён» нет в таблице');
+    }
+    const root = mkdtempSync(join(tmpdir(), 'canary-rpc-'));
+    try {
+      const path = join(root, 'apps/web/src/server-app.ts');
+      mkdirSync(join(path, '..'), { recursive: true });
+      const source = readFileSync(join(repoRoot, 'apps/web/src/server-app.ts'), 'utf8');
+      const line = source.split('\n').find((text) => text.includes("app.all('/rpc/*'"));
+      if (line === undefined) {
+        throw new Error("в server-app.ts нет регистрации app.all('/rpc/*'…)");
+      }
+      const indent = line.slice(0, line.length - line.trimStart().length);
+      writeFileSync(path, source.replace(line, `${line}\n${indent}${extra}`));
+
+      // Лишняя регистрация осталась бы в коде: /rpc не удалён, а канарейка применена.
+      expect(() => canary.apply(root)).toThrow(/keeps a \/rpc registration/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
