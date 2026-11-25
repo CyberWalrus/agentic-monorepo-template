@@ -288,17 +288,32 @@ describe('интеграция', () => {
     const run = runChecker(repoDir);
     expect(run.stderr).toBe('');
     expect(run.status).toBe(0);
+    // Число файлов в выводе CLI со своим списком не сверяем — см. ниже.
+    expect(run.stdout).toContain('файлов — ok (вне стандарта 0; исключений по имени: ');
+    // Список читаем один раз и тот же подаём ядру. Обход CLI и второй,
+    // независимый `git ls-files` сверять нельзя: файлы test:hooks идут
+    // параллельно, и соседи на доли секунды оставляют в общем дереве фикстуры
+    // (b6-canary-leak.fixture.ts, tools/hooks/.lint-probe.fixture.ts) — два
+    // обхода живого дерева расходились, и тест флакал (b17, после merge).
+    // Область CLI — тот же `git ls-files --cached --others --exclude-standard` —
+    // держит кейс с временным репозиторием ниже.
     const listed = spawnSync(
       'git',
       ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
       { cwd: repoDir, encoding: 'utf8' },
     );
+    expect(listed.status).toBe(0);
     const paths = listed.stdout.split('\0').filter(Boolean);
     expect(paths.length).toBeGreaterThan(100);
-    expect(run.stdout).toContain(`naming: ${paths.length} файлов — ok`);
+    expect(findNamingViolations(paths)).toEqual([]);
     const uppercase = paths.filter((path) => path !== path.toLowerCase());
     expect(uppercase.length).toBeGreaterThan(0);
     expect(uppercase.filter((path) => checkPath(path).length > 0)).toEqual([]);
+    // Пропуск пути ядром обязан краснить тест (прежде это держала сверка
+    // счётчиков): тот же список с нарушением последним — ровно одна проблема.
+    expect(findNamingViolations([...paths, 'packages/foo/Bar.tsx'])).toEqual([
+      { path: 'packages/foo/Bar.tsx', reason: 'файл: заглавные буквы в «Bar.tsx»' },
+    ]);
   });
 
   it('временный git-репозиторий: tracked и untracked вне .gitignore — в области, ignored — нет', () => {
