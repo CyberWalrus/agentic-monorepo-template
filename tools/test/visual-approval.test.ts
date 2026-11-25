@@ -236,12 +236,31 @@ const TOKEN_SOURCE =
 const GIT_WITH_TOKEN_URL =
   /\bgit\s+(?:-c\s+\S+\s+)*(?:fetch|push|pull|clone)\b[^\n]*x-access-token:/;
 /**
- * Известный остаток e67 вне touches задачи — `nightly.yml`, ровно пять команд
- * (`:214-215`, `:314-315`, `:532`). Рост или новый файл — красный: токен в argv
- * запрещён, переноси на блок авторизации. После перевода nightly.yml запись
- * убрать: храповик сверяется с фактом в обе стороны.
+ * Известный остаток e67 вне touches задачи — `nightly.yml`, ровно три команды
+ * (`:214-215`, `:528`). Рост или новый файл — красный: токен в argv запрещён,
+ * переноси на блок авторизации. После перевода nightly.yml запись убрать:
+ * храповик сверяется с фактом в обе стороны. Было пять: две команды push шага
+ * «PR with raised baseline» вынесены в `tools/check-test-count.ts --pr` (e40) —
+ * там токен ходит конфиг-окружением git, что держит TOKEN_URL_SCRIPTS.
  */
-const TOKEN_URL_RESIDUAL: Readonly<Record<string, number>> = { 'nightly.yml': 5 };
+const TOKEN_URL_RESIDUAL: Readonly<Record<string, number>> = { 'nightly.yml': 3 };
+/**
+ * Тот же класс в скрипте, который собирает argv git сам: литерал URL с токеном
+ * (`https://…x-access-token:…`) становится аргументом команды, и токен виден в
+ * ps на время команды. Кавычка, апостроф и обратная кавычка заканчивают литерал;
+ * переносы строк убираются — разбитый шаблон токен не прячет.
+ */
+const URL_WITH_TOKEN = /https?:\/\/[^'"`\n]*x-access-token:/g;
+const tokenUrlsInScript = (text: string): number =>
+  [...text.replace(/\s*\n\s*/g, '').matchAll(URL_WITH_TOKEN)].length;
+/**
+ * Скрипты публикации, которые сами ходят на remote с токеном: литералов URL с
+ * токеном — ровно ноль. Число растёт только правкой этой записи (защищённый
+ * путь): возврат токена в URL — не случайность, а решение под ревью гейта.
+ */
+const TOKEN_URL_SCRIPTS: Readonly<Record<string, number>> = {
+  'tools/check-test-count.ts': 0,
+};
 
 /** Токен в env под любым именем: GH_TOKEN, `github.token` в значении, конфиг-окружение git. */
 const tokenCarrier = (env: ReadonlyMap<string, string>): string | undefined =>
@@ -589,11 +608,40 @@ describe('проводка: визуальное одобрение в дове�
       expect(tokenUrlCommands(`${ci}${tokenUrlLine}`)).toBe(1);
     });
 
-    it('саботаж храповика «шестая команда с токеном в nightly.yml» распознан', () => {
+    it('саботаж храповика «четвёртая команда с токеном в nightly.yml» распознан', () => {
       const nightly = readFileSync(join(workflowsDir, 'nightly.yml'), 'utf8');
 
-      expect(tokenUrlCommands(nightly)).toBe(5);
-      expect(tokenUrlCommands(`${nightly}${tokenUrlLine}`)).toBe(6);
+      expect(tokenUrlCommands(nightly)).toBe(3);
+      expect(tokenUrlCommands(`${nightly}${tokenUrlLine}`)).toBe(4);
+    });
+
+    it('храповик: в скриптах публикации нет ни одного URL с токеном', () => {
+      const actual = Object.fromEntries(
+        Object.keys(TOKEN_URL_SCRIPTS).map((path) => [
+          path,
+          tokenUrlsInScript(readFileSync(join(repoRoot, path), 'utf8')),
+        ]),
+      );
+
+      expect(actual).toEqual(TOKEN_URL_SCRIPTS);
+    });
+
+    it('саботаж храповика «команда с токеном в argv в check-test-count.ts» распознан', () => {
+      const script = readFileSync(join(repoRoot, 'tools/check-test-count.ts'), 'utf8');
+      const tokenLine =
+        "run('git', ['ls-remote', '--exit-code', `https://x-access-token:${token}@github.com/${repository}.git`, ref]);\n";
+
+      expect(tokenUrlsInScript(script)).toBe(0);
+      expect(tokenUrlsInScript(`${script}${tokenLine}`)).toBe(1);
+    });
+
+    it('саботаж храповика «URL с токеном разбит переносами строк» распознан', () => {
+      const script = readFileSync(join(repoRoot, 'tools/check-test-count.ts'), 'utf8');
+      const split =
+        'const remote = `https://x-access-token:${\n  token\n}@github.com/${repository}.git`;\n';
+
+      expect(tokenUrlsInScript(split)).toBe(1);
+      expect(tokenUrlsInScript(`${script}${split}`)).toBe(1);
     });
   });
 
