@@ -1328,6 +1328,55 @@ export const CANARIES: GateCanary[] = [
       writeFileSync(tripwirePath, withListed);
     },
   },
+  {
+    // Формат комментария версий действий (e76): новый пин приходит с подвижным
+    // тегом мажорной версии (`# vN`), zizmor замечает несоответствие только
+    // после того, как тег уехал на свежий релиз, — то есть в момент останова
+    // (24.11.2026). Плохое изменение — тег релиза в комментарии pinned-строки
+    // заменён мажорной версией; шаг action-pins краснеет до сдвига тега. Якорь
+    // — первое закреплённое actions/checkout в security.yml (регекс, а не
+    // литерал SHA: бамп версии действия канарейку не ломает).
+    name: 'комментарий версии действия — мажорная версия',
+    steps: 'action-pins',
+    failedStep: 'action-pins',
+    expect: /тег релиза не полной версии/,
+    apply: (root) => {
+      const path = join(root, '.github/workflows/security.yml');
+      const before = readFileSync(path, 'utf8');
+      const sabotaged = before.replace(
+        /(uses:\s*actions\/checkout@[0-9a-f]{40}\s+#\s*)v\d+\.\d+\.\d+/,
+        '$1v7',
+      );
+      if (sabotaged === before) {
+        throw new Error(
+          'canary anchor not found: security.yml has no SHA-pinned actions/checkout with a release-tag comment',
+        );
+      }
+      writeFileSync(path, sabotaged);
+    },
+  },
+  {
+    // Версия сканера zizmor (e76): без точного входа version релиз выбирает
+    // обёртка zizmor-action, и новый аудит включается без изменения
+    // репозитория — так 24.11.2026 поезд простоял около двух часов. Плохое
+    // изменение — вход вернул плавающую версию; шаг action-pins краснеет, пока
+    // сканер не уехал.
+    name: 'версия сканера zizmor не зафиксирована',
+    steps: 'action-pins',
+    failedStep: 'action-pins',
+    expect: /ожидалась точная версия релиза/,
+    apply: (root) => {
+      const path = join(root, '.github/workflows/security.yml');
+      const before = readFileSync(path, 'utf8');
+      const sabotaged = before.replace(/(\n[ \t]+version:[ \t]*)v?\d+\.\d+\.\d+/, '$1latest');
+      if (sabotaged === before) {
+        throw new Error(
+          'canary anchor not found: security.yml zizmor step has no exact version input',
+        );
+      }
+      writeFileSync(path, sabotaged);
+    },
+  },
 ];
 // Вывод портов (З9, A5 PR-3) канарейки шага не имеет: рантайм читает записанный
 // reports/ports.json (read-first — иначе зонд после старта серверов уезжал на

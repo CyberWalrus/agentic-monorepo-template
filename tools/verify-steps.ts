@@ -46,6 +46,10 @@ export const fast: Step[] = [
   { name: 'sherif', command: 'pnpm', args: ['sherif'] },
   // Версия Docker-образа Playwright == каталог @playwright/test (З4/A8).
   { name: 'visual-image', command: 'pnpm', args: ['visual-image:check'] },
+  // Пины действий GitHub (e76): комментарий после SHA — неизменяемый тег релиза
+  // (`# vX.Y.Z`), версия сканера zizmor — точная. Упреждает аудит zizmor
+  // ref-version-mismatch: тот видит дефект только после сдвига тега.
+  { name: 'action-pins', command: 'pnpm', args: ['action-pins:check'] },
   { name: 'openapi', command: 'pnpm', args: ['--filter', '@repo/contracts', 'openapi:check'] },
   // Дрейф routeTree.gen.ts (b7.1): committed-файл == свежая генерация без
   // сборки (@tanstack/router-cli в temp + футер Start). Ручная правка
