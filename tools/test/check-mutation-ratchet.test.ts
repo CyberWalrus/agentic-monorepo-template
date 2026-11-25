@@ -12,6 +12,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -623,9 +624,14 @@ it('apply: формат конфига сохраняется — меняетс
     );
     appliedConfigs.push(configWeb);
   }
-  const oxfmt = spawnSync('pnpm', ['exec', 'oxfmt', '--check', ...appliedConfigs], {
-    encoding: 'utf8',
-  });
+  // oxfmt — напрямую из node_modules/.bin (e88): `pnpm exec oxfmt` поднимал pnpm
+  // ради одного запуска, а делал ровно одно — ставил node_modules/.bin в PATH.
+  // cwd — корень репо, откуда шаг test:hooks шёл и раньше: oxfmt ищет конфиг от cwd.
+  const oxfmt = spawnSync(
+    join(repoDir, 'node_modules', '.bin', 'oxfmt'),
+    ['--check', ...appliedConfigs],
+    { encoding: 'utf8', cwd: repoDir },
+  );
   expect(oxfmt.status).toBe(0);
 });
 
@@ -1056,12 +1062,23 @@ function ratchetRepo(): RatchetRepo {
   }
   gitText(root, ['init', '-q', '--bare', remote]);
   gitText(dir, ['init', '-q', '-b', 'main']);
-  gitText(dir, ['config', 'user.name', 'canary']);
-  gitText(dir, ['config', 'user.email', 'canary@example.com']);
-  gitText(dir, ['config', `url.${remote}.insteadOf`, REMOTE_URL]);
+  // Конфиг фикстуры — одной записью в .git/config (e88): четыре `git config`
+  // стоили четыре процесса на каждый репозиторий, а пишут ровно эти строки —
+  // те же ключи в том же порядке (user, затем два insteadOf одной секции url).
   // Саботаж «токен возвращён в URL» уводится в тот же bare-репозиторий: тест
   // краснеет по argv, а не по отказу транспорта.
-  gitText(dir, ['config', '--add', `url.${remote}.insteadOf`, TOKEN_URL]);
+  appendFileSync(
+    join(dir, '.git', 'config'),
+    [
+      '[user]',
+      '\tname = canary',
+      '\temail = canary@example.com',
+      `[url "${remote}"]`,
+      `\tinsteadOf = ${REMOTE_URL}`,
+      `\tinsteadOf = ${TOKEN_URL}`,
+      '',
+    ].join('\n'),
+  );
   for (const domain of ['web', 'contracts'] as const) {
     const path = CONFIG_PATH[domain];
     mkdirSync(resolve(dir, path, '..'), { recursive: true });
