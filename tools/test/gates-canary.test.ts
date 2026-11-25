@@ -674,9 +674,14 @@ describe('якоря канареек живы на текущем дереве 
   });
 
   it.each([
-    ['app.all', "app.all('/rpc/*', requestShapeGuard);"],
-    ['subapp.all', "subapp.all('/rpc/*', proxyRpc);"],
-  ])("канарейка удаления не пропускает лишнюю регистрацию %s('/rpc/*')", (_label, extra) => {
+    ["app.all('/rpc/*')", "app.all('/rpc/*', requestShapeGuard);"],
+    ["subapp.all('/rpc/*')", "subapp.all('/rpc/*', proxyRpc);"],
+    // `/rpc*` ловился и до e77 (`(?:'|\*)`): расширение `(?:'|\/\*')` его теряло.
+    // Хвост после `*` — прежняя ветка `*` не была привязана к закрывающей кавычке.
+    ["app.all('/rpc*')", "app.all('/rpc*', requestShapeGuard);"],
+    ["subapp.all('/rpc*')", "subapp.all('/rpc*', proxyRpc);"],
+    ["app.all('/rpc*v2')", "app.all('/rpc*v2', requestShapeGuard);"],
+  ])('канарейка удаления не пропускает лишнюю регистрацию %s', (_label, extra) => {
     const canary = CANARIES.find((item) => item.name === 'прокси /rpc удалён');
     if (canary === undefined) {
       throw new Error('канарейки «прокси /rpc удалён» нет в таблице');
