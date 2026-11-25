@@ -140,10 +140,12 @@ const SIGNAL_KILL = /signal SIG(?:TERM|KILL)/;
  * Холодный старт browser-тестера (e42): в vitest browser-режиме первый
  * динамический импорт тест-файла обрывается (`Failed to fetch dynamically
  * imported module`), либо iframe не готов за connectTimeout (`did not become
- * ready within`). turbo без --continue не запускает остальные пакеты шага
+ * ready within`). turbo без --continue не запускал остальные пакеты шага
  * `test` — саботаж никто не проверяет, а раннер писал «НЕ УПАЛ» (прогоны
  * canaries 45281745218, 45274684600, 45261129674, 45072912709; журнал e42).
- * Те же два маркера, что в повторе канарейки копии
+ * С 25.11 шаг `test` идёт с `--continue` (e80): отчёты пишут все пакеты даже
+ * при падении одного; холодный старт по-прежнему судится как среда по этим
+ * маркерам. Те же два маркера, что в повторе канарейки копии
  * (tools/run-template-copy-canary.ts) — сверяет tools/test/run-gate-canaries.test.ts.
  */
 export const COLD_BROWSER_START: readonly string[] = [
