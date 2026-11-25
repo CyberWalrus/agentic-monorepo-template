@@ -19,4 +19,13 @@ export { AccessPolicySchema, ocAccess, ocPublic } from './access-policy.ts';
 
 export { ERROR_MESSAGES } from './errors.ts';
 
+export {
+  documentErrorResponses,
+  errorResponses,
+  hasValidatedInput,
+  operationsWithInputValidation,
+  voidSchemaConverter,
+  type WireResponse,
+} from './openapi-spec.ts';
+
 export { WORKSPACE_HEADER, parseWorkspaceId } from './workspace.ts';
