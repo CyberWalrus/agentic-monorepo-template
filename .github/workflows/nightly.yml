@@ -142,7 +142,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
+      # playwright: 'true' обязателен (e82): шаг публикации делает git push, а
+      # push поднимает pre-push хук (lefthook.yml: typecheck, test, boundaries);
+      # turbo test включает @repo/ui#test — vitest browser mode, ему нужен
+      # Chromium. Без флага хук отклонял push, и ветка храповика не доходила до
+      # remote: "Executable doesn't exist ... chromium_headless_shell" (ночи
+      # 25.11, run 45619705671). Тот же класс — e31 в test-count-ratchet.
       - uses: $/.github/actions/setup
+        with: { playwright: 'true' }
       - name: download this run's reports
         env:
           GH_TOKEN: ${{ github.token }}
@@ -197,26 +204,17 @@ jobs:
         # собственным шагам, красный прогон состояние не пишет.
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: mutation-ratchet-state, path: state/ratchet-state.json }
+      # Логика шага — tools/check-mutation-ratchet.main.ts publish (e82): либо
+      # действие выполнено, либо шаг красный с причиной дословно и действием
+      # человека. Настройка Actions «Allow GitHub Actions to create and approve
+      # pull requests» выключена (решение владельца): github.token PR не
+      # открывает — без открытого PR шаг красный, PR открывает человек. Ни
+      # `|| echo`, ни continue-on-error: текст шага исполняет канарейка
+      # tools/test/check-mutation-ratchet.test.ts.
       - name: PR with raised thresholds
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ ! -f state/proposal.json ]; then
-            echo "Устойчивого превышения нет — PR храповика не нужен."
-            exit 0
-          fi
-          git config user.name "nightly-ratchet"
-          git config user.email "nightly-ratchet@users.noreply.github.com"
-          BRANCH="chore/mutation-ratchet-web-contracts"
-          git checkout -b "$BRANCH"
-          node tools/check-mutation-ratchet.main.ts apply --proposal state/proposal.json
-          git commit -am "chore: поднятие мутационного порога break web и контрактов (nightly, b2.4)"
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ":refs/heads/$BRANCH" 2>/dev/null || true
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
-          gh pr create --base main --head "$BRANCH" \
-            --title "chore: поднятие мутационного порога break web и контрактов (nightly)" \
-            --body-file <(printf '%s\n%s\n' "Автоматическое поднятие thresholds.break web и контрактов после зелёного nightly (b2.4, З7): правило ADR 0009 «Пороги» от устойчивого счёта, только вверх. Порог может только ужесточаться — каждое повышение проходит приёмку человека: label \`gate-change-approved\` после последнего push (force-repush ветки снимает label на synchronize, ADR 0002)." "$(cat state/proposal.json)") \
-            || echo "PR храповика уже открыт — ветка обновлена."
+        run: node tools/check-mutation-ratchet.main.ts publish --proposal state/proposal.json
 
   # Канарейка храповика (критерий приёмки b2.4): искусственно завышенный
   # порог обязан дать нарушение — иначе job красный («канарейка не ловит»).
@@ -224,9 +222,15 @@ jobs:
   # stryker.conf.json не правится и полный прогон мутаций не повторяется
   # (находка план-ревью b2.4). Вторая половина критерия — предложение PR при
   # устойчивом превышении — покрыта юнит-тестами decide в tools/test/.
+  # Зависит только от mutation-full (e82): канарейке нужны лишь отчёты полного
+  # прогона, а шаг публикации храповика красный по замыслу, пока PR не открыт
+  # человеком (create отклоняет настройка Actions). needs: [mutation-ratchet]
+  # без условия пропускал канарейку (skipped) в обеих красных ночах 25.11
+  # (45608955630, 45619705671) — ровно когда храповик активен. Красная
+  # канарейка по-прежнему заводит issue: mutation-canary стоит в needs job report.
   mutation-canary:
     name: mutation canary (inflated break)
-    needs: [mutation-ratchet]
+    needs: [mutation-full]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
