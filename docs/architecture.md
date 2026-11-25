@@ -254,6 +254,7 @@ _Действует._
 - Свежий релиз ставится не раньше чем через сутки (`minimumReleaseAge`), Renovate ждёт три дня. Install-скрипты запрещены, пока не разрешены в `allowBuilds`.
 - TypeScript 6 подложен только dependency-cruiser и StrykerJS через `packageExtensions`. Проект компилируется TypeScript 7.
 - Renovate обновляет группами. Playwright идёт одной группой с Docker-образом, после обновления нужны `tools/playwright-agents.sh` и `pnpm visual`.
+- Действия GitHub закреплены по SHA, и комментарий после пина называет неизменяемый тег релиза (`# v7.0.1`), а не подвижный тег мажорной версии: шаг verify `action-pins` (`tools/check-action-pins.ts`, e76) красит `# vN` сразу — zizmor замечает несоответствие только после того, как тег уехал на новый релиз (24.11.2026 — поезд стоял около двух часов). Тем же шагом зафиксирована версия сканера zizmor: вход `version` в `security.yml` — точная, обновление отдельным PR (Renovate — regex-правило в `.github/renovate.json`; путь обновления — [github-setup.md, раздел 5](github-setup.md)).
 
 ### 3.9 Агентный слой
 
