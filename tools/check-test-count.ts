@@ -33,9 +33,10 @@
  * действие, либо красная с причиной дословно. Базлайн без диффа — зелёный;
  * push прошёл и PR создан либо уже был открыт — зелёный с правдивым
  * сообщением; любой иной отказ (list, fetch, push, create) — exit 1 с причиной
- * и следующим действием человека. Пока выключена настройка Actions «Allow
- * GitHub Actions to create and approve pull requests» (решение владельца),
- * github.token PR не открывает: без открытого PR шаг красный — «ветка
+ * и следующим действием человека. Настройка Actions «Allow GitHub Actions to
+ * create and approve pull requests» включена (e85, решение владельца 25.11) —
+ * github.token создаёт PR сам. Отказ create, который не «уже открыт» (настройку
+ * могли выключить, право джобы — сузить), по-прежнему красный — «ветка
  * создана — PR открывает человек» (ветка прошлой ночи без PR — «заменена
  * коммитом поверх main»). Состояние ветки в тексте — по факту, после успеха
  * команды: отказ push называет ветку до него («не создана», «удалена и не
@@ -53,15 +54,27 @@
  * тексте скрипта — ноль литералов URL с токеном) и лог argv в канарейке
  * tools/test/test-count-ratchet.test.ts.
  *
- * Второй остаточный риск (находка ревью e40): push делает github.token, а
+ * Проверки на PR автоматики (e85): push и create делает github.token, а
  * события от него не рождают workflow run (как у базлайнов visual, ADR 0015) —
- * CI (ci.yml) и gate-integrity на новом коммите сами не запустятся,
- * обязательные checks не появятся, и PR не смержить. Шаг остаётся зелёным:
- * поднятие опубликовано, повторять его не нужно, — но зелёный вывод обязан
- * назвать это и действие человека (CI_NOTE): один synchronize от человека
- * (пустой push, Update branch) либо закрыть и снова открыть PR. То же названо
- * у PR, созданного github.token. Сам шаг этого не проверяет: вывод следует из
- * документации платформы, на GitHub не воспроизводился.
+ * на новом head SHA проверки сами не придут. После публикации нового head SHA
+ * (create либо push под открытым PR) шаг сам запускает ci.yml диспатчем на
+ * ветку храповика (маршрут (а), как visual-approve и ci-base-change; нужно
+ * право job actions: write) — check `gate` появляется без действий человека.
+ * Диспатч не удался — шаг красный с причиной дословно и командой человека:
+ * PR есть, а проверка на нём не идёт, молчать за зелёным нельзя. Доверенный
+ * gate-integrity.yml (обязательные checks gate-integrity и bundle-approval)
+ * автоматика не запускает — маршрут (б1): любое расширение гейта — отдельный
+ * ADR (ADR 0002). Его запускает событие PR от человека, и зелёный вывод обязан
+ * назвать это действие (GATE_NOTE): один synchronize (пустой push, Update
+ * branch) либо закрыть и снова открыть PR; пока PR открыт, ночь с превышением
+ * добавляет коммит — событие нужно после последнего ночного push. Вывод о
+ * событиях платформы следует из документации GitHub; живой ночной прогон —
+ * критерий приёмки e85 (журнал задачи). Канарейки шага с подставным gh —
+ * tools/test/test-count-ratchet.test.ts.
+ *
+ * Право pull-requests: write при включённой настройке позволяет и одобрить PR
+ * (З2): шаг зовёт gh ровно тремя командами — pr list, pr create, workflow run
+ * ci.yml; перечень держит канарейка в tools/test/test-count-ratchet.test.ts.
  *
  * Остаточные риски: гейт вызывается через скрипт в package.json, который не
  * защищён — агент может перепривязать `test:count` или подсунуть --baseline
@@ -252,17 +265,26 @@ const COMMIT_MESSAGE = 'chore: поднятие храповика числа т
 const PR_TITLE = 'chore: поднятие храповика числа тестов (nightly)';
 const PR_BODY =
   'Автоматическое поднятие test-count-baseline.json после зелёного nightly (a10): числовой храповик поднимает автоматика, а не автор PR. Update понижать отказывается — дифф только вверх.';
-// Push делает github.token, а события от него не рождают workflow run (как у
-// базлайнов visual, ADR 0015): на новом коммите обязательные checks (gate,
-// gate-integrity) сами не появятся, и PR не смержить. Поднятие при этом
-// опубликовано — шаг зелёный, но вывод обязан назвать это и действие человека.
-const CI_NOTE = [
-  'CI на новый коммит не запустится: push сделал github.token,',
-  'события от него workflow не рождают, а обязательные checks (gate, gate-integrity)',
-  'ждут результаты на новом head SHA.',
-  'Перед merge человеку одно из: пустой коммит от себя, Update branch',
-  'или закрыть и снова открыть PR — synchronize/reopened запускают',
-  'ci.yml и gate-integrity.yml на новом коммите.',
+// Проверки на PR автоматики (e85). push и create делает github.token, события
+// от него workflow не рождают (как у базлайнов visual, ADR 0015): на новом head
+// SHA проверки сами не придут. ci.yml шаг запускает сам диспатчем на ветку
+// храповика (как visual-approve и ci-base-change; нужно право job
+// actions: write) — check `gate` появляется без действий человека.
+const CI_WORKFLOW = 'ci.yml';
+const CI_STARTED = [
+  `CI (${CI_WORKFLOW}) на head SHA запущен диспатчем:`,
+  'прогон workflow_dispatch — всё дерево, без merge-ref; check `gate` появится без действий человека.',
+].join('\n');
+// Доверенный gate-integrity.yml (обязательные checks gate-integrity,
+// bundle-approval) автоматика не запускает: любое его расширение — отдельный
+// ADR (ADR 0002). На PR автоматики его запускает событие PR от человека
+// (маршрут (б1) задачи e85) — зелёный вывод обязан назвать это действие.
+const GATE_NOTE = [
+  'gate-integrity и bundle-approval автоматика не запускает: gate-integrity.yml —',
+  'доверенный гейт, на PR автоматики приходит событием PR от человека.',
+  'Перед merge человеку одно из: пустой коммит от себя (кнопка Update branch)',
+  'или закрыть и снова открыть PR — запустит gate-integrity.yml на текущем head SHA.',
+  'Пока PR открыт, ночь с превышением добавляет коммит — событие нужно после последнего ночного push.',
 ].join('\n');
 
 interface CommandResult {
@@ -440,6 +462,34 @@ function gitOnRemote(args: string[], gitAuth: NodeJS.ProcessEnv): CommandResult 
   return run('git', ['-c', 'credential.helper=', ...args], gitAuth);
 }
 
+// Запуск CI на head-ветке храповика (e85): вызывается только после того, как
+// на remote опубликован новый head SHA (create либо push под открытым PR) и
+// только с существующим PR — диспатч ветки без PR гонял бы CI впустую. Отказ —
+// красный шаг: PR есть, а проверка на нём не идёт; действие человека называет
+// готовую команду, линии — причину дословно и остаточное событие для
+// gate-integrity.
+function startCi(repository: string, pullRequest: string): void {
+  const dispatchArgs = [
+    'workflow',
+    'run',
+    CI_WORKFLOW,
+    '--repo',
+    repository,
+    '--ref',
+    RATCHET_BRANCH,
+  ];
+  const dispatched = run('gh', dispatchArgs);
+  if (dispatched.status !== 0) {
+    throw new PublishFailure(`запусти CI на ветке PR — gh ${dispatchArgs.join(' ')}`, [
+      `${pullRequest}: CI (${CI_WORKFLOW}) на head SHA не запущен — проверь право job (actions: write).`,
+      ...commandFailed(`gh ${dispatchArgs.slice(0, 3).join(' ')}`, dispatched),
+      GATE_NOTE,
+    ]);
+  }
+  console.log(CI_STARTED);
+  console.log(GATE_NOTE);
+}
+
 function publishRaisedBaseline(): number {
   const baselineRelative = argv['baseline']?.[0] ?? 'test-count-baseline.json';
   const token = process.env['GH_TOKEN'] ?? '';
@@ -550,10 +600,9 @@ function publishRaisedBaseline(): number {
   const branchState = pushedState;
 
   if (open !== null) {
-    console.log(
-      `PR #${open.number} уже открыт — ${branchState} (commit ${commit.slice(0, 12)}): ${clean(open.url)}`,
-    );
-    console.log(CI_NOTE);
+    const alreadyOpen = `PR #${open.number} уже открыт — ${branchState} (commit ${commit.slice(0, 12)})`;
+    console.log(`${alreadyOpen}: ${clean(open.url)}`);
+    startCi(repository, alreadyOpen);
     return 0;
   }
 
@@ -572,11 +621,13 @@ function publishRaisedBaseline(): number {
     PR_BODY,
   ]);
   if (created.status === 0) {
-    console.log(`PR храповика создан: ${clean(created.stdout.trim())}`);
-    console.log(CI_NOTE);
+    const createdUrl = clean(created.stdout.trim());
+    console.log(`PR храповика создан: ${createdUrl}`);
+    startCi(repository, `PR храповика создан: ${createdUrl} (${branchState})`);
     return 0;
   }
-  // PR могли открыть между list и create — перепроверяем, а не гадаем.
+  // PR могли открыть между list и create — перепроверяем, а не гадаем. Открыл
+  // его человек: его событие opened запускает проверки само, диспатч не нужен.
   const rechecked = run('gh', listArgs);
   if (rechecked.status === 0) {
     try {

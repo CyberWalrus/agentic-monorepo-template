@@ -207,9 +207,11 @@ jobs:
       # Логика шага — tools/check-mutation-ratchet.main.ts publish (e82): либо
       # действие выполнено, либо шаг красный с причиной дословно и действием
       # человека. Настройка Actions «Allow GitHub Actions to create and approve
-      # pull requests» выключена (решение владельца): github.token PR не
-      # открывает — без открытого PR шаг красный, PR открывает человек. Ни
-      # `|| echo`, ни continue-on-error: текст шага исполняет канарейка
+      # pull requests» включена (e85, решение владельца 25.11): github.token
+      # создаёт PR сам, отказ create (кроме «уже открыт») по-прежнему красный.
+      # Диспатч ci.yml этому шагу не заведён (e85, журнал задачи): проверки на
+      # новом head SHA запускает одно событие PR от человека — шаг называет его.
+      # Ни `|| echo`, ни continue-on-error: текст шага исполняет канарейка
       # tools/test/check-mutation-ratchet.test.ts.
       - name: PR with raised thresholds
         env:
@@ -223,8 +225,9 @@ jobs:
   # (находка план-ревью b2.4). Вторая половина критерия — предложение PR при
   # устойчивом превышении — покрыта юнит-тестами decide в tools/test/.
   # Зависит только от mutation-full (e82): канарейке нужны лишь отчёты полного
-  # прогона, а шаг публикации храповика красный по замыслу, пока PR не открыт
-  # человеком (create отклоняет настройка Actions). needs: [mutation-ratchet]
+  # прогона, а шаг публикации храповика тогда был красным по замыслу, пока
+  # PR не открыт человеком (create отклоняла настройка Actions — до e85).
+  # needs: [mutation-ratchet]
   # без условия пропускал канарейку (skipped) в обеих красных ночах 25.11
   # (45608955630, 45619705671) — ровно когда храповик активен. Красная
   # канарейка по-прежнему заводит issue: mutation-canary стоит в needs job report.
@@ -291,6 +294,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write # e85: диспатч ci.yml на head-ветку PR храповика (шаг публикации)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
@@ -310,9 +314,14 @@ jobs:
       # Логика шага — tools/check-test-count.ts --pr (e40): либо действие
       # выполнено, либо шаг красный с причиной дословно и действием человека.
       # Настройка Actions «Allow GitHub Actions to create and approve pull
-      # requests» выключена (решение владельца): github.token PR не открывает —
-      # без открытого PR шаг красный, PR открывает человек. Ни `|| echo`, ни
-      # continue-on-error: текст шага исполняет та же канарейка.
+      # requests» включена (e85, решение владельца 25.11): github.token создаёт
+      # PR сам, отказ create (кроме «уже открыт») по-прежнему красный. События
+      # от github.token workflow не рождают, поэтому шаг сам запускает ci.yml
+      # диспатчем на ветку PR (нужно право actions: write); отказ диспатча —
+      # красный шаг. Доверенный gate-integrity.yml автоматика не запускает
+      # (маршрут (б1), ADR 0002): его запускает событие PR от человека, вывод
+      # шага его называет. Ни `|| echo`, ни continue-on-error: текст шага
+      # исполняет канарейка tools/test/test-count-ratchet.test.ts.
       - name: PR with raised baseline
         env:
           GH_TOKEN: ${{ github.token }}
