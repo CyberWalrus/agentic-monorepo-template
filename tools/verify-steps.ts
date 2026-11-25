@@ -48,6 +48,9 @@ export const fast: Step[] = [
   { name: 'docs', command: 'pnpm', args: ['docs:check'] },
   // Порядок реестров (b7): одна строка на домен по алфавиту.
   { name: 'registries', command: 'pnpm', args: ['registries:check'] },
+  // Нейминг путей (b16, b17): строчные буквы, слова через дефис; исключения —
+  // один список с AGENTS.md «Нейминг путей» и architecture.md 2.7.
+  { name: 'naming', command: 'pnpm', args: ['naming:check'] },
   // Карантин флаков (b4.4): валидность защищённого файла.
   { name: 'quarantine', command: 'pnpm', args: ['flaky:quarantine'] },
   { name: 'sherif', command: 'pnpm', args: ['sherif'] },
