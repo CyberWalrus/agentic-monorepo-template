@@ -647,3 +647,192 @@ it('проводка (e39): хост чекера — ровно workflow-health
   expect(escaped).toMatch(/2026-11-21.*e26/);
   expect(escaped).toMatch(/2026-11-24.*e39/);
 });
+
+// ─── Канарейка-список e85: job с правом pull-requests: write ───
+// С настройкой репозитория «Allow GitHub Actions to create and approve pull
+// requests» (включена владельцем 25.11) право создавать и одобрять PR получает
+// каждый job с `pull-requests: write` — на уровне job или на уровне workflow
+// (`*` в записи: право относится ко всем job файла). Список — сознанная правка
+// этого файла (deny): новый job вне списка красит test:hooks, запись без job —
+// тоже. Оценка каждого job (триггер, исполняет ли код PR, у кого токен) —
+// «Журнал» backlog/done/e85.md, таблица инвентаризации.
+const PULL_REQUEST_WRITE_JOBS = [
+  'agent-review.yml: *',
+  'gate-integrity.yml: unlabel-stale-approval',
+  'nightly.yml: mutation-ratchet',
+  'nightly.yml: test-count-ratchet',
+  'preview.yml: preview',
+  'security.yml: dependency-review',
+  'visual-approve.yml: *',
+];
+
+/** Строка YAML без комментария вне кавычек (yaml-семантика). */
+function withoutComment(line: string): string {
+  let quote = '';
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index] ?? '';
+    if (quote !== '') {
+      if (char === quote) {
+        quote = '';
+      }
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '#' && (index === 0 || /\s/.test(line[index - 1] ?? ''))) {
+      return line.slice(0, index);
+    }
+  }
+  return line;
+}
+
+interface YamlKey {
+  indent: number;
+  key: string;
+}
+
+/**
+ * Job с правом на запись в PR: `pull-requests:` со значением кроме `none` и
+ * `read` (выражение `${{ … }}` — тоже: неизвестное трактуется как write) либо
+ * `permissions:` со значением кроме `read-all`. Разбор по отступам, без
+ * yaml-зависимости; тело блокового скаляра (`run: |`) — не структура. Право
+ * вне `permissions` workflow или job — ошибка разбора (fail-closed), а не
+ * «не найдено».
+ */
+function pullRequestWriteJobs(workflows: Record<string, string>): string[] {
+  const found: string[] = [];
+  for (const [file, text] of Object.entries(workflows)) {
+    const keys: YamlKey[] = [];
+    const lines = text.split('\n');
+    for (let index = 0; index < lines.length; index += 1) {
+      const raw = lines[index] ?? '';
+      const scalar = /^(\s*)\S.*:\s*[|>][-+]?\d*\s*$/.exec(withoutComment(raw));
+      if (scalar !== null) {
+        // Тело блокового скаляра: строки с отступом больше заголовка.
+        const indent = scalar[1]?.length ?? 0;
+        while (index + 1 < lines.length) {
+          const body = lines[index + 1] ?? '';
+          if (body.trim() !== '' && body.length - body.trimStart().length <= indent) {
+            break;
+          }
+          index += 1;
+        }
+        continue;
+      }
+      // Элемент последовательности (`- name: …`) — ключ с отступом на 2 больше.
+      const item = /^(\s*)-\s+/.exec(raw);
+      const lead =
+        item === null
+          ? raw
+          : `${' '.repeat((item[1]?.length ?? 0) + 2)}${raw.slice(item[0].length)}`;
+      const code = withoutComment(lead).trimEnd();
+      const entry = /^(\s*)([^\s#][^:]*?):(?:\s+(.*))?$/.exec(code);
+      if (entry === null) {
+        continue;
+      }
+      const indent = entry[1]?.length ?? 0;
+      const key = (entry[2] ?? '').replace(/^["']|["']$/g, '');
+      const value = (entry[3] ?? '').trim().replace(/^["']|["']$/g, '');
+      while (keys.length > 0 && (keys[keys.length - 1]?.indent ?? -1) >= indent) {
+        keys.pop();
+      }
+      if (value === '') {
+        keys.push({ indent, key });
+        continue;
+      }
+      // Область действия права: «*» — permissions уровня workflow, иначе job.
+      const scope = (block: YamlKey | undefined, holderIndex: number): string => {
+        if (block === undefined || block.key !== 'permissions') {
+          throw new Error(
+            `${file}:${index + 1}: ${key}: ${value} вне блока permissions — не разобрано`,
+          );
+        }
+        if (block.indent === 0) {
+          return '*';
+        }
+        const holder = keys[holderIndex] ?? null;
+        const jobs = keys[holderIndex - 1] ?? null;
+        if (holder === null || jobs === null || jobs.key !== 'jobs') {
+          throw new Error(
+            `${file}:${index + 1}: permissions не на уровне workflow и не у job — не разобрано`,
+          );
+        }
+        return holder.key;
+      };
+      if (key === 'pull-requests' && value !== 'none' && value !== 'read') {
+        found.push(`${file}: ${scope(keys[keys.length - 1], keys.length - 2)}`);
+      } else if (key === 'permissions' && value !== 'read-all') {
+        // Скаляр у самого ключа: ключ в стек ещё не добавлен.
+        found.push(`${file}: ${scope({ indent, key }, keys.length - 1)}`);
+      }
+    }
+  }
+  return found.toSorted();
+}
+
+function realWorkflows(): Record<string, string> {
+  const dir = join(repoDir, '.github', 'workflows');
+  const workflows: Record<string, string> = {};
+  for (const name of readdirSync(dir)
+    .filter((file) => file.endsWith('.yml') || file.endsWith('.yaml'))
+    .toSorted()) {
+    workflows[name] = readFileSync(join(dir, name), 'utf8');
+  }
+  return workflows;
+}
+
+it('инвентаризация e85: job с правом pull-requests: write — ровно список (новый job вне списка красит test:hooks)', () => {
+  // toEqual сверяет в обе стороны: лишний job и устаревшая запись без job.
+  expect(pullRequestWriteJobs(realWorkflows())).toEqual(PULL_REQUEST_WRITE_JOBS);
+});
+
+it('инвентаризация e85: фикстура с job вне списка — найден; право уровня workflow и неизвестные значения — все job файла', () => {
+  const real = realWorkflows();
+  const withStranger = {
+    ...real,
+    'canaries.yml': `${real['canaries.yml'] ?? ''}\n  stranger:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read # комментарий после значения\n      pull-requests: write\n    steps:\n      - run: echo hi\n`,
+  };
+  expect(
+    pullRequestWriteJobs(withStranger).filter((entry) => !PULL_REQUEST_WRITE_JOBS.includes(entry)),
+  ).toEqual(['canaries.yml: stranger']);
+  for (const permissions of [
+    'permissions:\n  contents: read\n  pull-requests: write\n',
+    'permissions:\n  pull-requests: ${{ inputs.write }}\n',
+    'permissions: write-all\n',
+  ]) {
+    expect(
+      pullRequestWriteJobs({
+        'x.yml': `on: push\n${permissions}jobs:\n  a:\n    runs-on: ubuntu-latest\n  b:\n    runs-on: ubuntu-latest\n`,
+      }),
+    ).toEqual(['x.yml: *']);
+  }
+});
+
+it('инвентаризация e85: право убрано — запись без job найдена; read и none правом не считаются', () => {
+  const real = realWorkflows();
+  const nightly = real['nightly.yml'] ?? '';
+  const narrowed = nightly.replace(
+    '      pull-requests: write # PR храповика\n',
+    '      pull-requests: read\n',
+  );
+  expect(narrowed).not.toBe(nightly);
+  const found = pullRequestWriteJobs({ ...real, 'nightly.yml': narrowed });
+  expect(PULL_REQUEST_WRITE_JOBS.filter((entry) => !found.includes(entry))).toEqual([
+    'nightly.yml: mutation-ratchet',
+  ]);
+  expect(
+    pullRequestWriteJobs({
+      'x.yml':
+        'on: push\npermissions:\n  pull-requests: none\njobs:\n  a:\n    runs-on: ubuntu-latest\n    permissions:\n      pull-requests: read\n',
+    }),
+  ).toEqual([]);
+});
+
+it('инвентаризация e85: тело run: | — не структура; право вне permissions — ошибка разбора (fail-closed)', () => {
+  const body =
+    'on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n    steps:\n      - run: |\n          echo "pull-requests: write"\n          permissions: write-all\n';
+  expect(pullRequestWriteJobs({ 'x.yml': body })).toEqual([]);
+  expect(() =>
+    pullRequestWriteJobs({
+      'x.yml': 'on: push\nenv:\n  pull-requests: write\njobs:\n  a:\n    runs-on: ubuntu-latest\n',
+    }),
+  ).toThrow('вне блока permissions');
+});

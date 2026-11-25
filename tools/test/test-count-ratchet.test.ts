@@ -9,6 +9,13 @@
  * обёртка, пишущая argv и конфиг-окружение каждого вызова. Отказ create,
  * который не «PR уже открыт», обязан краснить шаг: замаскированный `|| echo`
  * ловится исполнением шага, а не поиском подстроки.
+ *
+ * Канарейки e85 «PR создан и CI на нём запущен или громкая ошибка»: после
+ * create (и после push под открытым PR) шаг диспатчит ci.yml на ветку
+ * храповика — отказ диспатча краснит шаг с причиной дословно и командой
+ * человека; зелёный вывод называет остаточное событие человека для
+ * gate-integrity (маршрут (б1)). Подставной gh отказывает по файлам
+ * create-refused и dispatch-refused, команду вне списка — кодом 99.
  */
 import { spawnSync } from 'node:child_process';
 import {
@@ -199,6 +206,10 @@ it('проводка e40: hooks-отчёт гоняется до update; кра�
   expect(jobNeeds('report')).toContain('test-count-ratchet');
 });
 
+it('проводка e85: джоба храповика имеет право actions: write — без него диспатч ci.yml отклоняют', () => {
+  expect(jobCodeLines('test-count-ratchet').join('\n')).toMatch(/^ {6}actions: write\b/m);
+});
+
 const BRANCH = 'chore/test-count-ratchet';
 // Скрипт ходит на github.com; insteadOf в подставном клоне уводит команду в
 // bare-репозиторий. Токен в URL не ходит (e67): авторизация — конфиг-окружением
@@ -216,6 +227,11 @@ const gitSubcommand = (argv: string): string =>
   argv.replace(/^(?:-c \S+ )+/, '').split(' ')[0] ?? '';
 const REFUSED =
   'gh: pull request create failed: GraphQL: GitHub Actions is not permitted to create or approve pull requests (createPullRequest)';
+/** Отказ диспатча: у джобы нет права actions: write. */
+const DISPATCH_REFUSED =
+  'gh: HTTP 403: Resource not accessible by integration (https://api.github.com/repos/org/repo/actions/workflows/ci%2Eyml/dispatches)';
+/** Вызов диспатча ci.yml на ветку храповика — как его пишет подставной gh в calls.log. */
+const DISPATCH_CALL = 'workflow run ci.yml --repo org/repo --ref chore/test-count-ratchet';
 
 let prCounter = 0;
 
@@ -262,6 +278,12 @@ case "$1 $2" in
     fi
     echo "https://github.com/org/repo/pull/42"
     ;;
+  "workflow run")
+    if [ -f "$FAKE_GH_DIR/dispatch-refused" ]; then
+      echo "${DISPATCH_REFUSED}" >&2
+      exit 1
+    fi
+    ;;
   *)
     echo "fake gh: unexpected call: $*" >&2
     exit 99
@@ -296,7 +318,7 @@ interface RatchetRepo {
   dir: string;
   /** Bare-репозиторий — «remote» вместо github.com. */
   remote: string;
-  /** Состояние подставного gh: pr-list.json, create-refused, list-fails. */
+  /** Состояние подставного gh: pr-list.json, create-refused, list-fails, dispatch-refused. */
   ghState: string;
   /** Одна ночь: свежий main, отчёт hooks, pnpm test:count:update. */
   night(hooksTests: number): void;
@@ -403,7 +425,7 @@ function ratchetRepo(): RatchetRepo {
   };
 }
 
-it('create отказал, и это не «уже открыт» (настройка Actions выключена) — шаг красный: exit 1, причина дословно, действие человека', () => {
+it('create отказал, и это не «уже открыт» — шаг красный: exit 1, причина дословно, действие человека', () => {
   const repo = ratchetRepo();
   writeFileSync(join(repo.ghState, 'create-refused'), '');
   repo.night(718);
@@ -418,11 +440,14 @@ it('create отказал, и это не «уже открыт» (настро�
   expect(run.output).not.toContain('уже открыт');
   // Сообщение говорит правду: ветка и правда создана — с поднятым базлайном.
   expect(repo.remoteBaseline()).toEqual({ 'reports/vitest-hooks.json': 718 });
-  // PR откроет человек — событие opened запустит CI: предупреждения про CI нет.
-  expect(run.output).not.toContain('CI на новый коммит не запустится');
+  // PR откроет человек — его событие opened запустит проверки само: ни диспатча
+  // (e85: диспатч — только с существующим PR), ни заметок о CI и gate-integrity.
+  expect(repo.ghCalls().join('\n')).not.toContain('workflow run');
+  expect(run.output).not.toContain('CI (ci.yml)');
+  expect(run.output).not.toContain('gate-integrity и bundle-approval');
 }, 30_000);
 
-it('PR уже открыт — ветка обновлена без удаления, create не вызывается, шаг зелёный', () => {
+it('PR уже открыт — ветка обновлена без удаления, create не вызывается, CI запущен диспатчем, шаг зелёный', () => {
   const repo = ratchetRepo();
   writeFileSync(join(repo.ghState, 'create-refused'), '');
   repo.night(700);
@@ -442,30 +467,69 @@ it('PR уже открыт — ветка обновлена без удален
   const run = repo.runStep();
 
   expect(run.status).toBe(0);
-  expect(run.output).toContain('PR #7 уже открыт');
+  expect(run.output).toContain('PR #7 уже открыт — ветка chore/test-count-ratchet обновлена');
   expect(run.output).toContain('https://github.com/org/repo/pull/7');
-  // Сообщение говорит правду (находка ревью): push сделал github.token — CI на
-  // новый коммит не запустится, обязательные checks не появятся; шаг называет
-  // это и действие человека, а не молчит за зелёным exit 0.
-  expect(run.output).toContain('CI на новый коммит не запустится');
+  // Push сделал github.token — события от него workflow не рождают: шаг сам
+  // запускает CI на новом head SHA (e85, маршрут (а)) и называет остаточное
+  // событие человека для доверенного gate-integrity (маршрут (б1)), а не молчит
+  // за зелёным exit 0.
+  expect(run.output).toContain('CI (ci.yml) на head SHA запущен диспатчем');
+  expect(run.output).toContain('gate-integrity и bundle-approval автоматика не запускает');
   expect(run.output).toContain('закрыть и снова открыть PR');
   // Журнал вызовов накопительный: смотрим только на ночь 2.
-  expect(repo.ghCalls().slice(callsAfterNightOne).join('\n')).not.toContain('pr create');
+  const nightTwo = repo.ghCalls().slice(callsAfterNightOne);
+  expect(nightTwo.join('\n')).not.toContain('pr create');
+  expect(nightTwo.filter((call) => call.startsWith('workflow run'))).toEqual([DISPATCH_CALL]);
   expect(gitText(repo.dir, ['rev-parse', '--verify', `${repo.remoteTip()}^`])).toBe(nightOne);
   expect(repo.remoteBaseline()).toEqual({ 'reports/vitest-hooks.json': 718 });
 }, 30_000);
 
-it('create удался — PR создан, шаг зелёный', () => {
+it('create удался — PR создан, CI запущен диспатчем на ветку храповика, шаг зелёный', () => {
   const repo = ratchetRepo();
   repo.night(300);
 
   const run = repo.runStep();
 
   expect(run.status).toBe(0);
-  expect(run.output).toContain('https://github.com/org/repo/pull/42');
-  // PR создан github.token — CI на нём тоже не запустится сам: вывод называет.
-  expect(run.output).toContain('CI на новый коммит не запустится');
-  expect(repo.ghCalls().join('\n')).toContain('pr create');
+  expect(run.output).toContain('PR храповика создан: https://github.com/org/repo/pull/42');
+  expect(run.output).toContain('CI (ci.yml) на head SHA запущен диспатчем');
+  expect(run.output).toContain('gate-integrity и bundle-approval автоматика не запускает');
+  const calls = repo.ghCalls();
+  // Диспатч — ровно один и после create: диспатч ветки без PR гонял бы CI впустую.
+  expect(calls.filter((call) => call.startsWith('workflow run'))).toEqual([DISPATCH_CALL]);
+  const createAt = calls.findIndex((call) => call.startsWith('pr create'));
+  expect(createAt).toBeGreaterThanOrEqual(0);
+  expect(createAt).toBeLessThan(calls.indexOf(DISPATCH_CALL));
+  // «PR не одобряет сам себя» (e85, п. 4): с включённой настройкой право
+  // pull-requests: write позволяет и одобрить PR — шаг зовёт gh только этими
+  // командами (подставной gh отвечает 99 на любую другую).
+  expect(calls.filter((call) => !/^(pr list|pr create|workflow run ci\.yml) /.test(call))).toEqual(
+    [],
+  );
+  // Токен — только в env шага: в argv вызовов gh его нет.
+  expect(calls.join('\n')).not.toContain(TOKEN);
+}, 30_000);
+
+it('диспатч ci.yml отказал после create — шаг красный: PR создан, причина дословно, команда человека (e85)', () => {
+  const repo = ratchetRepo();
+  writeFileSync(join(repo.ghState, 'dispatch-refused'), '');
+  repo.night(300);
+
+  const run = repo.runStep();
+
+  expect(run.status).toBe(1);
+  // PR создан и поднятие опубликовано — вывод говорит правду о состоянии.
+  expect(run.output).toContain('PR храповика создан: https://github.com/org/repo/pull/42');
+  expect(repo.remoteBaseline()).toEqual({ 'reports/vitest-hooks.json': 300 });
+  // «PR создан или громкая ошибка» распространён на запуск CI: отказ — не
+  // зелёный шаг с PR без проверок, а причина дословно и действие человека.
+  expect(run.output).toContain('CI (ci.yml) на head SHA не запущен');
+  expect(run.output).toContain(DISPATCH_REFUSED);
+  expect(run.output).not.toContain('CI (ci.yml) на head SHA запущен диспатчем');
+  expect(run.output).toContain(`Дальше человек: запусти CI на ветке PR — gh ${DISPATCH_CALL}`);
+  // Остаточное событие для gate-integrity названо и в красном выводе.
+  expect(run.output).toContain('gate-integrity и bundle-approval автоматика не запускает');
+  expect(repo.ghCalls().filter((call) => call.startsWith('workflow run'))).toEqual([DISPATCH_CALL]);
 }, 30_000);
 
 it('push отклонён — шаг красный с причиной дословно, без «уже открыт» и без create', () => {

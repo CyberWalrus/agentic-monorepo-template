@@ -18,8 +18,9 @@
  * thresholds.break Stryker судит total, порог от covered красил бы джобу с
  * первого прогона (39 мутантов web без покрытия node-проекта, журнал b2.2).
  *
- * Права джобы nightly (fetch-state идёт в артефактное API, PR — push):
- * actions: read + contents: write + pull-requests: write. Красная джоба
+ * Права джобы nightly (fetch-state идёт в артефактное API, PR — push,
+ * e85 — диспатч ci.yml на ветку PR): actions: write + contents: write +
+ * pull-requests: write. Красная джоба
  * заводит issue через report.needs (ночной контур L5, З11).
  *
  * pnpm tool-class:check держит этот файл в deny и KNOWN_GATES (ADR 0014).
