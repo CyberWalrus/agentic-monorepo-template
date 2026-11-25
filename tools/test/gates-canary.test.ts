@@ -10,11 +10,13 @@
  */
 import { spawnSync } from 'node:child_process';
 import {
+  copyFileSync,
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -23,7 +25,7 @@ import {
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { gzipSync } from 'node:zlib';
-import { join, normalize, resolve, sep } from 'node:path';
+import { dirname, join, normalize, relative, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BLOAT, BLOAT_DELTA, CANARIES, type GateCanary } from '../gate-canaries.ts';
 import { allStepNames, fast, post, serialFast, slow } from '../verify-steps.ts';
@@ -39,6 +41,36 @@ const slowNames = new Set(slow.map((step) => step.name));
 // фикстурами tools/test/check-tool-class, а проводка — wiring-канарейкой на
 // test:hooks (ADR 0014, e9).
 const CANARY_EXEMPT_STEPS = new Set(['test-count', 'e2e-report', 'tool-class']);
+
+/** Отпечаток файла: размер и время изменения (символическая ссылка не раскрывается). */
+type FileStamp = { size: number; mtimeMs: number };
+
+function stampOf(abs: string): FileStamp {
+  const s = lstatSync(abs);
+  return { size: s.size, mtimeMs: s.mtimeMs };
+}
+
+/** Файлы каталога рекурсивно: путь относительно корня и абсолютный. Символическая ссылка — как файл. */
+function filesUnder(root: string): { rel: string; abs: string }[] {
+  const out: { rel: string; abs: string }[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs);
+      } else {
+        out.push({ rel: relative(root, abs), abs });
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+/** Отсортированные относительные пути файлов — для сравнения списков двух деревьев. */
+function namesOf(files: { rel: string }[]): string[] {
+  return files.map((f) => f.rel).toSorted();
+}
 
 describe('таблица канареек гейтов', () => {
   const known = new Set(allStepNames);
@@ -430,21 +462,103 @@ describe('якоря канареек живы на текущем дереве 
       .slice(depth)
       .some((part) => notCopied.has(part));
 
-  /** Нетронутая копия дерева и функция, размножающая его по одной копии на канарейку. */
-  function treeCopies(): { fresh: () => string; dispose: () => void } {
+  /**
+   * Нетронутая копия дерева и функция, дающая её же к каждой канарейке. Первое
+   * обращение копирует дерево целиком, следующие возвращают ту же копию к
+   * отпечатку: канарейка правит несколько файлов, и копировать ради этого всё
+   * дерево (≈665 файлов × 64 канарейки) не нужно. Пока копировалось целиком,
+   * тест на полном шаге под нагрузкой машины подходил к таймауту вплотную
+   * (25.11) — дорожка конвейера приняла таймаут за «флак в защищённом файле».
+   */
+  function treeCopies(): { fresh: () => string; pristine: string; dispose: () => void } {
     const root = mkdtempSync(join(tmpdir(), 'canary-anchors-'));
     const pristine = join(root, 'pristine');
     cpSync(repoRoot, pristine, { recursive: true, filter: copyFilter });
+    const copy = join(root, 'copy');
+    let stamps: Map<string, FileStamp> | null = null;
+    const restore = (rel: string): void => {
+      const target = join(copy, rel);
+      mkdirSync(dirname(target), { recursive: true });
+      copyFileSync(join(pristine, rel), target);
+      stamps?.set(rel, stampOf(target));
+    };
     return {
       fresh: () => {
-        const copy = join(root, 'copy');
-        rmSync(copy, { recursive: true, force: true });
-        cpSync(pristine, copy, { recursive: true });
+        if (stamps === null) {
+          cpSync(pristine, copy, { recursive: true });
+          stamps = new Map(filesUnder(copy).map((f) => [f.rel, stampOf(f.abs)]));
+          return copy;
+        }
+        const present = new Set<string>();
+        for (const { rel, abs } of filesUnder(copy)) {
+          present.add(rel);
+          const was = stamps.get(rel);
+          // Файла не было в нетронутой копии: его создала канарейка (или это переименованная цель зонда)
+          if (was === undefined) {
+            rmSync(abs, { force: true });
+            continue;
+          }
+          const now = stampOf(abs);
+          if (now.size !== was.size || now.mtimeMs !== was.mtimeMs) {
+            if (lstatSync(abs).isDirectory()) {
+              rmSync(abs, { recursive: true, force: true });
+            }
+            restore(rel);
+          }
+        }
+        // Исчезнувший файл (переименован или удалён канарейкой) возвращается на место
+        for (const rel of stamps.keys()) {
+          if (!present.has(rel)) {
+            restore(rel);
+          }
+        }
         return copy;
       },
+      pristine,
       dispose: () => rmSync(root, { recursive: true, force: true }),
     };
   }
+
+  it('fresh() после apply всех канареек возвращает нетронутую копию байт в байт', () => {
+    // Возврат по отпечатку, а не полным копированием: утечка правок между канарейками
+    // сделала бы проверку живости слепой к правке предыдущей канарейки
+    const expectPristine = (tree: ReturnType<typeof treeCopies>): void => {
+      const copy = tree.fresh();
+      const expected = filesUnder(tree.pristine);
+      expect(namesOf(filesUnder(copy)), 'список файлов после fresh()').toEqual(namesOf(expected));
+      const differ = expected
+        .filter((f) => !readFileSync(join(copy, f.rel)).equals(readFileSync(f.abs)))
+        .map((f) => f.rel);
+      expect(differ, 'файлы, не возвращённые к нетронутой копии').toEqual([]);
+    };
+    const tree = treeCopies();
+    try {
+      let applied = 0;
+      for (const canary of CANARIES) {
+        if (needGit.has(canary.name)) {
+          continue;
+        }
+        canary.apply(tree.fresh());
+        applied += 1;
+      }
+      expect(applied).toBe(CANARIES.length - needGit.size);
+      expectPristine(tree);
+      // Три случая возврата: изменённый, добавленный и переименованный файл
+      const copy = tree.fresh();
+      const [first, second] = filesUnder(tree.pristine);
+      if (first === undefined || second === undefined) {
+        throw new Error(
+          'в копии дерева меньше двух файлов — проверка возврата ничего не доказывает',
+        );
+      }
+      writeFileSync(join(copy, first.rel), 'изменено проверкой возврата');
+      writeFileSync(join(copy, '__restore-probe__.txt'), 'новый файл');
+      renameSync(join(copy, second.rel), join(copy, second.rel + '.renamed'));
+      expectPristine(tree);
+    } finally {
+      tree.dispose();
+    }
+  }, 30_000);
 
   it('apply каждой канарейки не бросает на копии дерева', () => {
     const tree = treeCopies();
