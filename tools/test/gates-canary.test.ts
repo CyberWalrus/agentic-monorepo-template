@@ -504,8 +504,9 @@ describe('якоря канареек живы на текущем дереве 
    *
    * Контракт `fresh()`: тот же каталог; имена, содержимое файлов и список
    * каталогов — как у эталона, время изменения каждого файла — `PRISTINE_MTIME`.
-   * Права файлов не возвращаются. Предположение о канарейке: она создаёт и
-   * перезаписывает обычные файлы (все `apply` таблицы так и делают).
+   * Права файлов и пустые каталоги эталона не возвращаются. Предположение о
+   * канарейке: она создаёт и перезаписывает обычные файлы (все `apply` таблицы
+   * так и делают).
    *
    * Первое обращение копирует дерево целиком, следующие возвращают копию по
    * отпечатку — размер, время изменения и индекс файла: канарейка правит
@@ -573,7 +574,7 @@ describe('якоря канареек живы на текущем дереве 
           try {
             rmdirSync(join(copy, dir));
           } catch (e) {
-            // Не пустый: внутри остался файл эталона, его возвращает следующий шаг
+            // Не пустый: внутри ещё лежат файлы эталона, их вернёт следующий шаг
             if (!isErrno(e, 'ENOTEMPTY')) {
               throw e;
             }
@@ -608,6 +609,9 @@ describe('якоря канареек живы на текущем дереве 
       expect(new Set(mtimes), 'время изменения файлов после fresh()').toEqual(
         new Set([PRISTINE_MTIME.getTime()]),
       );
+      expect(dirsUnder(copy).toSorted(), 'каталоги после fresh()').toEqual(
+        dirsUnder(tree.pristine).toSorted(),
+      );
     };
     const tree = treeCopies();
     try {
@@ -633,7 +637,7 @@ describe('якоря канареек живы на текущем дереве 
       writeFileSync(join(copy, '__restore-probe__.txt'), 'новый файл');
       renameSync(join(copy, second.rel), join(copy, second.rel + '.renamed'));
       expectPristine(tree);
-      // Файл той же длины, записанный сразу после возврата (тот же тик часов), и новые каталоги
+      // Файл той же длины, записанный сразу после возврата, и новые каталоги
       const again = tree.fresh();
       const source = readFileSync(join(again, first.rel));
       writeFileSync(join(again, first.rel), Buffer.alloc(source.length, 0x78));
@@ -644,9 +648,6 @@ describe('якоря канареек живы на текущем дереве 
         dirsUnder(tree.pristine).length,
       );
       expectPristine(tree);
-      expect(dirsUnder(tree.fresh()).toSorted(), 'каталоги после fresh()').toEqual(
-        dirsUnder(tree.pristine).toSorted(),
-      );
       // Файл эталона, перенесённый поверх другого файла той же длины: размер и время совпадают,
       // отличается только содержимое — узнаётся по индексу файла. Пара файлов одной длины — любая
       const bySize = new Map<number, { rel: string }[]>();
@@ -657,13 +658,21 @@ describe('якоря канареек живы на текущем дереве 
       }
       const pair = [...bySize.values()].find((group) => group.length >= 2);
       const [x, y] = pair ?? [];
-      if (x !== undefined && y !== undefined) {
-        renameSync(join(tree.fresh(), x.rel), join(copy, y.rel));
-        expectPristine(tree);
+      if (x === undefined || y === undefined) {
+        throw new Error('в эталоне нет двух файлов одной длины — случай не проверен');
       }
+      renameSync(join(tree.fresh(), x.rel), join(copy, y.rel));
+      expectPristine(tree);
       const linked = tree.fresh();
       rmSync(join(linked, first.rel));
       symlinkSync(second.rel, join(linked, first.rel));
+      expectPristine(tree);
+      // Файл, удалённый вместе со своим каталогом
+      const nested = filesUnder(tree.pristine).find((f) => f.rel.includes(sep));
+      if (nested === undefined) {
+        throw new Error('в эталоне нет файла в подкаталоге — случай не проверен');
+      }
+      rmSync(dirname(join(tree.fresh(), nested.rel)), { recursive: true, force: true });
       expectPristine(tree);
     } finally {
       tree.dispose();
