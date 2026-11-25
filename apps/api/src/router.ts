@@ -10,7 +10,8 @@ const os = implement(contract).$context<AppContext>().use(authorizationMiddlewar
 export const router = os.router({
   tasks: {
     // Скоупинг по рабочему пространству запроса (ADR 0020): null-контекст —
-    // «ничей» scope, контракт процедур не меняется.
+    // «ничей» scope. Заголовок читает мидлварь, а не вход процедуры; в спеке
+    // он описан как необязательный параметр операции (readsWorkspace, e58).
     list: os.tasks.list.handler(({ context }) =>
       context.tasks.list(context.workspaceId ?? undefined),
     ),

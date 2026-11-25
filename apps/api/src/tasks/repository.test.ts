@@ -1,3 +1,4 @@
+import type { Task } from '@repo/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { InMemoryTaskRepository } from './repository.ts';
@@ -97,5 +98,58 @@ describe('InMemoryTaskRepository', () => {
     // Контроль: хранилище не заклинило — валидный набор с тем же id заменяет строку.
     await repo.reset([replaced], 'ws-a');
     expect(await repo.list('ws-a')).toEqual([replaced]);
+  });
+
+  // e58: createdAt на границе — одна каноническая форма, UTC с `Z` и
+  // миллисекундами. Контракт пускает и целые секунды, и любую точность дробной
+  // части; здесь — как InMemory к ней приходит. Те же наборы против Postgres
+  // гоняет database.test.ts («createdAt: InMemory and Postgres agree»).
+  describe('createdAt in one canonical form', () => {
+    const WHOLE_SECOND: Task = {
+      id: '00000000-0000-4000-8000-0000000000a1',
+      title: 'whole second',
+      completed: false,
+      createdAt: '2026-11-01T10:00:00Z',
+    };
+    const MICROSECONDS: Task = {
+      id: '00000000-0000-4000-8000-0000000000a2',
+      title: 'microseconds',
+      completed: false,
+      createdAt: '2026-11-01T10:00:00.123456Z',
+    };
+
+    it('orders seeded tasks by instant, not by the string form', async () => {
+      const repo = createRepository();
+      // Набор лежит в хронологическом порядке: сортировка, не переставляющая
+      // строки, тоже красит.
+      await repo.reset([WHOLE_SECOND, MICROSECONDS]);
+
+      const titles = (await repo.list()).map((task) => task.title);
+
+      // До e58 целая секунда стояла выше: лексикографически `Z` больше `.`.
+      expect(titles).toEqual(['microseconds', 'whole second']);
+    });
+
+    it('answers a seeded createdAt in the canonical form from list, toggle and remove', async () => {
+      const repo = createRepository();
+      await repo.reset([WHOLE_SECOND, MICROSECONDS]);
+      const micro = { ...MICROSECONDS, createdAt: '2026-11-01T10:00:00.123Z' };
+      const whole = { ...WHOLE_SECOND, createdAt: '2026-11-01T10:00:00.000Z' };
+
+      expect(await repo.list()).toEqual([micro, whole]);
+      expect(await repo.toggle(MICROSECONDS.id)).toEqual({ ...micro, completed: true });
+      expect(await repo.remove(MICROSECONDS.id)).toEqual({ ...micro, completed: true });
+    });
+
+    it('leaves the store untouched when a seed carries an unparseable createdAt', async () => {
+      const repo = createRepository();
+      const kept = await repo.create('Keep me');
+
+      await expect(repo.reset([{ ...MICROSECONDS, createdAt: 'yesterday' }])).rejects.toThrow(
+        'Invalid time value',
+      );
+
+      expect(await repo.list()).toEqual([kept]);
+    });
   });
 });

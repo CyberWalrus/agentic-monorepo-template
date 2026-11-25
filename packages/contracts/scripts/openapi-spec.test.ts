@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import type { OpenAPI } from '@orpc/contract';
 import { describe, expect, it } from 'vitest';
 import * as z from 'zod';
@@ -12,6 +14,13 @@ import {
   operationsWithInputValidation,
   voidSchemaConverter,
 } from '../src/openapi-spec.ts';
+// e58: заголовок рабочего пространства — имя, параметр и список операций,
+// которые его читают, из единственного источника
+import {
+  WORKSPACE_HEADER,
+  WORKSPACE_HEADER_PARAMETER,
+  workspaceScopedOperations,
+} from '../src/workspace.ts';
 import { API_VERSION, generateSpec } from './openapi-spec.ts';
 
 describe('errorResponses', () => {
@@ -829,5 +838,87 @@ describe('generateSpec on the real contract', () => {
     const second = await generateSpec(contract);
 
     expect(second).toEqual(first);
+  });
+});
+
+// e58: заголовок x-workspace-id описан у всех процедур, которые его читают,
+// и только у них. Список процедур — из workspace.ts, не руками: ручной не
+// знал бы доменов, которые добавляет `pnpm gen feature`.
+
+/** Объявлен ли параметр заголовком рабочего пространства. */
+function isWorkspaceHeaderParameter(parameter: unknown): boolean {
+  return (
+    typeof parameter === 'object' &&
+    parameter !== null &&
+    'name' in parameter &&
+    parameter.name === WORKSPACE_HEADER &&
+    'in' in parameter &&
+    parameter.in === 'header'
+  );
+}
+
+/** Объявлен ли заголовок рабочего пространства среди параметров операции. */
+function declaresWorkspaceHeader(operation: OpenAPI.OperationObject): boolean {
+  return operation.parameters?.some(isWorkspaceHeaderParameter) === true;
+}
+
+/** Ключи операций, у которых объявлен заголовок рабочего пространства. */
+function keysWithWorkspaceHeader(spec: OpenAPI.Document): string[] {
+  return operationsOf(spec)
+    .filter(({ operation }) => declaresWorkspaceHeader(operation))
+    .map(({ key }) => key)
+    .toSorted();
+}
+
+/** Операции («METHOD /path»), которые workspace.ts называет читателями заголовка. */
+function readerOperations(): string[] {
+  return [...workspaceScopedOperations(contract)].toSorted();
+}
+
+/** Часть схемы ответа списка, которая нужна здесь: createdAt и его описание. */
+const CREATED_AT_OF_LIST = z.object({
+  items: z.object({
+    properties: z.object({
+      createdAt: z.object({ type: z.string(), format: z.string(), description: z.string() }),
+    }),
+  }),
+});
+
+describe('workspace header in the spec', () => {
+  it('documents the header exactly on the operations workspace.ts names as readers', async () => {
+    const spec = await generateSpec(contract);
+    const readers = readerOperations();
+
+    expect(readers).not.toEqual([]);
+    expect(keysWithWorkspaceHeader(spec)).toEqual(readers);
+    for (const { key, operation } of operationsOf(spec)) {
+      const header = operation.parameters?.find(isWorkspaceHeaderParameter);
+      expect(header).toEqual(readers.includes(key) ? WORKSPACE_HEADER_PARAMETER : undefined);
+    }
+  });
+
+  // Критерий приёмки назван про файл: закоммиченный openapi.json, а не только
+  // сгенерированная спека, описывает заголовок у тех же операций.
+  it('carries the header in the committed openapi.json, on the same operations', () => {
+    const committed: OpenAPI.Document = JSON.parse(
+      readFileSync(new URL('../openapi.json', import.meta.url), 'utf8'),
+    );
+
+    expect(keysWithWorkspaceHeader(committed)).toEqual(readerOperations());
+    for (const { operation } of operationsOf(committed)) {
+      expect(operation.parameters?.find(isWorkspaceHeaderParameter)).toEqual(
+        declaresWorkspaceHeader(operation) ? WORKSPACE_HEADER_PARAMETER : undefined,
+      );
+    }
+  });
+
+  it('describes createdAt as the canonical UTC form the answers carry', async () => {
+    const spec = await generateSpec(contract);
+    const { createdAt } = CREATED_AT_OF_LIST.parse(bodySchemaOf(spec.paths?.['/tasks']?.get, '200'))
+      .items.properties;
+
+    expect(createdAt).toMatchObject({ type: 'string', format: 'date-time' });
+    expect(createdAt.description).toMatch(/with the `Z` suffix, a UTC offset is rejected/);
+    expect(createdAt.description).toMatch(/Date#toISOString\(\), milliseconds included/);
   });
 });
