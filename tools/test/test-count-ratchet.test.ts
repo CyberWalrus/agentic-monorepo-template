@@ -19,6 +19,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import {
+  appendFileSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -342,12 +343,23 @@ function ratchetRepo(): RatchetRepo {
   }
   gitText(root, ['init', '-q', '--bare', remote]);
   gitText(dir, ['init', '-q', '-b', 'main']);
-  gitText(dir, ['config', 'user.name', 'canary']);
-  gitText(dir, ['config', 'user.email', 'canary@example.com']);
-  gitText(dir, ['config', `url.${remote}.insteadOf`, REMOTE_URL]);
+  // Конфиг фикстуры — одной записью в .git/config (e88): четыре `git config`
+  // стоили четыре процесса на каждый репозиторий, а пишут ровно эти строки —
+  // те же ключи в том же порядке (user, затем два insteadOf одной секции url).
   // Саботаж «токен возвращён в URL» уводится в тот же bare-репозиторий: тест
   // краснеет по argv, а не по отказу транспорта.
-  gitText(dir, ['config', '--add', `url.${remote}.insteadOf`, TOKEN_URL]);
+  appendFileSync(
+    join(dir, '.git', 'config'),
+    [
+      '[user]',
+      '\tname = canary',
+      '\temail = canary@example.com',
+      `[url "${remote}"]`,
+      `\tinsteadOf = ${REMOTE_URL}`,
+      `\tinsteadOf = ${TOKEN_URL}`,
+      '',
+    ].join('\n'),
+  );
   mkdirSync(join(dir, 'tools'));
   copyFileSync(
     join(repoDir, 'tools', 'check-test-count.ts'),
