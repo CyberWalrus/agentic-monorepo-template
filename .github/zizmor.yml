@@ -21,8 +21,9 @@ rules:
       # форк-PR отклоняются, код PR не исполняется ни на одном шаге — до
       # checkout head исполняется только дефолтная ветка, после — только
       # git-операции и системные утилиты: зависимостей в PR-дереве нет,
-      # commit/push с LEFTHOOK=0 (e24), токен события — только в URL fetch/push
-      # и env шагов gh CLI.
+      # commit/push с LEFTHOOK=0 (e24); GH_TOKEN в env — только у шагов gh CLI
+      # и шага push, а git-команды получают токен лишь заголовком авторизации
+      # из GIT_CONFIG_* в под-оболочке (argv и .git/config чисты; e67).
       - visual-approve.yml:27
   adhoc-packages:
     ignore:

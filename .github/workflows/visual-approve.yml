@@ -9,8 +9,8 @@
 # checkout), git commit и push выполняются с LEFTHOOK=0 (доверенный CI-контур:
 # pre-commit/pre-push из дерева PR не запускаются); GH_TOKEN в env держится
 # только у шагов вызова gh CLI (токен нужен ему в окружении процесса) и у
-# шага push — fetch и push подставляют токен только в URL своей git-команды
-# (З2, ADR 0002).
+# шага push — fetch и push передают токен только конфиг-окружением git
+# (GIT_CONFIG_* в под-оболочке команды; argv и .git/config чисты; e67).
 #
 # ЗАПРЕЩЕНО менять без режима обслуживания и ревью мейнтейнера. Запрещено:
 # - исполнять что-либо из PR (npm/pnpm/node-скрипты дерева PR, установка
@@ -117,15 +117,26 @@ jobs:
 
       # Дальше — только для валидного одобрения. checkout head SHA: git-операции
       # над деревом PR (копирование файлов артефакта и коммит), исполнения кода
-      # PR нет (З2): токен подставлен точечно в URL fetch, в env шага его нет
-      # (e24).
+      # PR нет (З2): токен живёт только в конфиг-окружении команды fetch, в env
+      # шага его нет (e24, e67).
       - name: Checkout PR head without executing it
         if: success() && steps.approval.outputs.approved == 'true'
         run: |
           HEAD_SHA=$(jq -r .headRefOid pr.json)
-          # persist-credentials: false на первом checkout — токен явный; он не в
-          # env шага, а подставлен только в URL этой команды (e24).
-          git fetch --depth=1 "https://x-access-token:${{ github.token }}@github.com/${REPO}.git" "$HEAD_SHA"
+          # persist-credentials: false на первом checkout — токен явный (e24).
+          # В argv git-команды его нет — в ps он был виден на время команды
+          # (e67): заголовок авторизации git читает из своего конфиг-окружения
+          # GIT_CONFIG_* (git >= 2.31), живущего только внутри под-оболочки —
+          # в env шага и в .git/config токена нет. Под-оболочку, способ передачи
+          # и живой прогон блока держит структурный тест e67
+          # (tools/test/visual-approval.test.ts).
+          (
+            export GIT_CONFIG_COUNT=1
+            export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+            CREDENTIAL="x-access-token:${{ github.token }}"
+            export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf '%s' "$CREDENTIAL" | base64 | tr -d '\n')"
+            git -c credential.helper= fetch --depth=1 "https://github.com/${REPO}.git" "$HEAD_SHA"
+          )
           git checkout "$HEAD_SHA"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -206,11 +217,11 @@ jobs:
           git commit -m "visual baselines from CI (approved by @${LOGIN} on ${HEAD_SHA})"
 
       # Push — единственный шаг с GH_TOKEN в env: env сужает экспозицию токена
-      # до единственного шага с записью в репозиторий (e24); сам токен при этом
-      # подставляется в URL push-команды — в argv git он виден (ps) и до, и
-      # после e24, env его оттуда не убирает. LEFTHOOK=0 — pre-push
-      # (turbo/boundaries по коду PR) не запускается: доверенный workflow пушит
-      # базлайны без прогонов кода PR (e24).
+      # до единственного шага с записью в репозиторий (e24). В argv push-команды
+      # токена нет (e67): заголовок авторизации — из конфиг-окружения git в
+      # под-оболочке, как у fetch. LEFTHOOK=0 — pre-push (turbo/boundaries по
+      # коду PR) не запускается: доверенный workflow пушит базлайны без прогонов
+      # кода PR (e24).
       - name: Push baselines to the PR branch
         if: success() && steps.approval.outputs.approved == 'true'
         env:
@@ -228,7 +239,13 @@ jobs:
           # (пустой push / Update branch): бот-коммит трогает __screenshots__
           # (deny) — свежий gate-change-approved потребуется заново
           # (ADR 0015, известное ограничение).
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "HEAD:refs/heads/${BRANCH}"
+          (
+            export GIT_CONFIG_COUNT=1
+            export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+            CREDENTIAL="x-access-token:${GH_TOKEN}"
+            export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf '%s' "$CREDENTIAL" | base64 | tr -d '\n')"
+            git -c credential.helper= push "https://github.com/${REPO}.git" "HEAD:refs/heads/${BRANCH}"
+          )
 
       - name: Trigger CI for the new head SHA
         if: success() && steps.approval.outputs.approved == 'true'
