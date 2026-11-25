@@ -21,6 +21,7 @@ import {
   renameSync,
   rmdirSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -44,12 +45,12 @@ const slowNames = new Set(slow.map((step) => step.name));
 // test:hooks (ADR 0014, e9).
 const CANARY_EXEMPT_STEPS = new Set(['test-count', 'e2e-report', 'tool-class']);
 
-/** Отпечаток файла: размер и время изменения (символическая ссылка не раскрывается). */
-type FileStamp = { size: number; mtimeMs: number };
+/** Отпечаток файла: размер, время изменения и индекс (символическая ссылка не раскрывается). */
+type FileStamp = { size: number; mtimeMs: number; ino: number };
 
 function stampOf(abs: string): FileStamp {
   const s = lstatSync(abs);
-  return { size: s.size, mtimeMs: s.mtimeMs };
+  return { size: s.size, mtimeMs: s.mtimeMs, ino: s.ino };
 }
 
 /** Файлы каталога рекурсивно: путь относительно корня и абсолютный. Символическая ссылка — как файл. */
@@ -69,9 +70,19 @@ function filesUnder(root: string): { rel: string; abs: string }[] {
   return out;
 }
 
+/** Ошибка файловой системы с таким кодом (например, «каталог не пуст»). */
+function isErrno(e: unknown, code: string): boolean {
+  return typeof e === 'object' && e !== null && 'code' in e && e.code === code;
+}
+
 /** Отсортированные относительные пути файлов — для сравнения списков двух деревьев. */
 function namesOf(files: { rel: string }[]): string[] {
   return files.map((f) => f.rel).toSorted();
+}
+
+/** Размер файла по пути, без раскрытия символической ссылки. */
+function sizeOf(f: { abs: string }): number {
+  return lstatSync(f.abs).size;
 }
 
 /** Относительные пути каталогов под корнем (без самого корня). */
@@ -489,12 +500,19 @@ describe('якоря канареек живы на текущем дереве 
       .some((part) => notCopied.has(part));
 
   /**
-   * Нетронутая копия дерева и функция, дающая её же к каждой канарейке. Первое
-   * обращение копирует дерево целиком, следующие возвращают ту же копию к
-   * отпечатку: канарейка правит несколько файлов, и копировать ради этого всё
-   * дерево (≈665 файлов × 64 канарейки) не нужно. Пока копировалось целиком,
-   * тест на полном шаге под нагрузкой машины подходил к таймауту вплотную
-   * (25.11) — дорожка конвейера приняла таймаут за «флак в защищённом файле».
+   * Нетронутая копия дерева и функция, дающая её же к каждой канарейке.
+   *
+   * Контракт `fresh()`: тот же каталог; имена, содержимое файлов и список
+   * каталогов — как у эталона, время изменения каждого файла — `PRISTINE_MTIME`.
+   * Права файлов не возвращаются. Предположение о канарейке: она создаёт и
+   * перезаписывает обычные файлы (все `apply` таблицы так и делают).
+   *
+   * Первое обращение копирует дерево целиком, следующие возвращают копию по
+   * отпечатку — размер, время изменения и индекс файла: канарейка правит
+   * несколько файлов, и копировать ради этого всё дерево (≈640 файлов × 64
+   * канарейки) не нужно. Пока копировалось целиком, тест на полном шаге под
+   * нагрузкой машины подходил к таймауту вплотную (25.11) — дорожка конвейера
+   * приняла таймаут за «флак в защищённом файле».
    */
   function treeCopies(): { fresh: () => string; pristine: string; dispose: () => void } {
     const root = mkdtempSync(join(tmpdir(), 'canary-anchors-'));
@@ -503,20 +521,24 @@ describe('якоря канареек живы на текущем дереве 
     const copy = join(root, 'copy');
     const stamps: Map<string, FileStamp> = new Map();
     let dirs: Set<string> | null = null;
+    const stampPristine = (rel: string): void => {
+      const abs = join(copy, rel);
+      utimesSync(abs, PRISTINE_MTIME, PRISTINE_MTIME);
+      stamps.set(rel, stampOf(abs));
+    };
     // Восстановленный файл получает то же время изменения, что и вся нетронутая копия
     const restore = (rel: string): void => {
       const target = join(copy, rel);
       mkdirSync(dirname(target), { recursive: true });
       copyFileSync(join(pristine, rel), target);
-      utimesSync(target, PRISTINE_MTIME, PRISTINE_MTIME);
-      stamps.set(rel, stampOf(target));
+      stampPristine(rel);
     };
     return {
       fresh: () => {
         if (dirs === null) {
           cpSync(pristine, copy, { recursive: true });
           for (const f of filesUnder(copy)) {
-            restore(f.rel);
+            stampPristine(f.rel);
           }
           dirs = new Set(dirsUnder(copy));
           return copy;
@@ -530,29 +552,37 @@ describe('якоря канареек живы на текущем дереве 
             rmSync(abs, { force: true });
             continue;
           }
-          const now = stampOf(abs);
-          if (now.size !== was.size || now.mtimeMs !== was.mtimeMs) {
-            if (lstatSync(abs).isDirectory()) {
-              rmSync(abs, { recursive: true, force: true });
-            }
+          // Симлинков в эталоне нет: ссылка в копии — чужая, снимается сама, не идя по ней
+          const now = lstatSync(abs);
+          if (
+            now.isSymbolicLink() ||
+            now.size !== was.size ||
+            now.mtimeMs !== was.mtimeMs ||
+            now.ino !== was.ino
+          ) {
+            rmSync(abs, { force: true });
             restore(rel);
+          }
+        }
+        // Каталоги, созданные канарейкой, убираются — сначала вложенные, потом ставшие пустыми
+        const known = dirs;
+        const foreign = dirsUnder(copy)
+          .filter((dir) => !known.has(dir))
+          .toSorted((a, b) => b.split(sep).length - a.split(sep).length);
+        for (const dir of foreign) {
+          try {
+            rmdirSync(join(copy, dir));
+          } catch (e) {
+            // Не пустый: внутри остался файл эталона, его возвращает следующий шаг
+            if (!isErrno(e, 'ENOTEMPTY')) {
+              throw e;
+            }
           }
         }
         // Исчезнувший файл (переименован или удалён канарейкой) возвращается на место
         for (const rel of stamps.keys()) {
           if (!present.has(rel)) {
             restore(rel);
-          }
-        }
-        // Каталоги, созданные канарейкой, убираются — сначала вложенные, потом ставшие пустыми
-        const foreign = dirsUnder(copy)
-          .filter((dir) => !dirs?.has(dir))
-          .toSorted((a, b) => b.split(sep).length - a.split(sep).length);
-        for (const dir of foreign) {
-          try {
-            rmdirSync(join(copy, dir));
-          } catch {
-            // Не пустой: внутри остался файл эталона
           }
         }
         return copy;
@@ -573,6 +603,11 @@ describe('якоря канареек живы на текущем дереве 
         .filter((f) => !readFileSync(join(copy, f.rel)).equals(readFileSync(f.abs)))
         .map((f) => f.rel);
       expect(differ, 'файлы, не возвращённые к нетронутой копии').toEqual([]);
+      // Изменение видно по времени, даже если размер тот же: у всей копии одна дата
+      const mtimes = filesUnder(copy).map((f) => lstatSync(f.abs).mtimeMs);
+      expect(new Set(mtimes), 'время изменения файлов после fresh()').toEqual(
+        new Set([PRISTINE_MTIME.getTime()]),
+      );
     };
     const tree = treeCopies();
     try {
@@ -612,6 +647,24 @@ describe('якоря канареек живы на текущем дереве 
       expect(dirsUnder(tree.fresh()).toSorted(), 'каталоги после fresh()').toEqual(
         dirsUnder(tree.pristine).toSorted(),
       );
+      // Файл эталона, перенесённый поверх другого файла той же длины: размер и время совпадают,
+      // отличается только содержимое — узнаётся по индексу файла. Пара файлов одной длины — любая
+      const bySize = new Map<number, { rel: string }[]>();
+      for (const f of filesUnder(tree.pristine)) {
+        const group = bySize.get(sizeOf(f)) ?? [];
+        group.push(f);
+        bySize.set(sizeOf(f), group);
+      }
+      const pair = [...bySize.values()].find((group) => group.length >= 2);
+      const [x, y] = pair ?? [];
+      if (x !== undefined && y !== undefined) {
+        renameSync(join(tree.fresh(), x.rel), join(copy, y.rel));
+        expectPristine(tree);
+      }
+      const linked = tree.fresh();
+      rmSync(join(linked, first.rel));
+      symlinkSync(second.rel, join(linked, first.rel));
+      expectPristine(tree);
     } finally {
       tree.dispose();
     }
