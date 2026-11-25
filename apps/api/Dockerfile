@@ -7,7 +7,7 @@
 FROM node:26.13.0-alpine AS builder
 # corepack в Node >=25 не входит: pnpm ставим глобально; версия — дословно
 # packageManager из package.json. Bump pnpm требует синхронной правки здесь.
-RUN npm install -g pnpm@12.16.1
+RUN npm install -g pnpm@12.21.0
 WORKDIR /repo
 
 # Сначала манифесты workspace: слой установки зависимостей переживает правки
