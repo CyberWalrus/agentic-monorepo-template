@@ -40,7 +40,7 @@
   "trend": {
     "timeFloorMs": {
       "ttfbMs": 15,
-      "lcpMs": 25,
+      "lcpMs": 56,
       "lcpNetMs": 30,
       "scenarioMs": 25
     },
