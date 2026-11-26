@@ -96,18 +96,31 @@ pnpm sbom          # CycloneDX/SPDX в stdout; прикладывается к r
 
 ## 8. Создание проекта из шаблона
 
-Проект создаётся `copier copy` из **тега** `v*` шаблона, не из ветки или worktree: тег — доверенная база для будущих обновлений ([ADR 0008](adr/0008-template-distribution.md)). Версию Copier берите из [`tools/copier-version.txt`](../tools/copier-version.txt) — единственного источника закреплённой версии (З10; её же читает CI).
+Проект создаётся `copier copy` из **тега** `v*` шаблона, не из ветки или worktree: тег — доверенная база для будущих обновлений ([ADR 0008](adr/0008-template-distribution.md)). Номер тега и версию Copier не вписывайте руками — обе команды ниже берут их из шаблона: тег — последний `v*` по номеру версии (`git ls-remote --tags`), версия Copier — [`tools/copier-version.txt`](../tools/copier-version.txt) на этом же теге, единственный источник закреплённой версии (З10; её же читает CI). Пример, пришпиленный к номеру, отстаёт от выпуска и создаёт копию прошлого выпуска.
 
 ```bash
-uvx --from "copier==$(cat tools/copier-version.txt)" \
-  copier copy --vcs-ref=v0.1.0 \
-  https://github.com/<владелец-шаблона>/agentic-monorepo-template.git \
-  путь/до/проекта
+template=https://github.com/<владелец-шаблона>/agentic-monorepo-template.git
+tag=$(git ls-remote --tags --refs "$template" 'v*' | awk -F/ '{print $3}' | sort -V | tail -1)
+version=$(curl -fsSL "https://raw.githubusercontent.com/<владелец-шаблона>/agentic-monorepo-template/$tag/tools/copier-version.txt")
+uvx --from "copier==$version" \
+  copier copy --vcs-ref="$tag" "$template" путь/до/проекта
 ```
 
 Copier спросит имя проекта и владельца репозитория (`@организация` или `@пользователь`). Оба ответа обязательны; владелец попадёт в `CODEOWNERS` копии — без него ревью по CODEOWNERS не заработает и `gate-integrity` не станет зелёным. Ответы сохраняются в `.copier-answers.yml` проекта: по нему позже работает `copier update` — его запускает человек, результат идёт обычным PR с label `gate-change-approved` ([ADR 0008](adr/0008-template-distribution.md)).
 
-Затем в копии выполните `pnpm install && pnpm verify` — должно быть зелёным. После этого пройдите разделы 1–6 выше.
+Затем превратите копию в git-репозиторий с первым коммитом и опубликуйте его. Без этого `pnpm verify` красный: гейт нейминга путей читает дерево через `git ls-files`, а гейт совместимости контракта сверяет `openapi.json` с `origin/main` — до первого пуша базе взяться неоткуда. Создайте на GitHub пустой репозиторий проекта (без README, `.gitignore` и лицензии — шаблон уже содержит всё) и выполните команды блока по порядку:
+
+```bash
+cd путь/до/проекта
+git init -b main
+git add -A
+git commit -m "Проект из шаблона"
+git remote add origin https://github.com/<владелец-проекта>/<проект>.git
+git push -u origin main
+pnpm install && pnpm verify
+```
+
+Первому коммиту нужны `user.name` и `user.email` в git — если они не заданы глобально, задайте (`git config --global user.name "<имя>"`, `git config --global user.email "<почта>"`). Последняя строка — `pnpm install && pnpm verify` — должна быть зелёной. После этого пройдите разделы 1–6 выше.
 
 ## 9. GHCR: пакеты preview-окружения
 
